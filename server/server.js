@@ -111,6 +111,12 @@ const server = http.createServer(async (req, res) => {
       icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
     }));
   }
+  if (p === '/app' || p === '/earpiece.apk') {   // the Android app, for installing on a phone without a cable
+    const apk = path.join(__dirname, 'earpiece.apk');
+    if (!fs.existsSync(apk)) { res.writeHead(404); return res.end('no app built yet'); }
+    res.writeHead(200, { 'content-type': 'application/vnd.android.package-archive', 'content-disposition': 'attachment; filename="earpiece.apk"', 'content-length': fs.statSync(apk).size });
+    return fs.createReadStream(apk).pipe(res);
+  }
   if (p.startsWith('/cam/')) {
     if (!ctl) { res.writeHead(403); return res.end(); }
     const cam = cameras.find((c) => c.id === p.slice(5).replace('.mjpg', ''));

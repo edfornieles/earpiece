@@ -73,6 +73,8 @@ class AudioService : Service() {
     private var retry = 0
     private var stopping = false
     private var micOn = false                // only send the mic while a participant is active
+    @Volatile private var linkProblem = false
+    @Volatile private var lastError: String? = null
 
     private var record: AudioRecord? = null
     private var track: AudioTrack? = null
@@ -160,6 +162,7 @@ class AudioService : Service() {
                     "flush" -> flush()
                     "reset" -> { flush(); waiting = true; micOn = false; resetCount++ }
                     "full" -> status = "all phone slots are in use"
+                    "error" -> { status = m.optString("text"); linkProblem = true }
                 }
             }
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
@@ -175,15 +178,20 @@ class AudioService : Service() {
                 while (queued > WIRE_RATE * 0.4 && playQueue.size > 1) queued -= playQueue.removeFirst().size
             }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null) }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { dropped(if (code == 4000) "this slot was taken by another phone" else null) }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { dropped(null) }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                dropped(when (code) { 4000 -> "this slot was taken by another phone"; 4001 -> status; else -> null })
+            }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                lastError = (t.message ?: t.javaClass.simpleName).take(80)
+                dropped(null)
+            }
         })
     }
 
     private fun dropped(msg: String?) {
         connected = false
         if (stopping) return
-        status = msg ?: "reconnecting…"
+        status = msg ?: ("reconnecting… " + (lastError ?: ""))
         if (msg != null) return
         retry++
         main.postDelayed({ connect() }, min(5000L, 500L * retry))

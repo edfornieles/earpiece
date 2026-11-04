@@ -468,7 +468,9 @@ wss.on('connection', (ws, req) => {
     });
     return;
   }
-  ws.close(1008, 'bad key');
+  console.log(`  ! a ${role || 'device'} tried to connect with an old or wrong key — give it the current link from the control room`);
+  send(ws, { type: 'error', text: 'This phone has an old link. Hold “Phone” in the corner for 3 s and enter the current link.' });
+  ws.close(4001, 'bad key');
 });
 
 setInterval(() => { for (const ws of wss.clients) { if (!ws.isAlive) { ws.terminate(); continue; } ws.isAlive = false; ws.ping(); } }, 15000);

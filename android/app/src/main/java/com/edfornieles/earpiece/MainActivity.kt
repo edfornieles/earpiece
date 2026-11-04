@@ -95,12 +95,15 @@ class MainActivity : Activity() {
         hideBars()
         ui.post(tick)
         // Pin the app so a participant can't leave it (Android asks to confirm once per launch).
-        if (!pinnedOnce && Config.load(this) != null) { pinnedOnce = true; try { startLockTask() } catch (_: Exception) {} }
+        if (!pinnedOnce && lockdown()) { pinnedOnce = true; try { startLockTask() } catch (_: Exception) {} }
     }
     override fun onPause() { super.onPause(); ui.removeCallbacks(tick) }
 
-    @Deprecated("Back does nothing on a dedicated phone")
-    override fun onBackPressed() {}
+    // Gallery mode (switched on in setup): pins the app and ignores Back. Off by default.
+    private fun lockdown() = getSharedPreferences("earpiece", Context.MODE_PRIVATE).getBoolean("lockdown", false)
+
+    @Deprecated("Back does nothing in gallery mode")
+    override fun onBackPressed() { if (!lockdown()) @Suppress("DEPRECATION") super.onBackPressed() }
 
     private val tick = object : Runnable {
         override fun run() {
@@ -221,6 +224,16 @@ class MainActivity : Activity() {
                     else { Config.save(this@MainActivity, c); restartService() }
                 }
             })
+            addView(gap(16))
+            addView(CheckBox(this@MainActivity).apply {
+                text = "Gallery mode: pin the app so participants can't leave it"
+                setTextColor(DIM); textSize = 15f
+                isChecked = lockdown()
+                setOnCheckedChangeListener { _, c ->
+                    getSharedPreferences("earpiece", Context.MODE_PRIVATE).edit().putBoolean("lockdown", c).apply()
+                    if (c) { try { startLockTask() } catch (_: Exception) {} } else { try { stopLockTask() } catch (_: Exception) {} }
+                }
+            })
             addView(gap(12))
             addView(Button(this@MainActivity).apply {
                 text = "Unpin and exit"; isAllCaps = false; setTextColor(DIM); setBackgroundColor(BG)
@@ -237,12 +250,12 @@ class MainActivity : Activity() {
 
         // "Phone N" in the corner. Hold it for 3 seconds to reach setup (for you, not participants).
         slotLabel = text("", 12f, Color.rgb(70, 70, 70)).apply {
-            setPadding(dp(16), dp(12), dp(16), dp(12)); typeface = Typeface.DEFAULT
+            setPadding(dp(28), dp(22), dp(28), dp(22)); typeface = Typeface.DEFAULT
             var downAt = 0L
             setOnTouchListener { _, e ->
                 when (e.action) {
                     android.view.MotionEvent.ACTION_DOWN -> downAt = System.currentTimeMillis()
-                    android.view.MotionEvent.ACTION_UP -> if (System.currentTimeMillis() - downAt > 3000) show(setup)
+                    android.view.MotionEvent.ACTION_UP -> if (System.currentTimeMillis() - downAt > 1500) show(setup)
                 }
                 true
             }

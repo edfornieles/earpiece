@@ -3,6 +3,8 @@ on:
   push:
     paths: ["android/**", ".github/workflows/android.yml"]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,3 +28,10 @@ jobs:
         with:
           name: earpiece-apk
           path: earpiece.apk
+      - name: Publish to the apk branch (so it can be pulled with git)
+        working-directory: .
+        run: |
+          mkdir /tmp/out && cp earpiece.apk /tmp/out/ && cd /tmp/out
+          echo "built from ${GITHUB_SHA} run ${GITHUB_RUN_NUMBER}" > BUILD.txt
+          git init -q -b apk && git add . && git -c user.name=ci -c user.email=ci@local commit -q -m "APK ${GITHUB_RUN_NUMBER}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" apk

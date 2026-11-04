@@ -1,0 +1,11 @@
+node_modules/
+recordings/
+.env
+.keys.json
+cameras.json
+.cloudflared*
+build/
+.gradle/
+local.properties
+*.keystore
+.DS_Store

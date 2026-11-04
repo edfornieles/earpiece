@@ -1,0 +1,7 @@
+[
+  {
+    "name": "Gallery",
+    "main": "rtsp://USERNAME:PASSWORD@CAMERA-IP:554/stream1",
+    "preview": "rtsp://USERNAME:PASSWORD@CAMERA-IP:554/stream2"
+  }
+]

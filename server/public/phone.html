@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0b0b">
+<link id="manifest" rel="manifest">
+<link rel="icon" href="icon-192.png">
+<title>Earpiece</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b0b; color: #e8e6e1; font: 17px/1.45 -apple-system, system-ui, sans-serif; overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
+  main { min-height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 32px 28px; box-sizing: border-box; gap: 22px; }
+  h1 { font-weight: 400; font-size: 22px; margin: 0; letter-spacing: .01em; }
+  ul { margin: 0; padding-left: 20px; color: #a9a6a0; }
+  input[type=text] { font: inherit; background: #161616; color: inherit; border: 1px solid #333; border-radius: 10px; padding: 12px 14px; -webkit-user-select: text; user-select: text; }
+  button { font: inherit; font-size: 19px; padding: 18px; border: 0; border-radius: 14px; background: #e8e6e1; color: #0b0b0b; }
+  button:disabled { opacity: .35; }
+  label { display: flex; gap: 10px; align-items: flex-start; color: #a9a6a0; font-size: 15px; }
+  label input { margin-top: 4px; transform: scale(1.3); }
+  #live { display: none; align-items: center; text-align: center; }
+  #orb { width: 140px; height: 140px; border-radius: 50%; margin: 0 auto 26px; background: radial-gradient(circle at 40% 35%, #3a3a3a, #121212 70%); transition: box-shadow .08s, transform .08s; }
+  #status { font-size: 15px; color: #8a8780; }
+  #warn { display: none; background: #3a1d12; color: #f3c9b5; padding: 14px; border-radius: 12px; font-size: 15px; }
+  #slot { position: fixed; top: 10px; right: 14px; font-size: 12px; color: #444; }
+  #mic { height: 4px; width: 120px; margin: 14px auto 0; background: #1a1a1a; border-radius: 2px; overflow: hidden; }
+  #mic i { display: block; height: 100%; width: 0; background: #3c6e47; }
+</style>
+</head>
+<body>
+<div id="slot"></div>
+<main id="intro">
+  <h1 id="headline">Before you begin</h1>
+  <ul>
+    <li>Put the earphones in.</li>
+    <li>Keep this screen on and in your hand or pocket.</li>
+    <li>You can stop at any time — just say so.</li>
+  </ul>
+  <input id="name" type="text" placeholder="Your first name (optional)" autocomplete="off">
+  <label><input type="checkbox" id="consent"> I agree that what I say, and what is said to me, will be recorded as part of this work.</label>
+  <button id="start" disabled>Begin</button>
+</main>
+
+<main id="live">
+  <div id="orb"></div>
+  <div id="status">connecting…</div>
+  <div id="mic"><i></i></div>
+  <div id="warn">The connection was interrupted. <button id="resume" style="margin-top:12px;width:100%">Reconnect</button></div>
+</main>
+
+<video id="keep" src="keepawake.mp4" playsinline muted loop style="position:fixed;width:1px;height:1px;opacity:0.01;pointer-events:none"></video>
+<script src="audio.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const KEY = params.get('k');
+const DEVICE = Number(params.get('device') || 0);
+const $ = (id) => document.getElementById(id);
+$('manifest').href = `/manifest.webmanifest?k=${KEY}${DEVICE ? '&device=' + DEVICE : ''}`;
+if (DEVICE) $('slot').textContent = 'Phone ' + DEVICE;
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+$('consent').onchange = () => ($('start').disabled = !$('consent').checked);
+
+let ctx, mic, player, ws, wakeLock, retry = 0, micLevel = 0, audioOn = false;
+let slotId = DEVICE || Number(sessionStorage.getItem('pid') || 0);
+let resumeOnly = false;   // page reloaded mid-participant: carry on rather than start a new person
+
+async function keepAwake() {
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+  try { await $('keep').play(); } catch {}
+}
+const setStatus = (s) => ($('status').textContent = s);
+const showIntro = () => {
+  $('name').value = ''; $('consent').checked = false; $('start').disabled = true;
+  $('start').textContent = 'Begin'; $('headline').textContent = 'Before you begin'; resumeOnly = false;
+  $('intro').style.display = 'flex'; $('live').style.display = 'none';
+};
+const showLive = () => { $('intro').style.display = 'none'; $('live').style.display = 'flex'; };
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws?role=phone&k=${KEY}&device=${DEVICE || slotId}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { retry = 0; $('warn').style.display = 'none'; setStatus('connected'); if (audioOn) ws.send(JSON.stringify({ type: 'hello' })); };
+  ws.onmessage = (e) => {
+    if (typeof e.data !== 'string') { if (player) player.push(new Int16Array(e.data)); return; }
+    const m = JSON.parse(e.data);
+    if (m.type === 'welcome') {
+      slotId = m.id; sessionStorage.setItem('pid', m.id);
+      if (!DEVICE) $('slot').textContent = 'Phone ' + m.id;
+      if (!audioOn && !m.waiting) {   // reloaded during a participant
+        resumeOnly = true; $('headline').textContent = 'Tap to continue'; $('consent').checked = true; $('start').disabled = false; $('start').textContent = 'Continue';
+      }
+    }
+    if (m.type === 'full') setStatus('All phone slots are in use.');
+    if (m.type === 'flush' && player) player.flush();
+    if (m.type === 'reset') { if (player) player.flush(); showIntro(); }
+  };
+  ws.onclose = (e) => {
+    setStatus('reconnecting…');
+    if (e.code === 4000) return setStatus('This slot was taken by another phone.');
+    setTimeout(connect, Math.min(4000, 500 * ++retry));
+  };
+}
+
+async function startAudio() {
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  await ctx.audioWorklet.addModule('worklets.js');
+  mic = await openMic(ctx);
+  player = makePlayer(ctx, ctx.destination);
+  await ctx.resume();
+  mic.onChunk((f) => { micLevel = Math.max(micLevel * 0.8, rms(f)); if (ws && ws.readyState === 1) ws.send(floatToInt16(f).buffer); });
+  audioOn = true;
+  (function draw() {
+    const l = Math.min(1, player.level() * 6);
+    $('orb').style.boxShadow = `0 0 ${10 + l * 70}px ${l * 20}px rgba(232,230,225,${0.08 + l * 0.5})`;
+    $('orb').style.transform = `scale(${1 + l * 0.08})`;
+    micLevel *= 0.9; $('mic').firstElementChild.style.width = Math.min(100, micLevel * 800) + '%';
+    requestAnimationFrame(draw);
+  })();
+}
+
+$('start').onclick = async () => {
+  $('start').disabled = true;
+  keepAwake();
+  try { if (!audioOn) await startAudio(); else await ctx.resume(); }
+  catch (err) { alert('Could not start audio: ' + err.message); $('start').disabled = false; return; }
+  if (resumeOnly) ws.send(JSON.stringify({ type: 'hello' }));
+  else ws.send(JSON.stringify({ type: 'begin', name: $('name').value.trim() }));
+  showLive();
+};
+
+document.addEventListener('visibilitychange', () => {
+  if (!ws) return;
+  if (document.visibilityState === 'hidden') { try { ws.send(JSON.stringify({ type: 'hidden' })); } catch {} }
+  else {
+    keepAwake();
+    if (audioOn && (ctx.state !== 'running' || ws.readyState !== 1)) $('warn').style.display = 'block';
+    else if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'visible' }));
+  }
+});
+$('resume').onclick = async () => {
+  keepAwake();
+  await ctx.resume();
+  if (!ws || ws.readyState > 1) connect(); else ws.send(JSON.stringify({ type: 'visible' }));
+  $('warn').style.display = 'none';
+};
+connect();
+</script>
+</body>
+</html>

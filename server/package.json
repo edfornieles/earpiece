@@ -1,0 +1,13 @@
+{
+  "name": "earpiece",
+  "version": "0.1.0",
+  "description": "Stage 1: phone earpiece <-> control room audio, with per-track recording",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}

@@ -8,6 +8,8 @@ set -e
 cd "$(dirname "$0")"
 SLOT="${1:-1}"
 command -v adb >/dev/null || { echo "adb not found — run: brew install android-platform-tools"; exit 1; }
+# several entries for one phone (wifi debugging lists it twice) — use the first
+[ -z "$ANDROID_SERIAL" ] && export ANDROID_SERIAL=$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')
 adb get-state >/dev/null 2>&1 || { echo "No phone found. Plug it in, unlock it, and accept the 'Allow USB debugging' prompt."; exit 1; }
 
 BASE=$(grep -E '^PUBLIC_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"'"'")
@@ -22,7 +24,12 @@ adb shell settings put secure lock_to_app_enabled 1 2>/dev/null || true   # allo
 adb shell cmd notification set_dnd priority 2>/dev/null || adb shell cmd notification set_dnd on 2>/dev/null || true
 if [ -f earpiece.apk ]; then
   echo "Installing the Earpiece app…"
-  adb install -r -g earpiece.apk >/dev/null          # -g grants the microphone permission up front
+  adb shell am force-stop com.edfornieles.earpiece 2>/dev/null || true
+  if ! adb install -r -g earpiece.apk >/dev/null 2>&1; then   # -g grants the microphone permission up front
+    echo "  (replacing the older copy)"
+    adb uninstall com.edfornieles.earpiece >/dev/null 2>&1 || true
+    adb install -g earpiece.apk >/dev/null
+  fi
   adb shell am start -n com.edfornieles.earpiece/.MainActivity --es url "$URL" >/dev/null
   echo
   echo "Done. The Earpiece app is open on the phone in slot $SLOT."

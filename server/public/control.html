@@ -21,6 +21,11 @@
   .cam .tag { position:absolute; left:8px; top:8px; background:rgba(0,0,0,.6); padding:3px 8px; border-radius:6px; font-size:12px; }
   .cam .tag b { color:var(--hot); font-weight:500; margin-left:6px; }
   .cam .off { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:13px; }
+  #room { display:none; gap:14px; align-items:center; flex-wrap:wrap; margin:-4px 0 16px; font-size:12px; color:var(--dim); }
+  #room .m { display:flex; align-items:center; gap:6px; }
+  #room .bar { width:90px; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
+  #room .bar i { display:block; height:100%; width:0; background:#5c9; transition:width .15s; }
+  #room .bar i.hot { background:var(--hot); }
   #zoom { position:fixed; inset:0; background:rgba(0,0,0,.92); display:none; align-items:center; justify-content:center; z-index:5; cursor:zoom-out; }
   #zoom img { max-width:96vw; max-height:92vh; }
   #grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); gap:14px; align-content:start; align-items:start; }
@@ -73,6 +78,7 @@
 <main>
   <section>
     <div id="cams"></div>
+    <div id="room"></div>
     <div id="grid"></div>
   </section>
   <aside>
@@ -161,6 +167,18 @@ function renderCams(list) {
       const img = el.querySelector('img'); if (!el.retry || Date.now() - el.retry > 5000) { el.retry = Date.now(); img.src = `/cam/${c.id}.mjpg?k=${KEY}&r=${el.retry}`; }
     }
   }
+}
+// ---- room microphones ----
+function renderRoom(r) {
+  const box = $('room');
+  if (!r) { box.style.display = 'none'; return; }
+  box.style.display = 'flex';
+  if (box.dataset.n !== String(r.names.length)) {
+    box.dataset.n = r.names.length;
+    box.innerHTML = '<span class="st"></span>' + r.names.map((n) => `<span class="m">${esc(n)}<span class="bar"><i></i></span></span>`).join('');
+  }
+  box.querySelector('.st').innerHTML = 'Room mics ' + (r.recording ? '<b style="color:var(--hot);font-weight:500">● REC</b>' : 'not recording');
+  box.querySelectorAll('.bar i').forEach((el, i) => { const v = r.levels?.[i] || 0; const db = v > 0 ? Math.max(0, 1 + Math.log10(v) / 3) : 0; el.style.width = (db * 100) + '%'; el.classList.toggle('hot', v > 0.9); });
 }
 $('zoom').onclick = () => { $('zoom').style.display = 'none'; $('zoom').querySelector('img').src = ''; };
 
@@ -286,6 +304,7 @@ function connect() {
     if (m.type === 'transcript') appendLine(person(m.id), m);
     if (m.type === 'error') appendLine(person(m.id), { who: 'error', text: m.text });
     if (m.type === 'cameras') renderCams(m.list);
+    if (m.type === 'room') renderRoom(m.room);
     if (m.type === 'sessionEnding') { toast('Saving this session — a new one starts in a few seconds…'); for (const p of people.values()) { p.lines = []; } }
     if (m.type === 'marked') toast(`Marker at ${m.t}s: ${m.text}`);
     if (m.type === 'brief') {
@@ -306,6 +325,7 @@ async function loadInfo() {
   $('session').innerHTML = `${esc(info.name)}<br>${esc(info.session)}`;
   if (info.mock) $('mock').textContent = '· MOCK AI';
   renderCams(info.cameras);
+  renderRoom(info.roomMics);
   if (!$('tabs').children.length) info.devices.forEach((d) => { const b = document.createElement('button'); b.textContent = 'Phone ' + d.device; b.onclick = () => showDevice(d.device); $('tabs').appendChild(b); });
   if (info.devices[0]?.qr) showDevice(1); else setTimeout(loadInfo, 1500);
 }

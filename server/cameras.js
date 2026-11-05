@@ -2,7 +2,8 @@
 // Config: cameras.json in the project folder, e.g.
 // [ { "name": "Gallery", "main": "rtsp://user:pass@192.168.1.50:554/stream1",
 //                       "preview": "rtsp://user:pass@192.168.1.50:554/stream2" } ]
-// "main": "test" uses a generated test picture (for trying things out without a camera).
+// "main": "mac" uses this Mac's built-in camera ("mac:1" for a second camera); "test" a generated picture.
+// Local cameras are encoded on the Mac (hardware H.264) and previewed from the same capture.
 
 const fs = require('fs');
 const path = require('path');
@@ -18,6 +19,14 @@ function loadConfig(dir) {
 }
 
 const safe = (s) => s.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'camera';
+
+const isLocal = (url) => url === 'test' || /^mac(:|$)/.test(url);
+function localInput(url) {
+  if (url === 'test') return { input: ['-re', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000'], audio: '1:a:0', enc: ['-c:v', 'libx264', '-preset', 'ultrafast', '-g', '50'] };
+  const dev = url.split(':')[1] || '0';
+  return { input: ['-f', 'avfoundation', '-framerate', '30', '-video_size', '1280x720', '-i', `${dev}:none`], audio: null,
+    enc: ['-c:v', 'h264_videotoolbox', '-b:v', '6M', '-realtime', '1', '-g', '60'] };
+}
 
 function inputArgs(url, preview) {
   if (url === 'test') {
@@ -42,7 +51,7 @@ class Camera {
     this.stopped = false; this.recording = false; this.previewing = false;
   }
 
-  start() { this.startRecorder(); this.startPreview(); }
+  start() { this.startRecorder(); if (!isLocal(this.main)) this.startPreview(); }
 
   // ---- recording ----
   startRecorder() {
@@ -50,15 +59,24 @@ class Camera {
     const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '-');
     const pattern = path.join(this.dir, `${this.slug}_${stamp}_%03d.mkv`);
     const listFile = path.join(this.dir, `.segments_${stamp}.csv`);
-    const args = ['-hide_banner', '-loglevel', 'error', '-nostats', ...inputArgs(this.main, false),
-      '-map', '0:v:0', '-map', this.main === 'test' ? '1:a:0' : '0:a:0?',
-      '-c:v', this.main === 'test' ? 'libx264' : 'copy', ...(this.main === 'test' ? ['-preset', 'ultrafast', '-g', '50'] : []),
-      '-c:a', 'aac', '-b:a', '96k', '-af', 'aresample=async=1000', '-max_muxing_queue_size', '2048',
-      '-f', 'segment', '-segment_time', String(SEGMENT_SECS), '-reset_timestamps', '1',
+    const seg = ['-f', 'segment', '-segment_time', String(SEGMENT_SECS), '-reset_timestamps', '1',
       '-segment_format', 'matroska', '-segment_list', listFile, '-segment_list_type', 'csv', pattern];
+    let args;
+    if (isLocal(this.main)) {   // one capture → recording + live preview
+      const L = localInput(this.main);
+      args = ['-hide_banner', '-loglevel', 'error', '-nostats', ...L.input,
+        '-filter_complex', '[0:v]split=2[r][p];[p]fps=8,scale=640:-2[pv]',
+        '-map', '[r]', ...(L.audio ? ['-map', L.audio, '-c:a', 'aac', '-b:a', '96k'] : []), ...L.enc, ...seg,
+        '-map', '[pv]', '-q:v', '7', '-f', 'mjpeg', 'pipe:1'];
+    } else {
+      args = ['-hide_banner', '-loglevel', 'error', '-nostats', ...inputArgs(this.main, false),
+        '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', '96k', '-af', 'aresample=async=1000', '-max_muxing_queue_size', '2048', ...seg];
+    }
     const spawnedAt = Date.now();
     const p = spawn('ffmpeg', args);
     this.rec = p;
+    if (isLocal(this.main)) this.readFrames(p.stdout, p);
     let err = '';
     p.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
     p.on('error', () => this.log('camera_error', { cam: this.id, message: 'ffmpeg not found — brew install ffmpeg' }, true));
@@ -76,6 +94,7 @@ class Camera {
     p.on('exit', (code) => {
       clearInterval(watch);
       this.recording = false;
+      if (isLocal(this.main)) this.previewing = false;
       if (this.stopped) return;
       this.log('camera_dropped', { cam: this.id, name: this.name, code, detail: err.trim().split('\n').slice(-2).join(' ') }, true);
       setTimeout(() => this.startRecorder(), 3000);
@@ -89,8 +108,13 @@ class Camera {
       '-an', '-vf', 'fps=8,scale=640:-2', '-q:v', '7', '-f', 'mjpeg', 'pipe:1'];
     const p = spawn('ffmpeg', args);
     this.prev = p;
+    this.readFrames(p.stdout, p);
+    p.on('error', () => {});
+    p.on('exit', () => { this.previewing = false; if (!this.stopped) setTimeout(() => this.startPreview(), 3000); });
+  }
+  readFrames(stdout) {
     let buf = Buffer.alloc(0);
-    p.stdout.on('data', (d) => {
+    stdout.on('data', (d) => {
       buf = Buffer.concat([buf, d]);
       for (;;) {
         const s = buf.indexOf(Buffer.from([0xff, 0xd8]));
@@ -102,8 +126,6 @@ class Camera {
         for (const res of this.viewers) this.sendFrame(res);
       }
     });
-    p.on('error', () => {});
-    p.on('exit', () => { this.previewing = false; if (!this.stopped) setTimeout(() => this.startPreview(), 3000); });
   }
   sendFrame(res) {
     if (!this.frame) return;

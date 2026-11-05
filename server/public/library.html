@@ -91,10 +91,19 @@ async function open(name) {
       <button id="reexp" ${live ? 'disabled title="exports when the session ends"' : ''}>Rebuild exports</button>
     </div>
     ${(s.participants || []).length ? `<h3>Participants</h3><div>${s.participants.map((p) => `Phone ${p.phone}: <b>${esc(p.name || 'unnamed')}</b> <span class="hint">${Math.round(p.start)}s${p.end != null ? '–' + Math.round(p.end) + 's' : ''}</span>`).join('<br>')}</div>` : ''}
+    <h3>Catalogue <span class="hint" id="catstate"></span></h3>
+    <div class="row"><button id="recat" ${live ? 'disabled title="built when the session ends"' : ''}>${d.catalogue ? 'Rebuild catalogue' : 'Build catalogue'}</button>
+      <span class="hint">${d.catalogue?.counts ? Object.entries(d.catalogue.counts).map(([k, n]) => `${n} ${k === 'thumbs' ? 'stills' : k === 'sheets' ? 'contact sheets' : 'camera proxies'}`).join(' · ') : ''}</span></div>
+    <div class="files">${group((x) => x.path.startsWith('catalogue/') && !x.path.endsWith('status.json') && !x.path.endsWith('log.txt'))}</div>
     <h3>Edit exports</h3><div class="files">${group((x) => x.path.startsWith('exports/'))}</div>
     <h3>Video</h3><div class="files">${group((x) => x.path.startsWith('video/'))}</div>
     <h3>Audio</h3><div class="files">${group((x) => x.path.startsWith('audio/'))}</div>
     <h3>Transcript</h3><pre>${esc(d.transcript || '—')}</pre>`;
+  const c = d.catalogue;
+  $('catstate').textContent = !c ? (live ? '— built when the session ends' : '— not built yet') : c.state === 'running' ? `— working: ${c.step}…` : c.state === 'failed' ? `— failed: ${c.error || ''}` : `— ready${c.utterances != null ? ` · ${c.utterances} lines` : ''}${c.notes?.length ? ' · ' + c.notes.join('; ') : ''}`;
+  clearTimeout(window.catTimer);
+  if (c && c.state === 'running') window.catTimer = setTimeout(() => current === name && open(name), 3000);
+  $('recat').onclick = async () => { const r = await api('catalogue?s=' + encodeURIComponent(name)); if (r.error) alert(r.error); setTimeout(() => open(name), 500); };
   $('openf').onclick = () => api('open?s=' + encodeURIComponent(name));
   $('reexp').onclick = async () => { const r = await api('export?s=' + encodeURIComponent(name)); if (r.error) alert(r.error); open(name); };
   $('savetitle').onclick = async () => { await api('title?s=' + encodeURIComponent(name), { method: 'POST', body: JSON.stringify({ title: $('title').value }) }); sessions = await api('sessions'); render(); };

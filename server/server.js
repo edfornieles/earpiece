@@ -23,6 +23,7 @@ const QRCode = require('qrcode');
 const ai = require('./ai');
 const { loadConfig, Camera } = require('./cameras');
 const { exportSession } = require('./exports');
+const { loadRoomMics, RoomMics } = require('./roommics');
 
 const PORT = Number(process.env.PORT || 8080);
 const RATE = 24000;
@@ -97,11 +98,18 @@ const cameras = loadConfig(__dirname).map((c) => new Camera(c, SESSION_DIR, T0, 
   if (loud) console.log(`  ! ${data.name || data.cam}: ${type.replace('_', ' ')} ${data.detail || data.message || ''}`);
 }));
 session.cameras = cameras.map((c) => ({ id: c.id, name: c.name }));
+// ---------- room microphones ----------
+const roomCfg = loadRoomMics(__dirname);
+const roomMics = roomCfg ? new RoomMics(roomCfg, SESSION_DIR, T0, (type, data, loud) => {
+  logEvent(type, data);
+  if (loud) console.log(`  ! room mics: ${type.replace('roommics_', '').replace('_', ' ')} ${data.detail || data.message || ''}`);
+}) : null;
+session.room_mics = roomCfg ? roomCfg.names : [];
 saveSession();
 
 // ---------- http ----------
 const PUB = path.join(__dirname, 'public');
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.mp4': 'video/mp4', '.png': 'image/png', '.wav': 'audio/wav', '.srt': 'text/plain', '.csv': 'text/csv', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.fcpxml': 'application/xml', '.webmanifest': 'application/manifest+json' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.mp4': 'video/mp4', '.png': 'image/png', '.wav': 'audio/wav', '.srt': 'text/plain', '.csv': 'text/csv', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.fcpxml': 'application/xml', '.webmanifest': 'application/manifest+json', '.md': 'text/plain; charset=utf-8', '.jsonl': 'text/plain; charset=utf-8', '.jpg': 'image/jpeg' };
 let phoneBase = null;
 const phoneUrl = (device) => phoneBase && `${phoneBase}/p?k=${PHONE_KEY}${device ? '&device=' + device : ''}`;
 const json = (res, obj, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -139,7 +147,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/info') {
       const devices = [];
       for (let i = 1; i <= MAX_PHONES; i++) devices.push({ device: i, url: phoneUrl(i), qr: phoneBase ? await QRCode.toString(phoneUrl(i), { type: 'svg', margin: 1 }) : null });
-      return json(res, { phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()) });
+      return json(res, { phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()), roomMics: roomMics ? roomMics.status() : null });
     }
     if (p === '/api/voices') return json(res, { voices: ai.VOICES.map((v) => ({ name: v.name, emotions: ai.emotionsOf(v.name) })), byPhone: settings.voices, styles: settings.styles, default: ai.VOICES[0].name });
     if (p === '/api/preview') {   // hear a voice (with emotion, pitch, speed) in the control room before choosing it
@@ -164,13 +172,20 @@ const server = http.createServer(async (req, res) => {
       let s = {}; try { s = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')); } catch {}
       let transcript = ''; try { transcript = fs.readFileSync(path.join(dir, 'transcript.txt'), 'utf8'); } catch {}
       const files = [];
-      (function walk(d) { for (const f of fs.readdirSync(d)) { if (f.startsWith('.')) continue; const full = path.join(d, f); if (fs.statSync(full).isDirectory()) walk(full); else files.push({ path: path.relative(dir, full), size: fs.statSync(full).size }); } })(dir);
-      return json(res, { session: s, transcript, files });
+      const counts = {};   // stills, sheets and proxies are counted rather than listed
+      (function walk(d) { for (const f of fs.readdirSync(d)) { if (f.startsWith('.')) continue; const full = path.join(d, f), r = path.relative(dir, full); const bulk = r.match(/^catalogue\/(thumbs|sheets|proxies)\//); if (fs.statSync(full).isDirectory()) walk(full); else if (bulk) counts[bulk[1]] = (counts[bulk[1]] || 0) + 1; else files.push({ path: r, size: fs.statSync(full).size }); } })(dir);
+      let catalogue = null; try { catalogue = JSON.parse(fs.readFileSync(path.join(dir, 'catalogue', 'status.json'), 'utf8')); } catch {}
+      if (catalogue) catalogue.counts = counts;
+      return json(res, { session: s, transcript, files, catalogue });
     }
     if (p === '/api/open') { if (process.platform === 'darwin') spawn('open', [dir]); return json(res, { ok: true }); }
     if (p === '/api/export') {
       if (path.basename(dir) === stamp) return json(res, { error: 'This session is still recording — it exports when you stop the server.' }, 409);
       return json(res, exportSession(dir));
+    }
+    if (p === '/api/catalogue') {
+      if (path.basename(dir) === stamp) return json(res, { error: 'This session is still recording — the catalogue is built when it ends.' }, 409);
+      startCatalogue(dir); return json(res, { ok: true });
     }
     if (p === '/api/title' && req.method === 'POST') {
       let body = ''; for await (const c of req) body += c;
@@ -213,10 +228,16 @@ const toControls = (obj) => { const s = JSON.stringify(obj); for (const c of con
 const send = (ws, obj) => ws && ws.readyState === 1 && ws.send(JSON.stringify(obj));
 const list = () => [...sessions.values()].filter((s) => s.ws).map((s) => ({ id: s.id, name: s.name, mode: s.mode, waiting: s.waiting }));
 
-function transcript(s, who, text) {
+// Every line gets timings on the session clock: start/end for things already spoken (participant, the
+// director's own voice); AI-voiced lines get a number u, and play_start / play_end (or ai_cut) events
+// record when the phone actually played them.
+const at = (ms) => Number(((ms - T0) / 1000).toFixed(2));
+let U = 0;
+const voiceInfo = (id) => { const st = styleOf(id); return { voice: voiceOf(id), emotion: st.emotion || null, pitch: st.pitch ?? 0, speed: st.speed ?? 1 }; };
+function transcript(s, who, text, extra = {}) {
   const label = who === 'participant' ? (s.name || `PHONE ${s.id}`).toUpperCase() : who.toUpperCase();
   transcriptFile.write(`[${clock()}] #${s.id} ${label}: ${text}\n`);
-  logEvent('say', { id: s.id, who, text });
+  logEvent('say', { id: s.id, who, text, ...extra });
   toControls({ type: 'transcript', id: s.id, who, text, t: clock() });
 }
 function state(s) {
@@ -236,17 +257,21 @@ class Session {
     this.pending = Buffer.alloc(0); this.ttsDone = true; this.playT0 = 0; this.playSent = 0; this.abort = null;
     this.vad = new ai.Vad({
       onStart: () => { if (this.speaking && this.mode === 'auto') stopAi(this, 'participant interrupted'); state(this); },
-      onUtterance: (pcm) => { if (!this.waiting) heard(this, pcm); }
+      onUtterance: (pcm) => {   // pcm = 300 ms pre-roll + speech + 800 ms of quiet
+        if (this.waiting) return;
+        const now = Date.now(), dur = pcm.length / 2 / RATE;
+        heard(this, pcm, { start: at(now - (dur - 0.24) * 1000), end: at(now - 800) });
+      }
     });
   }
 }
 
-async function heard(s, pcm) {
+async function heard(s, pcm, when = {}) {
   state(s);
   let text;
   try { text = (await ai.transcribe(pcm)).trim(); } catch (e) { return report(s, e); }
   if (!text || text.replace(/[^a-z]/gi, '').length < 2 || s.waiting) return;
-  transcript(s, 'participant', text);
+  transcript(s, 'participant', text, when);
   s.history.push({ role: 'user', content: `Participant: "${text}"` });
   s.lastActivity = Date.now();
   if (s.mode === 'auto' && !s.edHold) aiTurn(s);
@@ -273,12 +298,13 @@ async function aiTurn(s) {
   reply = reply.replace(/[*_#`]/g, '').replace(/\s+/g, ' ').trim();
   if (!reply || /^\[?silence\]?$/i.test(reply)) { state(s); s.lastActivity = Date.now(); return; }
   s.history.push({ role: 'assistant', content: reply });
-  transcript(s, 'ai', reply);
-  say(s, reply, turn);
+  const u = ++U;
+  transcript(s, 'ai', reply, { u, ...voiceInfo(s.id) });
+  say(s, reply, turn, u);
 }
 
-function say(s, text, turn) {
-  s.speaking = true; s.ttsDone = false; s.vad.strict = true;
+function say(s, text, turn, u) {
+  s.speaking = true; s.ttsDone = false; s.vad.strict = true; s.playU = u; s.playStarted = false;
   s.abort = new AbortController();
   state(s);
   ai.speak(text, (pcm) => { if (turn === s.turn) s.pending = Buffer.concat([s.pending, pcm]); }, s.abort.signal, ai.voiceUrl(voiceOf(s.id), styleOf(s.id).emotion), styleOf(s.id))
@@ -295,7 +321,7 @@ function stopAi(s, why) {
   if (wasSpeaking) {
     const last = s.history[s.history.length - 1];
     if (last && last.role === 'assistant') last.content += ' [cut off: ' + why + ']';
-    logEvent('ai_cut', { id: s.id, why });
+    logEvent('ai_cut', { id: s.id, why, u: s.playU, played: !!s.playStarted });
   }
 }
 
@@ -328,7 +354,11 @@ setInterval(() => {
   const now = Date.now();
   for (const s of sessions.values()) {
     if (!s.speaking) continue;
-    if (!s.playT0) { if (s.pending.length < RATE * 0.3 * 2 && !s.ttsDone) continue; s.playT0 = now; s.playSent = 0; }
+    if (!s.playT0) {
+      if (s.pending.length < RATE * 0.3 * 2 && !s.ttsDone) continue;
+      s.playT0 = now; s.playSent = 0;
+      if (!s.playStarted) { s.playStarted = true; logEvent('play_start', { id: s.id, u: s.playU }); }
+    }
     let lead = s.playSent / RATE - (now - s.playT0) / 1000;
     if (lead < 0 && s.pending.length) { s.playT0 = now - (s.playSent / RATE) * 1000; lead = 0; }
     while (lead < 0.25 && s.pending.length >= (s.ttsDone ? 1 : FRAME)) {
@@ -340,6 +370,8 @@ setInterval(() => {
     }
     if (s.ttsDone && !s.pending.length && lead <= 0) {
       s.speaking = false; s.playT0 = 0; s.vad.strict = false; s.lastActivity = now; state(s);
+      if (s.playStarted) logEvent('play_end', { id: s.id, u: s.playU });
+      s.playStarted = false;
       if (s.again && s.mode === 'auto' && !s.edHold) setTimeout(() => aiTurn(s), 300);
     }
   }
@@ -360,6 +392,7 @@ setInterval(() => {
 
 // camera status to the control room
 setInterval(() => toControls({ type: 'cameras', list: cameras.map((c) => c.status()) }), 2000);
+if (roomMics) setInterval(() => toControls({ type: 'room', room: roomMics.status() }), 250);
 
 // ---------- human director talk ----------
 // Speaks text word-for-word in the phone's chosen AI voice (typed lines, and the director's speech in "AI voice" mode).
@@ -368,14 +401,15 @@ function speakAs(t, text, who) {
   stopAi(t, 'director ' + who);
   const turn = ++t.turn;
   t.history.push({ role: 'assistant', content: text + ' [these words came from the human director and were spoken in your voice]' });
-  transcript(t, who, text);
+  const u = ++U;
+  transcript(t, who, text, { u, ...voiceInfo(t.id) });
   t.lastActivity = Date.now();
-  say(t, text, turn);
+  say(t, text, turn, u);
 }
 
 let talk = null;
 function talkStart(target, as) {
-  talk = { targets: new Set(), pcm: [], as: as === 'voice' ? 'voice' : 'own' };
+  talk = { targets: new Set(), pcm: [], as: as === 'voice' ? 'voice' : 'own', t0: Date.now() };
   for (const s of sessions.values()) {
     if (!s.ws || (target !== 0 && target !== s.id)) continue;
     talk.targets.add(s.id); stopAi(s, 'human director cut in'); s.edHold = true; state(s);
@@ -383,7 +417,7 @@ function talkStart(target, as) {
 }
 async function talkStop() {
   if (!talk) return;
-  const t = talk; talk = null;
+  const t = talk; talk = null; t.t1 = Date.now();
   for (const id of t.targets) { const s = sessions.get(id); if (s) { s.edHold = false; s.lastActivity = Date.now(); state(s); } }
   if (!t.pcm.length) return;
   let text = '';
@@ -392,7 +426,7 @@ async function talkStop() {
   if (t.as === 'voice') { for (const id of t.targets) speakAs(sessions.get(id), text, 'voiced'); return; }
   for (const id of t.targets) {
     const s = sessions.get(id); if (!s) continue;
-    transcript(s, 'director', text);
+    transcript(s, 'director', text, { start: at(t.t0), end: at(t.t1) });
     s.history.push({ role: 'user', content: `[The human director spoke to the participant directly: "${text}"]` });
   }
 }
@@ -562,6 +596,8 @@ server.listen(PORT, async () => {
   }
   console.log(cameras.length ? `  cameras: ${cameras.map((c) => c.name).join(', ')}` : '  cameras: none (add them in cameras.json)');
   for (const c of cameras) c.start();
+  console.log(roomMics ? `  room mics: ${roomCfg.names.join(', ')} (${roomCfg.device})` : '  room mics: none (add them in roommics.json)');
+  if (roomMics) roomMics.start();
   console.log('\n  CONTROL ROOM (open on this computer, use headphones):\n  ' + controlUrl);
   console.log('  LIBRARY: http://localhost:' + PORT + '/library?k=' + CONTROL_KEY);
   if (process.platform === 'darwin' && !process.env.NO_OPEN) spawn('open', [controlUrl]);
@@ -569,6 +605,16 @@ server.listen(PORT, async () => {
   else if (!process.env.NO_TUNNEL) startQuickTunnel();
   logEvent('session_start');
 });
+
+// ---------- catalogue: built in the background after a session (see catalogue.js) ----------
+function startCatalogue(dir) {
+  fs.mkdirSync(path.join(dir, 'catalogue'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'catalogue', 'status.json'), JSON.stringify({ state: 'running', step: 'queued', started: new Date().toISOString() }));
+  const log = fs.openSync(path.join(dir, 'catalogue', 'log.txt'), 'a');
+  const cmd = process.platform === 'win32' ? [process.execPath, [path.join(__dirname, 'catalogue.js'), dir]] : ['nice', ['-n', '10', process.execPath, path.join(__dirname, 'catalogue.js'), dir]];
+  const child = spawn(cmd[0], cmd[1], { detached: true, stdio: ['ignore', log, log], env: process.env });
+  child.on('error', () => {}); child.unref();
+}
 
 // ---------- shutdown: close everything, convert video, write exports ----------
 async function shutdown(restart) {
@@ -579,14 +625,18 @@ async function shutdown(restart) {
   logEvent('session_end');
   for (const t of tracks.values()) t.close();
   for (const c of cameras) c.stop();
+  if (roomMics) roomMics.stop();
+  const done = (p) => !p || p.exitCode !== null || p.signalCode;
   await new Promise((r) => {   // let ffmpeg close its files
     const t0 = Date.now();
-    const check = () => (cameras.every((c) => [c.rec, c.prev].every((p) => !p || p.exitCode !== null || p.signalCode)) || Date.now() - t0 > 8000) ? r() : setTimeout(check, 200);
+    const check = () => ((cameras.every((c) => [c.rec, c.prev].every(done)) && (!roomMics || roomMics.closed())) || Date.now() - t0 > 8000) ? r() : setTimeout(check, 200);
     check();
   });
   if (cameras.length) console.log('  converting video for the editor…');
   const clips = cameras.flatMap((c) => c.finalize());
   session.video = clips.map((c) => ({ ...c, file: path.relative(SESSION_DIR, c.file) }));
+  const room = roomMics ? roomMics.finalize() : [];
+  session.room_audio = room.map((r) => ({ ...r, file: path.relative(SESSION_DIR, r.file) }));
   session.end_iso = new Date().toISOString();
   saveSession();
   await new Promise((r) => events.end(r));
@@ -595,6 +645,7 @@ async function shutdown(restart) {
     const ex = exportSession(SESSION_DIR, clips);
     console.log(`  exports written: timeline.fcpxml, markers.csv (${ex.markers})${ex.subtitles.length ? ', ' + ex.subtitles.join(', ') : ''}`);
   } catch (e) { console.log('  ! export failed: ' + e.message); }
+  if (process.env.NO_CATALOGUE !== '1') { try { startCatalogue(SESSION_DIR); console.log('  building the catalogue in the background — progress shows in the library'); } catch (e) { console.log('  ! catalogue: ' + e.message); } }
   console.log('\n  saved: ' + SESSION_DIR + '\n');
   process.exit(restart === true ? 75 : 0);   // 75 = start a fresh session (see run.js)
 }

@@ -4,7 +4,8 @@
   "description": "Stage 1: phone earpiece <-> control room audio, with per-track recording",
   "main": "server.js",
   "scripts": {
-    "start": "node run.js"
+    "start": "node run.js",
+    "devices": "ffmpeg -hide_banner -f avfoundation -list_devices true -i '' 2>&1 | grep -v 'Error opening' || true"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

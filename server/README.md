@@ -39,6 +39,27 @@ Copy `cameras.example.json` to `cameras.json` and fill in each camera's address.
 
 Recording keeps the camera's own video untouched, in 10-minute chunks. If a camera drops out it reconnects on its own, and a marker shows where. Needs `ffmpeg` (`brew install ffmpeg`).
 
+**Testing without the Tapos:** use this Mac's own camera. Put this in `cameras.json`:
+
+```json
+[ { "name": "Mac camera", "main": "mac" } ]
+```
+
+The first time, macOS asks whether Terminal may use the camera — say yes (System Settings → Privacy & Security → Camera if you missed it). `"main": "mac:1"` picks a second camera; `"main": "test"` is a generated test picture. Mix them freely with Tapos.
+
+## Room microphones
+
+Copy `roommics.example.json` to `roommics.json`:
+
+```json
+{ "device": "default", "channels": 1, "names": ["Mac mic"] }
+```
+
+- `device`: `default` is the Mac's built-in mic (fine for testing). For an interface such as the Zoom F4 over USB, run `npm run devices`, find it under *audio devices*, and put its name, e.g. `"ZOOM F4"`.
+- `channels` and `names`: one name per input, e.g. `["Window", "Bench", "Door", "Centre"]`. Each becomes its own file.
+
+Levels show under the cameras in the control room. Recording is 48 kHz 24-bit. macOS asks for microphone access the first time.
+
 ## Controls
 
 - **Hold to talk** (or hold `1`–`4`): speak to one phone. `space` speaks to everyone. This cuts the AI off; the AI knows what you said and carries on after you stop.
@@ -55,7 +76,9 @@ recordings/2026-11-05-14-03-12/
   events.jsonl        everything that happened, timed
   audio/              director-mic.wav, phoneN-mic.wav (what they said),
                       phoneN-ai.wav (the AI voice), phoneN-heard.wav (everything in their ear)
+                      room-<name>.wav (one per room mic)
   video/<camera>/     .mp4 per 10-minute chunk
+  catalogue/          built in the background after the session (see below)
   exports/
     timeline.fcpxml   every audio track and camera clip lined up, with markers
     markers.csv       directions, notes, interruptions, dropouts, your marks
@@ -65,6 +88,24 @@ recordings/2026-11-05-14-03-12/
 All audio tracks start at the session start. Camera clips are placed by when they started recording, to within about a second. For frame-accurate sync, clap once in view of the camera near a phone at the start, or let Resolve's "auto sync audio" line up the camera's sound with the phone mics.
 
 **In Resolve:** File → Import → Timeline → `timeline.fcpxml`. **In Premiere:** File → Import → `timeline.fcpxml`.
+
+### The catalogue
+
+When a session ends, the catalogue builds itself in the background (the library shows progress, and you can rebuild it there). It's laid out so a person — or an AI editor — can find any moment fast:
+
+```
+catalogue/
+  EDIT_NOTES.md       start here: participants, every file, the whole script with timecodes, marks
+  utterances.jsonl    one line per thing said: speaker, words, start/end, word-by-word timings,
+                      voice/emotion/pitch/speed, the file and position, which cameras and room mics were rolling
+  manifest.json       every file with its kind, start on the session clock and real-world time
+  mixes/phoneN-conversation.wav   participant on the left, what they heard on the right
+  proxies/<camera>/   light 720p copies for scrubbing
+  thumbs/<camera>/    a still every 10 s, named by session time (00h12m30s.jpg)
+  sheets/<camera>/    contact sheets: each row is one minute
+```
+
+Word timings use OpenAI Whisper (a few pence per hour of speech). Build it again for an old session with `node catalogue.js recordings/<session>`.
 
 ## Settings (.env)
 

@@ -1,7 +1,7 @@
 // Edit-ready exports for a finished session:
 //   exports/<slot>.srt       subtitles per phone slot (participant, AI, director)
 //   exports/markers.csv      every direction, note, interruption and dropout, as timecode
-//   exports/timeline.fcpxml  one timeline with every audio track and camera clip already placed
+//   exports/timeline.fcpxml  one timeline with every audio track, room mic and camera clip already placed
 // Opens in DaVinci Resolve (File → Import → Timeline) and Premiere (File → Import).
 
 const fs = require('fs');
@@ -43,13 +43,25 @@ function exportSession(dir, videoClips = []) {
   const lines = [];   // { slot, t, who, text }
   const markers = []; // { t, label }
 
+  // when each AI-voiced line actually played on the phone
+  const play = {};
+  for (const e of events) {
+    if (e.u == null) continue;
+    const p = (play[e.u] = play[e.u] || {});
+    if (e.type === 'play_start') p.start = Number(e.t);
+    if (e.type === 'play_end' || (e.type === 'ai_cut' && e.played)) { p.end = Number(e.t); p.cut = e.type === 'ai_cut'; }
+  }
+
   for (const e of events) {
     const t = Number(e.t);
     if (e.type === 'participant_start') { names[e.id] = e.name || `Participant ${e.id}`; markers.push({ t, label: `Phone ${e.id}: ${names[e.id]} starts` }); }
     if (e.type === 'participant_end') markers.push({ t, label: `Phone ${e.id}: ${e.name || ''} ends` });
     if (e.type === 'say') {
       const who = e.who === 'ai' ? 'AI' : e.who === 'typed' ? 'VOICE (typed)' : e.who === 'voiced' ? 'VOICE (spoken by director)' : e.who === 'director' ? 'DIRECTOR' : (names[e.id] || `PHONE ${e.id}`).toUpperCase();
-      lines.push({ slot: e.id, t, who, text: e.text });
+      const p = e.u != null ? play[e.u] || {} : {};
+      if (e.u != null && p.start == null) continue;   // never played (cut before it started)
+      const start = e.start ?? p.start ?? t, end = e.end ?? p.end ?? null;
+      lines.push({ slot: e.id, t: start, end, who, text: e.text + (p.cut ? ' —' : '') });
       if (['director', 'typed', 'voiced'].includes(e.who)) markers.push({ t, label: `${e.who === 'typed' ? 'Typed' : e.who === 'voiced' ? 'You (AI voice)' : 'You'} → ${e.id}: ${e.text}` });
     }
     if (e.type === 'instruct') markers.push({ t, label: `Note to AI (${e.id}): ${e.text}` });
@@ -62,10 +74,10 @@ function exportSession(dir, videoClips = []) {
   // subtitles, one file per phone slot
   const slots = [...new Set(lines.map((l) => l.slot))];
   for (const s of slots) {
-    const ls = lines.filter((l) => l.slot === s);
+    const ls = lines.filter((l) => l.slot === s).sort((a, b) => a.t - b.t);
     const srt = ls.map((l, i) => {
       const words = l.text.split(/\s+/).length;
-      const end = Math.min(ls[i + 1] ? ls[i + 1].t - 0.05 : Infinity, l.t + Math.max(1.5, words / 2.6));
+      const end = l.end != null && l.end > l.t ? l.end : Math.min(ls[i + 1] ? ls[i + 1].t - 0.05 : Infinity, l.t + Math.max(1.5, words / 2.6));
       return `${i + 1}\n${srtTime(l.t)} --> ${srtTime(end)}\n${l.who}: ${l.text}\n`;
     }).join('\n');
     fs.writeFileSync(path.join(out, `phone${s}.srt`), srt);
@@ -77,11 +89,12 @@ function exportSession(dir, videoClips = []) {
 
   // timeline
   const audioDir = path.join(dir, 'audio');
-  const audio = fs.existsSync(audioDir) ? fs.readdirSync(audioDir).filter((f) => f.endsWith('.wav')).sort().map((f) => ({ file: path.join(audioDir, f), name: f.replace('.wav', ''), duration: wavDuration(path.join(audioDir, f)) })) : [];
+  const audio = fs.existsSync(audioDir) ? fs.readdirSync(audioDir).filter((f) => f.endsWith('.wav') && !f.startsWith('room-')).sort().map((f) => ({ file: path.join(audioDir, f), name: f.replace('.wav', ''), duration: wavDuration(path.join(audioDir, f)) })) : [];
   const clips = videoClips.filter((c) => c.duration > 0);
+  const room = (session.room_audio || []).map((r) => ({ ...r, file: path.isAbsolute(r.file) ? r.file : path.join(dir, r.file) })).filter((r) => r.duration > 0 && fs.existsSync(r.file));
   const dims = clips.length ? probe(clips[0].file) : null;
   const W = dims?.w || 1920, H = dims?.h || 1080;
-  const total = Math.max(1, ...audio.map((a) => a.duration), ...clips.map((c) => c.offset + c.duration), ...markers.map((m) => m.t + 1));
+  const total = Math.max(1, ...audio.map((a) => a.duration), ...clips.map((c) => c.offset + c.duration), ...room.map((r) => r.offset + r.duration), ...markers.map((m) => m.t + 1));
   const url = (f) => 'file://' + encodeURI(f).replace(/#/g, '%23').replace(/\?/g, '%3F');
 
   let id = 2;
@@ -90,6 +103,12 @@ function exportSession(dir, videoClips = []) {
     const r = 'r' + id++;
     assets.push(`<asset id="${r}" name="${esc(a.name)}" start="0s" duration="${rt(a.duration)}" hasAudio="1" audioSources="1" audioChannels="1" audioRate="24000"><media-rep kind="original-media" src="${esc(url(a.file))}"/></asset>`);
     placed.push(`<asset-clip ref="${r}" lane="-${i + 1}" offset="0s" name="${esc(a.name)}" start="0s" duration="${rt(a.duration)}" audioRole="dialogue"/>`);
+  });
+  room.forEach((a, i) => {
+    const r = 'r' + id++;
+    const name = path.basename(a.file, '.wav');
+    assets.push(`<asset id="${r}" name="${esc(name)}" start="0s" duration="${rt(a.duration)}" hasAudio="1" audioSources="1" audioChannels="1" audioRate="48000"><media-rep kind="original-media" src="${esc(url(a.file))}"/></asset>`);
+    placed.push(`<asset-clip ref="${r}" lane="-${audio.length + i + 1}" offset="${rt(a.offset)}" name="${esc(a.name || name)}" start="0s" duration="${rt(a.duration)}" audioRole="effects"/>`);
   });
   const camLanes = [...new Set(clips.map((c) => c.cam))];
   clips.forEach((c) => {
@@ -126,7 +145,7 @@ function exportSession(dir, videoClips = []) {
   fs.writeFileSync(path.join(out, 'timeline.fcpxml'), xml);
 
   // index for the library
-  session.exports = { at: new Date().toISOString(), subtitles: slots.map((s) => `phone${s}.srt`), markers: markers.length, video: clips.map((c) => path.relative(dir, c.file)), audio: audio.map((a) => path.relative(dir, a.file)), duration: total };
+  session.exports = { at: new Date().toISOString(), subtitles: slots.map((s) => `phone${s}.srt`), markers: markers.length, video: clips.map((c) => path.relative(dir, c.file)), audio: audio.map((a) => path.relative(dir, a.file)), room: room.map((r) => path.relative(dir, r.file)), duration: total };
   fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(session, null, 2));
   return session.exports;
 }

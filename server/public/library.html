@@ -39,7 +39,7 @@
 </style>
 </head>
 <body>
-<header><h1>Library</h1><span class="hint">Every session is a folder in <code>recordings/</code>. Import <code>exports/timeline.fcpxml</code> into Resolve or Premiere to get everything lined up.</span></header>
+<header><h1>Library</h1><span class="hint">Every session is a folder in <code>recordings/</code>. Import <code>exports/timeline.fcpxml</code> into Resolve or Premiere to get everything lined up.</span><a id="reglink" style="color:var(--dim);font-size:13px;text-decoration:none">Registrations →</a></header>
 <main>
   <section id="list"><input id="search" placeholder="Search names, titles, transcripts…"></section>
   <section id="detail"><p class="hint">Choose a session.</p></section>
@@ -48,6 +48,7 @@
 const KEY = new URLSearchParams(location.search).get('k');
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+document.getElementById('reglink').href = '/people?k=' + new URLSearchParams(location.search).get('k');
 const api = (p, opts) => fetch(`/api/${p}${p.includes('?') ? '&' : '?'}k=${KEY}`, opts).then((r) => r.json());
 const size = (b) => b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.ceil(b / 1e3) + ' KB';
 const dur = (s) => s ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : '';

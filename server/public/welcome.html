@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Welcome</title>
+<style>
+  :root { --bg:#0b0b0b; --fg:#f1eee8; --dim:#9a968e; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:18px/1.45 -apple-system, system-ui, sans-serif; overflow:hidden; cursor:none; }
+  body.setup { cursor:auto; }
+  .wrap { position:absolute; inset:0; display:grid; grid-template-columns: 1fr minmax(320px, 27vw); }
+  body.novideo .wrap { grid-template-columns: 1fr; }
+  .film { position:relative; background:#000; min-width:0; }
+  .film video { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; }
+  .film .none { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:18px; text-align:center; padding:40px; }
+  body.novideo .film { display:none; }
+  .side { display:flex; flex-direction:column; justify-content:center; gap:2.2vh; padding:4vh 3vw; border-left:1px solid #1f1f1f; }
+  body.novideo .side { align-items:center; text-align:center; border:0; }
+  .side h1 { font-size:clamp(28px, 2.6vw, 52px); line-height:1.08; margin:0; font-weight:600; letter-spacing:-.015em; }
+  .qr { background:#fff; border-radius:18px; padding:14px; width:100%; max-width:min(24vw, 46vh); aspect-ratio:1; }
+  body.novideo .qr { max-width:min(46vw, 52vh); }
+  .qr svg { width:100%; height:100%; display:block; }
+  .steps { color:var(--dim); font-size:clamp(15px, 1.1vw, 22px); margin:0; padding-left:1.2em; }
+  .steps li { margin:.35em 0; }
+  .note { color:var(--dim); font-size:clamp(13px, .85vw, 17px); }
+  #setup { position:fixed; inset:0; background:rgba(0,0,0,.88); display:flex; align-items:center; justify-content:center; z-index:5; }
+  #setup .box { max-width:560px; text-align:center; padding:30px; }
+  #setup button { font:inherit; font-size:20px; padding:16px 30px; border-radius:12px; border:0; background:var(--fg); color:#000; cursor:pointer; margin-top:18px; }
+  #setup p { color:var(--dim); font-size:15px; }
+  #setup .warn { color:#f08f78; }
+</style>
+</head>
+<body class="setup">
+<div class="wrap">
+  <div class="film"><video id="v" playsinline loop preload="auto"></video><div class="none" id="none"><div>No intro film yet.<br>Save it as <b>intro.mp4</b> in the earpiece folder.</div></div></div>
+  <div class="side">
+    <h1>Scan to take part</h1>
+    <div class="qr" id="qr"></div>
+    <ol class="steps"><li>Point your phone's camera at the code</li><li>Register: name, email, a photo, consent</li><li>Show your number at the desk</li></ol>
+    <div class="note">18 and over · you can stop at any time</div>
+  </div>
+</div>
+<div id="setup"><div class="box">
+  <h2 style="font-weight:500;margin:0 0 8px">Welcome station</h2>
+  <p id="info">Loading…</p>
+  <button id="go">Start (full screen, with sound)</button>
+  <p>Press <b>Esc</b> to leave full screen. Add <b>&amp;video=0</b> to the address for a QR-code-only screen.</p>
+</div></div>
+<script>
+const Q = new URLSearchParams(location.search), KEY = Q.get('k');
+const $ = (id) => document.getElementById(id);
+let hasVideo = false;
+async function load() {
+  try {
+    const d = await (await fetch('/welcome-api/info?k=' + KEY)).json();
+    $('qr').innerHTML = d.qr || '';
+    hasVideo = d.video && Q.get('video') !== '0';
+    document.body.classList.toggle('novideo', Q.get('video') === '0');
+    if (hasVideo && !$('v').src) { $('v').src = '/intro-video?k=' + KEY; $('none').style.display = 'none'; }
+    const notes = [];
+    if (!d.public) notes.push('<span class="warn">The code points at this Mac on the local wifi, so people\'s phones must be on the same wifi. Start the server with the public link (PUBLIC_URL) so it works on mobile data.</span>');
+    if (d.draft) notes.push('<span class="warn">The consent form is still the draft (consent.example.md). Save your checked version as consent.md.</span>');
+    if (!d.video) notes.push('No intro film found — the screen shows just the code. Save the film as intro.mp4 in the earpiece folder.');
+    notes.push('Registration link: ' + (d.joinUrl || '—'));
+    $('info').innerHTML = notes.join('<br><br>');
+  } catch { $('info').textContent = 'Can\'t reach the earpiece server.'; }
+}
+load(); setInterval(load, 60000);   // picks up a new tunnel address or a new film
+$('go').onclick = async () => {
+  document.body.classList.remove('setup'); $('setup').style.display = 'none';
+  try { await document.documentElement.requestFullscreen(); } catch {}
+  if (hasVideo) { $('v').muted = false; $('v').play().catch(() => { $('v').muted = true; $('v').play(); }); }
+  try { await navigator.wakeLock?.request('screen'); } catch {}
+};
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) { document.body.classList.add('setup'); $('setup').style.display = 'flex'; $('v').pause(); } });
+</script>
+</body>
+</html>

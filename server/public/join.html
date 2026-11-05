@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f3f1ec">
+<title>Take part</title>
+<style>
+  :root { --bg:#f3f1ec; --fg:#141414; --dim:#6d6a63; --line:#d9d5cc; --accent:#141414; --bad:#b3341c; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.5 -apple-system, system-ui, sans-serif; -webkit-text-size-adjust:100%; }
+  main { max-width:520px; margin:0 auto; padding:28px 22px calc(40px + env(safe-area-inset-bottom)); }
+  .step { display:none; } .step.on { display:block; }
+  .count { color:var(--dim); font-size:13px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:10px; }
+  h1 { font-size:30px; line-height:1.15; font-weight:600; margin:0 0 14px; letter-spacing:-.01em; }
+  p { margin:0 0 14px; }
+  .dim { color:var(--dim); font-size:15px; }
+  label.f { display:block; font-size:14px; color:var(--dim); margin:18px 0 6px; }
+  input[type=text], input[type=email] { width:100%; font:inherit; padding:14px 14px; border:1px solid var(--line); border-radius:12px; background:#fff; color:var(--fg); }
+  input:focus { outline:2px solid var(--fg); outline-offset:1px; border-color:transparent; }
+  .check { display:flex; gap:12px; align-items:flex-start; margin:18px 0; font-size:16px; }
+  .check input { width:24px; height:24px; flex:none; margin:1px 0 0; accent-color:var(--fg); }
+  .optional { border:1px solid var(--line); border-radius:12px; padding:12px 14px; background:#fff; }
+  .optional .check { margin:0; }
+  button { font:inherit; font-weight:600; width:100%; padding:16px; border-radius:14px; border:0; background:var(--accent); color:#fff; margin-top:22px; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); font-weight:500; }
+  button:disabled { opacity:.35; }
+  .err { color:var(--bad); font-size:15px; margin-top:12px; min-height:1px; }
+  .photo { width:100%; aspect-ratio:3/4; border-radius:16px; background:#e6e2d9; display:flex; align-items:center; justify-content:center; overflow:hidden; color:var(--dim); font-size:15px; text-align:center; padding:20px; }
+  .photo img { width:100%; height:100%; object-fit:cover; display:block; }
+  .photo.has { padding:0; }
+  .consent { background:#fff; border:1px solid var(--line); border-radius:12px; padding:4px 16px; max-height:52vh; overflow-y:auto; font-size:15px; line-height:1.55; -webkit-overflow-scrolling:touch; }
+  .consent h1 { font-size:20px; margin:14px 0 8px; } .consent h2 { font-size:16px; margin:16px 0 6px; } .consent ul { padding-left:20px; margin:6px 0 10px; } .consent li { margin:3px 0; }
+  .more { color:var(--dim); font-size:13px; text-align:center; margin-top:6px; }
+  .done { text-align:center; padding-top:10px; }
+  .num { font-size:96px; font-weight:700; line-height:1; letter-spacing:-.03em; margin:12px 0 4px; }
+  .done .face { width:140px; height:140px; border-radius:50%; object-fit:cover; margin:18px auto 6px; display:block; }
+  .spin { display:inline-block; width:18px; height:18px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:s .8s linear infinite; vertical-align:-3px; margin-right:8px; }
+  @keyframes s { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <section class="step on" id="s0">
+    <h1>Take part</h1>
+    <p>In this work a voice in an earpiece gives you directions as you move through the gallery.</p>
+    <p class="dim">Register here first — it takes about two minutes. You'll give your name and email, take a photo, and read and sign the consent form. Then show your number at the desk.</p>
+    <p class="dim">You need to be 18 or over.</p>
+    <button data-next>Start</button>
+  </section>
+
+  <section class="step" id="s1">
+    <div class="count">1 of 3</div>
+    <h1>About you</h1>
+    <label class="f" for="name">Your name</label>
+    <input type="text" id="name" autocomplete="name" autocapitalize="words" maxlength="80">
+    <label class="f" for="email">Email</label>
+    <input type="email" id="email" autocomplete="email" inputmode="email" maxlength="120">
+    <p class="dim" style="margin-top:8px">Only used to contact you about this project. Never published or shared.</p>
+    <label class="check"><input type="checkbox" id="adult"> I am 18 or over</label>
+    <div class="err" id="e1"></div>
+    <button data-next="1">Next</button>
+  </section>
+
+  <section class="step" id="s2">
+    <div class="count">2 of 3</div>
+    <h1>Your photo</h1>
+    <p class="dim">A clear photo of your face, taken now. It's kept with your registration so we can match you to your recordings.</p>
+    <div class="photo" id="photo">No photo yet</div>
+    <input type="file" id="cam" accept="image/*" capture="user" hidden>
+    <button id="take">Take photo</button>
+    <div class="err" id="e2"></div>
+    <button data-next="2" id="n2" disabled>Next</button>
+  </section>
+
+  <section class="step" id="s3">
+    <div class="count">3 of 3</div>
+    <h1>Consent</h1>
+    <div class="consent" id="consent">Loading…</div>
+    <div class="more" id="more">Scroll to read it all</div>
+    <label class="check"><input type="checkbox" id="agree"> I have read this. I agree to take part and to be recorded and filmed, and to these recordings being used as described.</label>
+    <label class="f" for="sig">Type your full name to sign</label>
+    <input type="text" id="sig" autocapitalize="words" maxlength="80">
+    <div class="optional" style="margin-top:18px">
+      <label class="check"><input type="checkbox" id="face"> <span><b>Optional:</b> I also agree to face matching, as described under “Face matching”. You can take part without this.</span></label>
+    </div>
+    <div class="err" id="e3"></div>
+    <button id="submit">Register</button>
+  </section>
+
+  <section class="step" id="s4">
+    <div class="done">
+      <div class="count">You're registered</div>
+      <img class="face" id="donephoto" alt="">
+      <div class="num" id="num"></div>
+      <h1 id="donename" style="font-size:24px"></h1>
+      <p>Show this screen at the desk.<br>We'll give you a phone and an earpiece.</p>
+      <p class="dim">You can stop at any time: take the earpiece out and hand the phone back.</p>
+    </div>
+  </section>
+</main>
+<script>
+const J = new URLSearchParams(location.search).get('j');
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+let step = 0, photo = null, version = null;
+const store = sessionStorage;   // survives the page reloading after the camera (some Android phones do that)
+
+function show(n) { step = n; document.querySelectorAll('.step').forEach((s, i) => s.classList.toggle('on', i === n)); scrollTo(0, 0); store.setItem('step', n); }
+function check(n) {
+  if (n === 1) {
+    const name = $('name').value.trim(), email = $('email').value.trim();
+    if (name.length < 2) return 'Please give your name.';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Please give a valid email address.';
+    if (!$('adult').checked) return 'You need to be 18 or over to take part.';
+    if (!$('sig').value) $('sig').value = name;
+  }
+  if (n === 2 && !photo) return 'Please take a photo.';
+  return '';
+}
+document.querySelectorAll('[data-next]').forEach((b) => b.onclick = () => {
+  const n = Number(b.dataset.next || 0), err = check(n);
+  if (n) $('e' + n).textContent = err;
+  if (!err) show(n + 1);
+});
+for (const id of ['name', 'email']) { $(id).value = store.getItem(id) || ''; $(id).oninput = () => store.setItem(id, $(id).value); }
+$('adult').checked = store.getItem('adult') === '1'; $('adult').onchange = () => store.setItem('adult', $('adult').checked ? '1' : '');
+
+// photo: shrink to a sensible size on the phone (this also drops location data from the picture)
+function setPhoto(dataUrl) {
+  photo = dataUrl; $('photo').innerHTML = `<img src="${dataUrl}" alt="">`; $('photo').classList.add('has');
+  $('take').textContent = 'Retake'; $('take').className = 'ghost'; $('n2').disabled = false;
+  try { store.setItem('photo', dataUrl); } catch {}
+}
+$('take').onclick = () => $('cam').click();
+$('cam').onchange = () => {
+  const f = $('cam').files[0]; if (!f) return;
+  $('e2').textContent = '';
+  const img = new Image();
+  img.onload = () => {
+    const max = 1280, k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    setPhoto(c.toDataURL('image/jpeg', 0.86)); URL.revokeObjectURL(img.src);
+  };
+  img.onerror = () => { $('e2').textContent = 'That photo couldn’t be opened — please try again.'; };
+  img.src = URL.createObjectURL(f);
+};
+if (store.getItem('photo')) setPhoto(store.getItem('photo'));
+
+// consent text
+function markdown(src) {
+  const inline = (x) => esc(x).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^\w])_([^_]+)_(?=[^\w]|$)/g, '$1<i>$2</i>');
+  const out = []; let list = false;
+  for (const line of src.split('\n')) {
+    let m;
+    if ((m = line.match(/^- (.*)/))) { if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if (list) { out.push('</ul>'); list = false; }
+    if ((m = line.match(/^(#{1,3}) (.*)/))) out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`);
+    else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  if (list) out.push('</ul>');
+  return out.join('');
+}
+fetch(`/join-api/info?j=${encodeURIComponent(J || '')}`).then((r) => { if (!r.ok) throw 0; return r.json(); }).then((d) => {
+  version = d.version; $('consent').innerHTML = markdown(d.consent);
+}).catch(() => { document.querySelector('main').innerHTML = '<h1>This link isn’t working</h1><p class="dim">Please scan the code on the screen again, or ask at the desk.</p>'; });
+$('consent').onscroll = () => { const c = $('consent'); if (c.scrollTop + c.clientHeight > c.scrollHeight - 30) $('more').style.visibility = 'hidden'; };
+
+$('submit').onclick = async () => {
+  const e = $('e3');
+  if (!$('agree').checked) return (e.textContent = 'Please tick to agree.');
+  if ($('sig').value.trim().length < 2) return (e.textContent = 'Please type your full name to sign.');
+  for (const n of [1, 2]) { const err = check(n); if (err) { show(n); $('e' + n).textContent = err; return; } }
+  const b = $('submit'); b.disabled = true; b.innerHTML = '<span class="spin"></span>Registering…'; e.textContent = '';
+  try {
+    const r = await fetch(`/join-api/submit?j=${encodeURIComponent(J)}`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: $('name').value.trim(), email: $('email').value.trim(), adult: $('adult').checked, agree: true, signature: $('sig').value.trim(), face: $('face').checked, photo, version }) });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'Something went wrong.');
+    $('num').textContent = '#' + d.number; $('donename').textContent = d.name; $('donephoto').src = photo;
+    store.clear(); show(4);
+  } catch (err) { e.textContent = err.message === 'Failed to fetch' ? 'No connection — check your signal and try again.' : err.message; b.disabled = false; b.textContent = 'Register'; }
+};
+const s0 = Number(store.getItem('step') || 0); if (s0 > 0 && s0 < 4) show(s0);
+</script>
+</body>
+</html>

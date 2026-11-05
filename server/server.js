@@ -24,6 +24,7 @@ const ai = require('./ai');
 const { loadConfig, Camera } = require('./cameras');
 const { exportSession } = require('./exports');
 const { loadRoomMics, RoomMics } = require('./roommics');
+const { Registry } = require('./registry');
 
 const PORT = Number(process.env.PORT || 8080);
 const RATE = 24000;
@@ -40,8 +41,9 @@ try { keys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8')); } catch {}
 keys.phone = process.env.PHONE_KEY || keys.phone || crypto.randomBytes(4).toString('hex');
 keys.control = process.env.CONTROL_KEY || keys.control || crypto.randomBytes(4).toString('hex');
 keys.monitor = process.env.MONITOR_KEY || keys.monitor || crypto.randomBytes(4).toString('hex');   // camera screens: watch only
-if (!process.env.PHONE_KEY) fs.writeFileSync(KEYS_FILE, JSON.stringify({ phone: keys.phone, control: keys.control, monitor: keys.monitor }));
-const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control, MONITOR_KEY = keys.monitor;
+keys.join = process.env.JOIN_KEY || keys.join || crypto.randomBytes(4).toString('hex');            // registration: can only sign up
+if (!process.env.PHONE_KEY) fs.writeFileSync(KEYS_FILE, JSON.stringify({ phone: keys.phone, control: keys.control, monitor: keys.monitor, join: keys.join }));
+const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control, MONITOR_KEY = keys.monitor, JOIN_KEY = keys.join;
 
 // Voice choices persist between runs.
 const SETTINGS_FILE = path.join(__dirname, '.settings.json');
@@ -72,7 +74,7 @@ const savePeople = () => { writePeople(SESSION_DIR, people); toControls({ type: 
 const personBy = (pid) => people.find((x) => x.pid === pid);
 function upsertPerson(d) {
   let x = d.pid && personBy(d.pid);
-  if (!x) { x = { pid: newPid(), name: '', contact: '', notes: '', release: false, files: [], visits: [], added: new Date().toISOString() }; people.push(x); }
+  if (!x) { x = { pid: d.pid || newPid(), name: '', contact: '', notes: '', release: false, files: [], visits: [], added: new Date().toISOString() }; people.push(x); }
   for (const k of ['name', 'contact', 'notes']) if (typeof d[k] === 'string') x[k] = d[k].slice(0, k === 'notes' ? 4000 : 200);
   if (typeof d.release === 'boolean') x.release = d.release;
   if (typeof d.name === 'string') {   // keep names in the session record in step
@@ -83,6 +85,55 @@ function upsertPerson(d) {
   return x;
 }
 const safeName = (s) => String(s || '').normalize('NFKD').replace(/[^\w.\- ]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'file';
+
+// ---------- registrations (welcome station) ----------
+const registry = new Registry(__dirname);
+const regView = (x) => ({ pid: x.pid, number: x.number, name: x.name, email: x.email, face: x.face, registered: x.registered, notes: x.notes || '', sessions: x.sessions, photo: `/participants/${x.pid}/photo.jpg` });
+const recentRegs = () => registry.list.filter((x) => Date.now() - Date.parse(x.registered) < 36 * 3600e3).map(regView);
+// Connect a registration to a session — live or finished — optionally to one phone visit in it.
+// The visit's earlier, unregistered record (e.g. the name typed on the phone) is folded into the registration.
+function linkPerson(dir, rid, visitIdx = -1, how = 'linked by hand') {
+  const live = path.basename(dir) === stamp;
+  const reg = registry.get(rid); if (!reg) throw new Error('no such registration');
+  const sj = live ? session : JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
+  const plist = live ? people : readPeople(dir);
+  const copied = registry.copyInto(dir, rid, safeName);
+  let x = plist.find((y) => y.pid === rid);
+  if (!x) { x = { pid: rid, name: '', contact: '', notes: '', release: false, files: [], visits: [], added: new Date().toISOString() }; plist.push(x); }
+  Object.assign(x, { name: reg.name, contact: reg.email, release: true, registered: true, number: reg.number, face: reg.face, photo: copied.photo });
+  for (const f of copied.files) if (!x.files.find((y) => y.file === f.file)) x.files.push(f);
+  if (visitIdx >= 0) {
+    const v = (sj.participants || [])[visitIdx]; if (!v) throw new Error('no such visit');
+    const old = v.pid && v.pid !== rid ? plist.find((y) => y.pid === v.pid) : null;
+    if (old) {
+      const i = old.visits.findIndex((w) => w.phone === v.phone && Math.abs(w.start - v.start) < 1);
+      if (i >= 0) x.visits.push(...old.visits.splice(i, 1));
+      x.aliases = [...new Set([...(x.aliases || []), old.pid])];
+      if (old.notes && !x.notes.includes(old.notes)) x.notes = [x.notes, old.notes].filter(Boolean).join('\n');
+      for (const f of old.files) if (!x.files.find((y) => y.file === f.file)) x.files.push(f);
+      if (!old.visits.length && !old.registered) plist.splice(plist.indexOf(old), 1);
+      if (live) for (const ps of sessions.values()) if (ps.pid === old.pid) { ps.pid = rid; ps.name = reg.name; state(ps); }
+    } else if (!x.visits.find((w) => w.phone === v.phone && Math.abs(w.start - v.start) < 1)) x.visits.push({ phone: v.phone, start: v.start, end: v.end });
+    v.pid = rid; v.name = reg.name;
+  }
+  registry.noteSession(rid, path.basename(dir), how);
+  if (live) { saveSession(); savePeople(); toControls({ type: 'participants', list: list() }); toControls({ type: 'registry', list: recentRegs() }); }
+  else {
+    writePeople(dir, plist); fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(sj, null, 2));
+    try { exportSession(dir); startCatalogue(dir); } catch {}
+  }
+  return x;
+}
+function unlinkPerson(dir, pid) {   // undo a link that has no phone visit (someone added to the wrong session)
+  const live = path.basename(dir) === stamp;
+  const plist = live ? people : readPeople(dir), x = plist.find((y) => y.pid === pid);
+  if (!x) throw new Error('not in this session');
+  if (x.visits.length) throw new Error('They were on a phone in this session — link that visit to the right person instead.');
+  plist.splice(plist.indexOf(x), 1);
+  registry.forgetSession(pid, path.basename(dir));
+  if (live) { savePeople(); toControls({ type: 'registry', list: recentRegs() }); } else writePeople(dir, plist);
+}
+const joinHits = new Map();   // ip -> recent registration times (keeps the public form from being flooded)
 saveSession();
 const events = fs.createWriteStream(path.join(SESSION_DIR, 'events.jsonl'), { flags: 'a' });
 const transcriptFile = fs.createWriteStream(path.join(SESSION_DIR, 'transcript.txt'), { flags: 'a' });
@@ -137,6 +188,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 let phoneBase = null;
 const phoneUrl = (device) => phoneBase && `${phoneBase}/p?k=${PHONE_KEY}${device ? '&device=' + device : ''}`;
 const json = (res, obj, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
+const introFile = () => ['intro.mp4', 'intro.mov', 'intro.m4v'].map((f) => path.join(__dirname, f)).find((f) => fs.existsSync(f));
 // this Mac's address on the local network, for camera screens on tablets / other computers
 function lanAddress() {
   const all = Object.entries(require('os').networkInterfaces()).flatMap(([n, l]) => (l || []).map((a) => ({ n, ...a })));
@@ -167,6 +219,54 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/vnd.android.package-archive', 'content-disposition': 'attachment; filename="earpiece.apk"', 'content-length': fs.statSync(apk).size });
     return fs.createReadStream(apk).pipe(res);
   }
+  if (p.startsWith('/join-api/')) {   // the public registration form (reached by the QR code)
+    if (u.searchParams.get('j') !== JOIN_KEY) { res.writeHead(403); return res.end(); }
+    if (p === '/join-api/info') { const c = registry.consent(); return json(res, { consent: c.text, version: c.version }); }
+    if (p === '/join-api/submit' && req.method === 'POST') {
+      const ip = String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+      const hits = (joinHits.get(ip) || []).filter((t) => Date.now() - t < 3600e3);
+      if (hits.length >= 15) return json(res, { error: 'Too many registrations from this connection — please ask at the desk.' }, 429);
+      let body = '', n = 0;
+      for await (const c of req) { n += c.length; if (n > 12e6) return json(res, { error: 'The photo is too large.' }, 413); body += c; }
+      let d; try { d = JSON.parse(body); } catch { return json(res, { error: 'Something went wrong — please try again.' }, 400); }
+      const name = String(d.name || '').replace(/\s+/g, ' ').trim().slice(0, 80), email = String(d.email || '').trim().slice(0, 120);
+      const signature = String(d.signature || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      if (name.length < 2) return json(res, { error: 'Please give your name.' }, 400);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, { error: 'Please give a valid email address.' }, 400);
+      if (d.adult !== true) return json(res, { error: 'You need to be 18 or over to take part.' }, 400);
+      if (d.agree !== true || signature.length < 2) return json(res, { error: 'Please read the consent form, tick to agree and type your name to sign.' }, 400);
+      if (d.version !== registry.consent().version) return json(res, { error: 'The consent form has just been updated — please reload the page and read it again.' }, 409);
+      const photo = Buffer.from(String(d.photo || '').replace(/^data:image\/jpeg;base64,/, ''), 'base64');
+      if (photo.length < 2000 || photo[0] !== 0xff || photo[1] !== 0xd8) return json(res, { error: 'Please take a photo.' }, 400);
+      hits.push(Date.now()); joinHits.set(ip, hits);
+      const x = registry.add({ name, email, face: d.face === true, signature, photo, ip });
+      logEvent('registered', { pid: x.pid, number: x.number });
+      toControls({ type: 'arrival', person: regView(x) }); toControls({ type: 'registry', list: recentRegs() });
+      console.log(`  + registered: #${x.number} ${x.name}${x.face ? ' (face matching ok)' : ''}`);
+      return json(res, { ok: true, number: x.number, name: x.name });
+    }
+    res.writeHead(404); return res.end();
+  }
+  if (p === '/welcome-api/info') {   // the welcome station: the join link as a QR code, and whether there's an intro film
+    if (!mon) { res.writeHead(403); return res.end(); }
+    const ip = lanAddress(), base = phoneBase || (ip && `http://${ip}:${PORT}`);
+    const joinUrl = base && `${base}/join?j=${JOIN_KEY}`;
+    return json(res, { joinUrl, qr: joinUrl ? await QRCode.toString(joinUrl, { type: 'svg', margin: 1 }) : null, public: !!phoneBase, video: !!introFile(), draft: registry.consent().draft });
+  }
+  if (p === '/intro-video') {   // intro.mp4 (or .mov / .m4v) in the earpiece folder
+    const f = introFile();
+    if (!mon || !f) { res.writeHead(f ? 403 : 404); return res.end(); }
+    const size = fs.statSync(f).size, range = req.headers.range?.match(/bytes=(\d*)-(\d*)/);
+    const type = f.endsWith('.mov') ? 'video/quicktime' : 'video/mp4';
+    if (range) { const a = Number(range[1] || 0), b = range[2] ? Number(range[2]) : size - 1; res.writeHead(206, { 'content-type': type, 'content-range': `bytes ${a}-${b}/${size}`, 'accept-ranges': 'bytes', 'content-length': b - a + 1 }); return fs.createReadStream(f, { start: a, end: b }).pipe(res); }
+    res.writeHead(200, { 'content-type': type, 'content-length': size, 'accept-ranges': 'bytes' }); return fs.createReadStream(f).pipe(res);
+  }
+  if (p.startsWith('/participants/')) {   // registration photos and signed consent: control room only
+    const [, , pid, f] = p.split('/');
+    const file = registry.get(pid) && ['photo.jpg', 'consent.md'].includes(f) && path.join(registry.dir, pid, f);
+    if (!ctl || !file || !fs.existsSync(file)) { res.writeHead(ctl ? 404 : 403); return res.end(); }
+    res.writeHead(200, { 'content-type': TYPES[path.extname(file)], 'cache-control': 'no-store' }); return fs.createReadStream(file).pipe(res);
+  }
   if (p.startsWith('/cam/')) {
     if (!mon) { res.writeHead(403); return res.end(); }
     const cam = cameras.find((c) => c.id === p.slice(5).replace('.mjpg', ''));
@@ -185,6 +285,12 @@ const server = http.createServer(async (req, res) => {
         screens.items.push({ id: c.id, name: c.name, url, qr: await QRCode.toString(url, { type: 'svg', margin: 1 }) });
       }
       return json(res, { phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()), roomMics: roomMics ? roomMics.status() : null, screens });
+    }
+    if (p === '/api/registry') return json(res, { list: [...registry.list].reverse().map(regView), consent: registry.consent() });
+    if (p === '/api/registry-update' && req.method === 'POST') {
+      let body = ''; for await (const c of req) body += c;
+      const d = JSON.parse(body || '{}'), x = registry.update(d.pid, d);
+      return x ? json(res, { ok: true, person: regView(x) }) : json(res, { error: 'no such registration' }, 404);
     }
     if (p === '/api/voices') return json(res, { voices: ai.VOICES.map((v) => ({ name: v.name, emotions: ai.emotionsOf(v.name) })), byPhone: settings.voices, styles: settings.styles, default: ai.VOICES[0].name });
     if (p === '/api/preview') {   // hear a voice (with emotion, pitch, speed) in the control room before choosing it
@@ -266,6 +372,15 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, { ok: true, file: rec });
     }
+    if (p === '/api/link' && req.method === 'POST') {   // connect a registration to this session (and to one phone visit)
+      let body = ''; for await (const c of req) body += c;
+      const d = JSON.parse(body || '{}');
+      try { return json(res, { ok: true, person: linkPerson(dir, d.pid, d.visit ?? -1) }); } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/unlink' && req.method === 'POST') {
+      let body = ''; for await (const c of req) body += c;
+      try { unlinkPerson(dir, JSON.parse(body || '{}').pid); return json(res, { ok: true }); } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     if (p === '/api/person' && req.method === 'POST') {   // edit someone's details (works on old sessions too)
       let body = ''; for await (const c of req) body += c;
       const d = JSON.parse(body || '{}');
@@ -320,6 +435,9 @@ const server = http.createServer(async (req, res) => {
   if (p === '/library') p = '/library.html';
   if (p === '/monitor') p = '/monitor.html';
   if (p === '/files') p = '/files.html';
+  if (p === '/join') p = '/join.html';
+  if (p === '/welcome') p = '/welcome.html';
+  if (p === '/people') p = '/people.html';
   const file = path.join(PUB, path.normalize(p).replace(/^(\.\.[\/\\])+/, ''));
   if (!file.startsWith(PUB) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
   res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
@@ -570,6 +688,7 @@ wss.on('connection', (ws, req) => {
     controls.add(ws);
     send(ws, { type: 'participants', list: list() });
     send(ws, { type: 'people', list: people });
+    send(ws, { type: 'registry', list: recentRegs() });
     send(ws, { type: 'session', title: session.title, notes: session.notes || '', documents: session.documents || [] });
     for (const s of sessions.values()) if (s.ws) state(s);
     ws.on('message', (data, isBinary) => {
@@ -627,6 +746,14 @@ wss.on('connection', (ws, req) => {
       }
       if (m.type === 'personSave') { const x = upsertPerson(m); send(ws, { type: 'personSaved', pid: x.pid, ref: m.ref }); }
       if (m.type === 'personDelete') { const x = personBy(m.pid); if (x && !x.visits.length && !x.files.length) { people = people.filter((y) => y !== x); savePeople(); } }
+      if (m.type === 'arrivalAdd' || m.type === 'arrivalStart') {   // someone who registered at the welcome station
+        try {
+          const t = m.type === 'arrivalStart' && sessions.get(Number(m.phone));
+          if (m.type === 'arrivalStart' && !(t && t.ws)) throw new Error('That phone isn\'t connected.');
+          const x = linkPerson(SESSION_DIR, m.pid, -1, t ? 'on phone ' + t.id : 'added in the control room');
+          if (t) { beginParticipant(t, x.name, x.pid); send(t.ws, { type: 'welcome', id: t.id, waiting: false, name: t.name }); }
+        } catch (e) { send(ws, { type: 'error', id: Number(m.phone) || 0, text: e.message }); }
+      }
       if (m.type === 'personStart') {   // start someone on a phone from here, instead of the phone's own screen
         const x = personBy(m.pid), t = sessions.get(Number(m.phone));
         if (x && t && t.ws) {

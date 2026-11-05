@@ -60,6 +60,27 @@ Copy `roommics.example.json` to `roommics.json`:
 
 Levels show under the cameras in the control room. Recording is 48 kHz 24-bit. macOS asks for microphone access the first time.
 
+## Welcome station and registration
+
+A separate computer in its own space plays the intro film next to a QR code. People scan it with their own phone and register: name, email, confirm they're 18+, take a photo, read and sign the consent form (typed name), and optionally agree to face matching. They get a number to show at the desk.
+
+1. Save the film as `intro.mp4` (or `.mov`) in this folder.
+2. Write the consent form: copy `consent.example.md` to `consent.md` and edit it — fill in the [brackets] and have it checked. Each registration stores the exact text that person agreed to.
+3. On the welcome computer open **Registrations → Welcome screen** (or `/welcome?k=<screen key>`), click Start: full screen, with sound. Add `&video=0` for a QR-only screen.
+4. For people on mobile data the code must point at the public address, so start with `PUBLIC_URL=https://earpiece.edfornieles.com npm start`.
+
+New registrations appear in the control room under **Arrivals** (with a chime): check their photo against the person, pick a phone, **Start on phone**. Their photo and signed consent are copied into the session folder.
+
+**Registrations** (`/people`) lists everyone who has registered. To connect someone to a session by hand — they didn't agree to face matching, matching missed them, or they started on a phone without registering — open their card, **Connect to a session…**, pick the session and either the phone visit that was them or "they were there". Names, exports and the catalogue update.
+
+Registrations are kept in `participants/` (personal data — never share or commit that folder).
+
+### Face matching
+
+For people who ticked the face-matching box, the catalogue looks for their face in the camera footage during their visit (± 30 s), every 2 seconds, and records which camera they're on when. Results: `catalogue/appearances.json`, `catalogue/faces.jsonl`, the best crops per person in `catalogue/faces/` to check, and a "Who is on which camera" section in the edit notes. Faces of anyone else are compared and discarded — nothing about them is kept. It runs on this Mac only.
+
+One-time setup: `npm run setup-faces` (needs Python 3: `brew install python` if it's missing). Matching is automatic and can be wrong — the crops are there so you can check.
+
 ## Controls
 
 - **Hold to talk** (or hold `1`–`4`): speak to one phone. `space` speaks to everyone. This cuts the AI off; the AI knows what you said and carries on after you stop.

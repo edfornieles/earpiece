@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node run.js",
-    "devices": "ffmpeg -hide_banner -f avfoundation -list_devices true -i '' 2>&1 | grep -v 'Error opening' || true"
+    "devices": "ffmpeg -hide_banner -f avfoundation -list_devices true -i '' 2>&1 | grep -v 'Error opening' || true",
+    "setup-faces": "bash setup-faces.sh"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

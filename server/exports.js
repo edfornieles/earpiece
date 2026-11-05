@@ -41,7 +41,7 @@ function exportSession(dir, videoClips = []) {
   const session = (() => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')); } catch { return {}; } })();
   if (!videoClips.length && Array.isArray(session.video)) videoClips = session.video.map((c) => ({ ...c, file: path.isAbsolute(c.file) ? c.file : path.join(dir, c.file) }));
   const personName = {};   // the names as corrected in the control room / library
-  try { for (const x of JSON.parse(fs.readFileSync(path.join(dir, 'people.json'), 'utf8'))) if (x.name) personName[x.pid] = x.name; } catch {}
+  try { for (const x of JSON.parse(fs.readFileSync(path.join(dir, 'people.json'), 'utf8'))) if (x.name) for (const id of [x.pid, ...(x.aliases || [])]) personName[id] = x.name; } catch {}
   const names = {};   // slot -> current participant name, as the session went
   const lines = [];   // { slot, t, who, text }
   const markers = []; // { t, label }

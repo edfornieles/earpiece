@@ -91,6 +91,7 @@ const GROUPS = [
   ['Cameras', 'full-quality recordings, one file per 10 minutes', (p) => p.startsWith('video/')],
   ['Camera proxies', 'light 720p copies for scrubbing', (p) => p.startsWith('catalogue/proxies/')],
   ['Contact sheets', 'each row is one minute, a still every 10 s', (p) => p.startsWith('catalogue/sheets/')],
+  ['Face matches', 'the best automatic matches per person and camera — check these; named camera_time_score', (p) => p.startsWith('catalogue/faces/')],
   ['Stills', 'one every 10 s per camera, named by session time', (p) => p.startsWith('catalogue/thumbs/')],
   ['Session records', 'what happened, when — the raw logs everything else is built from', (p) => /^(session\.json|events\.jsonl|transcript\.txt|people\.json|brief\.txt)$/.test(p)],
   ['Other', '', () => true],
@@ -145,9 +146,9 @@ function render() {
     if (!fs.length) continue;
     const gsize = fs.reduce((a, f) => a + f.size, 0);
     html += `<div class="group ${shut.has(name) && !q ? 'shut' : ''}" data-g="${esc(name)}"><div class="gh"><span class="tw">${shut.has(name) && !q ? '▸' : '▾'}</span><h3>${esc(name)}</h3><span class="d">${esc(desc)}</span><span class="n">${fs.length} · ${size(gsize)}</span></div><div class="body">`;
-    if (name === 'Stills' || name === 'Contact sheets') {
+    if (name === 'Stills' || name === 'Contact sheets' || name === 'Face matches') {
       const byCam = {};
-      for (const f of fs) { const cam = f.path.split('/')[2]; (byCam[cam] = byCam[cam] || []).push(f); }
+      for (const f of fs) { const k = f.path.split('/')[2]; const cam = name === 'Face matches' ? (pname[k] || k) : k; (byCam[cam] = byCam[cam] || []).push(f); }
       for (const [cam, list] of Object.entries(byCam)) {
         html += `<div class="sub">${esc(cam)} · ${list.length}</div><div class="grid${name === 'Contact sheets' ? ' sheets' : ''}">` + list.map((f) => `<figure data-p="${esc(f.path)}"><img loading="lazy" src="${url(f.path)}" alt=""><figcaption>${esc(f.path.split('/').pop().replace(/\.jpg$/, ''))}</figcaption></figure>`).join('') + '</div>';
       }

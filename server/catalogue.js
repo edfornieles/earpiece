@@ -56,7 +56,7 @@ async function main() {
   const T0 = session.start_epoch_ms || Date.parse(session.start_iso);
   // names and release status only — contact details in people.json stay out of the catalogue
   const folk = (() => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'people.json'), 'utf8')); } catch { return []; } })();
-  const byPid = Object.fromEntries(folk.map((x) => [x.pid, x]));
+  const byPid = Object.fromEntries(folk.flatMap((x) => [x.pid, ...(x.aliases || [])].map((id) => [id, x])));
   for (const v of session.participants || []) { const x = byPid[v.pid]; if (x) { if (x.name) v.name = x.name; v.release = !!x.release; v.documents = (x.files || []).length; } }
   const wall = (sec) => new Date(T0 + sec * 1000).toISOString();
 
@@ -98,14 +98,15 @@ async function main() {
   }
   const names = {};
   const utts = [];
+  const pids = {};   // phone -> person on it
   for (const e of events) {
-    if (e.type === 'participant_start') names[e.id] = (e.pid && byPid[e.pid]?.name) || e.name || `Participant ${e.id}`;
+    if (e.type === 'participant_start') { names[e.id] = (e.pid && byPid[e.pid]?.name) || e.name || `Participant ${e.id}`; pids[e.id] = (e.pid && byPid[e.pid]?.pid) || e.pid || null; }
     if (e.type !== 'say') continue;
     const p = e.u != null ? play[e.u] || {} : {};
     const speaker = e.who === 'participant' ? (names[e.id] || `Participant ${e.id}`) : e.who === 'ai' ? 'AI' : e.who === 'director' ? 'Director (own voice)' : e.who === 'typed' ? 'AI voice (typed by director)' : 'AI voice (spoken by director)';
     const source = e.who === 'participant' ? `audio/phone${e.id}-mic.wav` : e.who === 'director' ? 'audio/director-mic.wav' : `audio/phone${e.id}-ai.wav`;
     const u = {
-      n: utts.length + 1, phone: e.id, participant: names[e.id] || null, who: e.who, speaker, text: e.text,
+      n: utts.length + 1, phone: e.id, participant: names[e.id] || null, pid: pids[e.id] || null, who: e.who, speaker, text: e.text,
       start: e.start ?? p.start ?? Number(e.t), end: e.end ?? p.end ?? null,
       played: e.u != null ? p.start != null : undefined, cut_off: p.cut || undefined,
       voice: e.voice ? { name: e.voice, emotion: e.emotion, pitch: e.pitch, speed: e.speed } : undefined,
@@ -202,6 +203,46 @@ async function main() {
   }
   fs.writeFileSync(path.join(C, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
+  // ---------- face matching (only people who agreed to it) ----------
+  const py = path.join(__dirname, '.faces-venv', 'bin', 'python');
+  const modelsOk = ['face_detection_yunet_2023mar.onnx', 'face_recognition_sface_2021dec.onnx'].every((m) => fs.existsSync(path.join(__dirname, 'models', m)));
+  const faceFolk = folk.filter((x) => x.face && x.photo && fs.existsSync(path.join(dir, x.photo)));
+  const sessionEnd = Math.max(0, ...files.map((f) => f.offset + (f.duration || 0)));
+  manifest.face_matching = { ran: false, people: faceFolk.map((x) => x.name), not_consented: folk.filter((x) => x.registered && !x.face).map((x) => x.name) };
+  let appearances = [];
+  if (faceFolk.length && cams.length && process.env.NO_FACES !== '1') {
+    if (!fs.existsSync(py) || !modelsOk) status.notes.push('face matching not set up on this Mac — run: npm run setup-faces, then rebuild the catalogue');
+    else {
+      setStatus('face matching');
+      const job = {
+        out: C, step: Number(process.env.FACE_STEP || 2),
+        people: faceFolk.map((x) => ({ pid: x.pid, name: x.name, photo: path.join(dir, x.photo) })),
+        windows: faceFolk.flatMap((x) => x.visits.length ? x.visits.map((v) => ({ pid: x.pid, from: Math.max(0, v.start - 30), to: (v.end ?? sessionEnd) + 30 })) : [{ pid: x.pid, from: 0, to: sessionEnd }]),
+        videos: cams.map((f) => ({ cam: f.cam, camera: f.camera, file: path.join(dir, f.file), offset: f.offset, duration: f.duration }))
+      };
+      const ok = await new Promise((res) => {
+        const p = spawn(py, [path.join(__dirname, 'faces.py')], { env: { ...process.env, OPENCV_LOG_LEVEL: 'ERROR' }, stdio: ['pipe', 'ignore', 'pipe'] });
+        p.stderr.on('data', (d) => { for (const l of String(d).split('\n')) { const m = l.match(/faces: (.*)/); if (m) setStatus('face matching — ' + m[1]); } });
+        p.on('exit', (code) => res(code === 0)); p.on('error', () => res(false));
+        p.stdin.end(JSON.stringify(job));
+      });
+      if (!ok) status.notes.push('face matching failed — see catalogue/log.txt');
+      else {
+        try { appearances = JSON.parse(fs.readFileSync(path.join(C, 'appearances.json'), 'utf8')); } catch {}
+        manifest.face_matching.ran = true;
+        manifest.appearances = appearances;
+        // who can be seen on which camera while each line is spoken
+        for (const u of utts) {
+          const near = (a) => a.from - 3 <= u.start && u.start <= a.to + 3;
+          u.seen = appearances.filter(near).map((a) => ({ name: a.name, camera: a.camera }));
+          if (u.pid) u.speaker_on_camera = [...new Set(appearances.filter((a) => a.pid === u.pid && near(a)).map((a) => a.camera))];
+        }
+        fs.writeFileSync(path.join(C, 'utterances.jsonl'), utts.map((u) => JSON.stringify(u)).join('\n') + (utts.length ? '\n' : ''));
+      }
+    }
+  }
+  fs.writeFileSync(path.join(C, 'manifest.json'), JSON.stringify(manifest, null, 2));
+
   // ---------- notes ----------
   setStatus('writing edit notes');
   fs.writeFileSync(path.join(C, 'EDIT_NOTES.md'), notes(session, manifest, utts, events));
@@ -241,6 +282,17 @@ function notes(session, m, utts, events) {
       const v = u.voice ? ` _(${u.voice.name}${u.voice.emotion && u.voice.emotion !== 'neutral' ? ', ' + u.voice.emotion : ''})_` : '';
       L.push(`- \`${u.timecode}\` **${u.speaker}**${v}: ${u.text}${u.played === false ? ' _(never heard — cut off)_' : u.cut_off ? ' _(cut off)_' : ''}`);
     }
+    L.push('');
+  }
+  if (m.face_matching && (m.face_matching.people.length || m.face_matching.not_consented.length)) {
+    L.push('## Who is on which camera (face matching)', '');
+    L.push('Automatic matches against each person\'s registration photo — check them before relying on them: the best crops are in `catalogue/faces/<id>/`. Every sighting is in `catalogue/faces.jsonl`.', '');
+    if (!m.face_matching.ran) L.push('_Face matching did not run for this session (see notes below)._', '');
+    for (const name of m.face_matching.people) {
+      const a = (m.appearances || []).filter((x) => x.name === name);
+      L.push(`- **${name}**: ${a.length ? a.map((x) => `${x.camera} ${tc(x.from)}–${tc(x.to)} (${x.sightings}×, best ${x.best})`).join('; ') : m.face_matching.ran ? 'not found on camera' : '—'}`);
+    }
+    for (const name of m.face_matching.not_consented) L.push(`- **${name}**: didn't agree to face matching — find by hand`);
     L.push('');
   }
   const marks = events.filter((e) => ['mark', 'instruct', 'ai_cut', 'phone_hidden', 'phone_disconnected', 'camera_dropped', 'roommics_dropped', 'headset_lost', 'sync'].includes(e.type));

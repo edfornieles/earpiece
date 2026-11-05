@@ -12,3 +12,10 @@ local.properties
 roommics.json
 .settings.json
 people.json
+participants/
+models/
+.faces-venv/
+intro.mp4
+intro.mov
+intro.m4v
+consent.md

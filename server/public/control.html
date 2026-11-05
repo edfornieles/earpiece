@@ -112,7 +112,11 @@
   .res.in { opacity:.45; cursor:default; }
   .res.none { color:var(--dim); cursor:default; }
   .consentok { font-size:12px; color:var(--ok); margin-top:-2px; }
-  .person .top .pname { flex:1; min-width:0; } .consentok a { color:var(--ok); }
+  .consentok a { color:var(--ok); }
+  .pwho { display:flex; flex-direction:column; min-width:0; flex:1; justify-content:center; }
+  .pwho b { font-size:15px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pwho small { color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .notreg { font-size:12px; color:#e3a35a; }
   #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#222; border:1px solid var(--line); padding:8px 14px; border-radius:8px; display:none; }
 </style>
 </head>
@@ -393,7 +397,6 @@ function connect() {
     if (m.type === 'participants') { renderGrid(m.list); renderFolk(); renderArrivals(); }
     if (m.type === 'people') { folk = m.list; renderFolk(); for (const p of people.values()) paintNext(p); renderArrivals(); }
     if (m.type === 'session') renderSession(m);
-    if (m.type === 'personSaved' && m.ref === 'new') setTimeout(() => document.querySelector(`.person[data-pid="${m.pid}"] .pname`)?.focus(), 50);
     if (m.type === 'registry' || m.type === 'people') allRegs = null;   // search reloads the full list next time
     if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, voice: m.voice, style: m.style, st: m }); paintState(p); }
     if (m.type === 'transcript') appendLine(person(m.id), m);
@@ -470,17 +473,18 @@ function renderFolk() {
     if (!el) {
       el = document.createElement('div'); el.className = 'person drop'; el.dataset.pid = x.pid;
       el.innerHTML = `
-        <div class="top"><img class="ph" alt="" style="display:none"><input class="pname" placeholder="Name" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><label class="rel"><input type="checkbox" class="prel"> Release signed</label></div>
+        <div class="top"><img class="ph" alt="" style="display:none"><div class="pwho"><b class="pn"></b><small class="pc"></small></div></div>
         <div class="consentok" style="display:none"></div>
-        <input class="pcontact" placeholder="Email / phone" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
-        <div class="find linkreg" style="display:none"><input placeholder="Not registered — find their registration…" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><div class="results"></div></div>
+        <div class="notreg" style="display:none">Not registered — no signed consent on file. Find their registration:</div>
+        <div class="find linkreg" style="display:none"><input placeholder="Search name, email or number…" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><div class="results"></div></div>
         <textarea class="pnotes" placeholder="Notes (age group, access needs, how they found it…)"></textarea>
         <div class="docs pfiles"></div>
         <div class="row"><button class="pattach">Attach…</button><input type="file" class="pfile" multiple hidden>
           <select class="pphone" title="The phone they'll use"></select><button class="pstart grow">Start now</button><button class="quiet pdel" title="Remove (only before they've started)">✕</button></div>
         <div class="meta"></div>`;
-      const save = () => ws.send(JSON.stringify({ type: 'personSave', pid: x.pid, name: el.querySelector('.pname').value.trim(), contact: el.querySelector('.pcontact').value.trim(), notes: el.querySelector('.pnotes').value, release: el.querySelector('.prel').checked }));
-      for (const c of ['.pname', '.pcontact', '.pnotes', '.prel']) { el.querySelector(c).onchange = save; el.querySelector(c).onkeydown = (e) => { if (e.key === 'Enter' && c !== '.pnotes') e.target.blur(); e.stopPropagation(); }; }
+      const notes = el.querySelector('.pnotes');   // name, email and consent come from the registration; only notes are written here
+      notes.onchange = () => ws.send(JSON.stringify({ type: 'personSave', pid: x.pid, notes: notes.value }));
+      notes.onkeydown = (e) => e.stopPropagation();
       el.querySelector('.pattach').onclick = () => el.querySelector('.pfile').click();
       el.querySelector('.pfile').onchange = (e) => { upload([...e.target.files], x.pid); e.target.value = ''; };
       el.querySelector('.pphone').onchange = (e) => ws.send(JSON.stringify({ type: 'personSave', pid: x.pid, next: Number(e.target.value) || null }));
@@ -489,7 +493,7 @@ function renderFolk() {
         if (!ph) return toast('Choose a phone for them first');
         if (!people.get(ph)?.connected) return toast(`Phone ${ph} isn't connected`);
         const cur = people.get(ph);
-        if (cur && !cur.waiting && !confirm(`Phone ${ph} has ${cur.name || 'someone'} on it. End them and start ${el.querySelector('.pname').value || 'this person'}?`)) return;
+        if (cur && !cur.waiting && !confirm(`Phone ${ph} has ${cur.name || 'someone'} on it. End them and start ${x.name || 'this person'}?`)) return;
         ws.send(JSON.stringify({ type: 'personStart', pid: x.pid, phone: ph }));
       };
       el.querySelector('.pdel').onclick = () => { if (confirm('Remove this person?')) ws.send(JSON.stringify({ type: 'personDelete', pid: x.pid })); };
@@ -497,8 +501,10 @@ function renderFolk() {
       box.appendChild(el);
     }
     const set = (c, v, prop = 'value') => { const i = el.querySelector(c); if (i !== document.activeElement) i[prop] = v; };
-    set('.pname', x.name); set('.pcontact', x.contact); set('.pnotes', x.notes); set('.prel', !!x.release, 'checked');
-    el.querySelector('.rel').style.display = x.registered ? 'none' : '';
+    set('.pnotes', x.notes);
+    el.querySelector('.pn').textContent = x.name || 'Unnamed';
+    el.querySelector('.pc').textContent = x.registered ? (x.contact || '') : 'typed on the phone';
+    el.querySelector('.notreg').style.display = x.registered ? 'none' : '';
     const ok = el.querySelector('.consentok');
     ok.style.display = x.registered ? '' : 'none';
     if (x.registered) ok.innerHTML = `#${x.number || ''} · ${x.consent ? `<a href="${fileUrl(x.consent)}" target="_blank">consent signed ✓</a>` : 'consent signed ✓'}${x.face ? ' · face ✓' : ''}`;

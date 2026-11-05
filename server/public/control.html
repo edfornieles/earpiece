@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Control room — Mother</title>
+<title>Live desk — Mother</title>
 <style>
   :root { --bg:#0e0e0e; --card:#171717; --line:#2a2a2a; --fg:#e8e6e1; --dim:#8a8780; --hot:#d9482b; --ok:#5fa36a; --ai:#7a8fd6; }
   * { box-sizing:border-box; }
@@ -56,8 +56,6 @@
   .row select { width:auto; min-width:0; } .row select.voice { flex:1 1 55%; } .row select.emotion { flex:1 1 45%; }
   .tabs { display:flex; gap:6px; } .tabs button { padding:5px 9px; font-size:12px; } .tabs button.sel { background:var(--fg); color:#000; }
   kbd { background:#222; border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:11px; }
-  #gate { position:fixed; inset:0; background:rgba(0,0,0,.85); display:flex; align-items:center; justify-content:center; z-index:9; }
-  #gate button { font-size:17px; padding:16px 28px; background:var(--fg); color:#000; }
   .hint { color:var(--dim); font-size:12px; }
   header .titlebox { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
   #stitle { background:transparent; border:1px solid transparent; font-size:16px; padding:6px 8px; max-width:520px; }
@@ -119,9 +117,9 @@
   @media(max-width:900px) { main { grid-template-columns:1fr; padding:14px; } header { flex-wrap:wrap; padding:12px 14px; } header nav { flex-wrap:wrap; } #cams, #grid, #folk, #arrivals { grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr)); } }
 </style>
 </head>
-<body>
+<body class="live-desk">
 <header>
-  <div class="titlebox"><h1>Control room <span id="mock" class="hint"></span></h1>
+  <div class="titlebox"><h1>Live desk <span id="mock" class="hint"></span></h1>
     <input id="stitle" placeholder="Name this session…" title="Session name — saved with the recordings"></div>
   <nav>
     <button id="mark" title="Drop a marker on the timeline (M)">Mark <kbd>M</kbd></button>
@@ -133,9 +131,11 @@
 <main>
   <section>
     <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
-    <div id="cams"></div>
-    <div id="room"></div>
-    <div id="grid"></div>
+    <div id="audio-status" role="status"><span id="audio-label">Desk sound is off. Enable it to listen to participants.</span><button id="enable-sound">Enable sound</button><button id="enable-mic">Enable microphone</button></div>
+    <div class="desk-heading"><h2>Participants</h2><span class="hint">Select a phone to direct</span></div>
+    <div class="desk-workspace"><div id="roster" aria-label="Phones"></div><div id="grid"></div></div>
+    <div class="desk-heading"><h2>Gallery</h2><span class="hint">Live camera feeds &amp; room microphones</span></div>
+    <div id="cams"></div><div id="room"></div>
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="earpiece_pages" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
       <div id="arrivals"></div>
@@ -178,13 +178,30 @@
 </main>
 <div id="zoom"><img></div>
 <div id="toast"></div>
-<div id="gate"><button id="go">Start control room</button></div>
+
 
 <script src="audio.js"></script>
 <script>
 const KEY = new URLSearchParams(location.search).get('k');
 const $ = (id) => document.getElementById(id);
-let MAX = 0;
+let MAX = 0, selectedPhone = 1, audioReady = false;
+function attachPlayer(p) {
+  if (p.player) return;
+  p.gain = ctx.createGain(); p.gain.gain.value = p.listening ? 1 : 0; p.gain.connect(ctx.destination);
+  p.player = makePlayer(ctx, p.gain);
+}
+function selectPhone(id) {
+  selectedPhone = id;
+  for (const card of $('grid').children) card.hidden = Number(card.dataset.phone) !== id;
+  for (const row of $('roster').children) row.setAttribute('aria-pressed', String(Number(row.dataset.phone) === id));
+}
+function paintRoster(p) {
+  const row = $('roster').querySelector(`[data-phone="${p.id}"]`);
+  if (!row) return;
+  row.querySelector('strong').textContent = p.waiting ? 'Waiting for participant' : (p.name || 'Participant');
+  row.querySelector('small').textContent = p.status?.textContent || 'Connected';
+  row.classList.toggle('warning', !!p.status?.classList.contains('hot'));
+}
 let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [], micAs = 'own';
 const people = new Map();
 $('peoplelink').href = '/people?k=' + KEY;
@@ -194,9 +211,9 @@ function toast(t) { $('toast').textContent = t; $('toast').style.display = 'bloc
 function person(id) {
   let p = people.get(id);
   if (!p) {
-    const gain = ctx.createGain(); gain.connect(ctx.destination);
-    p = { id, gain, player: makePlayer(ctx, gain), listening: true, lines: [], mode: 'auto', st: {}, waiting: true };
+    p = { id, gain: null, player: null, listening: true, lines: [], mode: 'auto', st: {}, waiting: true };
     people.set(id, p);
+    if (audioReady) attachPlayer(p);
   }
   return p;
 }
@@ -242,10 +259,15 @@ function renderGrid(list) {
   lastList = list;
   for (const p of people.values()) p.connected = false;
   for (const { id, name, pid, mode, waiting } of list) { const p = person(id); Object.assign(p, { name, pid, mode, waiting, connected: true }); }
-  const grid = $('grid'); grid.innerHTML = '';
+  const grid = $('grid'); grid.innerHTML = ''; $('roster').innerHTML = '';
+  selectedPhone = Math.min(selectedPhone, MAX) || 1;
   for (let id = 1; id <= MAX; id++) {
     const p = people.get(id);
-    const el = document.createElement('div');
+    const el = document.createElement('div'); el.dataset.phone = id; el.hidden = id !== selectedPhone;
+    const row = document.createElement('button'); row.className = 'phone-row'; row.dataset.phone = id;
+    row.setAttribute('aria-pressed', String(id === selectedPhone));
+    row.innerHTML = `<span class="phone-index">${String(id).padStart(2, '0')}</span><span><strong>Phone ${id}</strong><small>Not connected</small></span><span class="connection-dot"></span>`;
+    row.classList.toggle('connected', !!p?.connected); row.onclick = () => selectPhone(id); $('roster').appendChild(row);
     if (!p || !p.connected) { el.className = 'card empty'; el.textContent = `Phone ${id} — not connected`; grid.appendChild(el); p && (p.el = null); continue; }
     el.className = 'card';
     el.innerHTML = `
@@ -272,7 +294,7 @@ function renderGrid(list) {
       <button class="quiet endp">End participant → ready for next</button>`;
     p.el = el; p.meter = el.querySelector('.meter i'); p.log = el.querySelector('.log'); p.status = el.querySelector('.status');
     bindHold(el.querySelector('.talk'), id);
-    el.querySelector('.listen').onclick = (e) => { p.listening = !p.listening; p.gain.gain.value = p.listening ? 1 : 0; e.target.classList.toggle('muted', !p.listening); };
+    el.querySelector('.listen').onclick = (e) => { p.listening = !p.listening; if (p.gain) p.gain.gain.value = p.listening ? 1 : 0; e.target.classList.toggle('muted', !p.listening); };
     el.querySelector('.aimode').onclick = () => ws.send(JSON.stringify({ type: 'mode', id, mode: p.mode === 'auto' ? 'off' : 'auto' }));
     el.querySelector('.nudge').onclick = () => ws.send(JSON.stringify({ type: 'nudge', id }));
     el.querySelector('.endp').onclick = () => { if (confirm(`End ${p.name || 'this participant'} on Phone ${id}? Its microphone feed is muted until the desk starts the next visit.`)) ws.send(JSON.stringify({ type: 'end', id })); };
@@ -313,7 +335,7 @@ function paintState(p) {
   else if (s.thinking) { txt = 'AI thinking…'; cls += ' ai'; }
   else if (s.listening) { txt = 'participant speaking…'; cls += ' ok'; }
   else txt = p.mode === 'auto' ? 'AI listening' : 'AI off — you are directing';
-  p.status.textContent = txt; p.status.className = cls;
+  p.status.textContent = txt; p.status.className = cls; paintRoster(p);
 }
 
 function appendLine(p, l, replay) {
@@ -330,6 +352,7 @@ function appendLine(p, l, replay) {
 
 function setTalk(target) {
   if (target !== null && (!ws || ws.readyState !== 1)) return;
+  if (target !== null && (!mic || ctx?.state !== 'running')) { latched = false; toast('Enable the desk microphone first'); return; }
   if (talkTarget === target) return;
   if (talkTarget !== null && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'talk', target: talkTarget, on: false, as: micAs }));
   talkTarget = target;
@@ -344,7 +367,7 @@ window.addEventListener('blur', releaseTalk);
 window.addEventListener('pagehide', releaseTalk);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') releaseTalk(); });
 function bindHold(btn, target) {
-  const down = (e) => { e.preventDefault(); setTalk(target); btn.classList.add('on'); };
+  const down = (e) => { e.preventDefault(); setTalk(target); btn.classList.toggle('on', talkTarget === target); };
   const up = () => { if (!latched || target !== 0) setTalk(null); btn.classList.remove('on'); };
   btn.addEventListener('pointerdown', down); btn.addEventListener('pointerup', up); btn.addEventListener('pointerleave', up); btn.addEventListener('pointercancel', up);
 }
@@ -376,7 +399,7 @@ function connect() {
   ws.onmessage = (e) => {
     if (typeof e.data !== 'string') {
       const id = new Uint16Array(e.data, 0, 1)[0];
-      const p = people.get(id); if (p) p.player.push(new Int16Array(e.data.slice(2)));
+      const p = people.get(id); if (p?.player && ctx.state === 'running') p.player.push(new Int16Array(e.data.slice(2)));
       return;
     }
     const m = JSON.parse(e.data);
@@ -413,7 +436,7 @@ async function loadInfo() {
 const fileUrl = (f) => `/files/${encodeURIComponent(info?.name || '')}/${f.split('/').map(encodeURIComponent).join('/')}?k=${KEY}`;
 function renderSession(m) {
   if (document.activeElement !== $('stitle')) $('stitle').value = m.title || '';
-  document.title = (m.title ? m.title + ' — ' : '') + 'Control room — Mother';
+  document.title = (m.title ? m.title + ' — ' : '') + 'Live desk — Mother';
 }
 const saveMeta = () => ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'sessionMeta', title: $('stitle').value.trim() }));
 $('stitle').onkeydown = (e) => { if (e.key === 'Enter') { e.target.blur(); } e.stopPropagation(); };
@@ -632,31 +655,59 @@ $('preview').onclick = () => {
 $('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim() })); e.target.value = ''; } e.stopPropagation(); };
 $('speakall').onkeyup = (e) => e.stopPropagation();
 
-$('go').onclick = async () => {
-  ctx = new AudioContext();
-  await ctx.audioWorklet.addModule('worklets.js');
-  mic = await openMic(ctx);
-  mic.onChunk((f) => {
-    myLevel = Math.max(myLevel * 0.8, rms(f));
-    if (talkTarget === null || !ws || ws.readyState !== 1) return;
-    const i16 = floatToInt16(f);
-    const buf = new ArrayBuffer(2 + i16.byteLength);
-    new Uint16Array(buf, 0, 1)[0] = talkTarget;
-    new Int16Array(buf, 2).set(i16);
-    ws.send(buf);
-  });
-  await ctx.resume();
-  $('gate').remove();
-  bindHold($('all'), 0);
-  connect(); loadInfo();
-  (function draw() {
-    myLevel *= 0.92;
-    $('mymeter').style.width = Math.min(100, myLevel * 600) + '%';
-    $('mymeter').style.background = talkTarget !== null ? 'var(--hot)' : 'var(--ok)';
-    for (const p of people.values()) if (p.meter) p.meter.style.width = Math.min(100, p.player.level() * 600) + '%';
-    requestAnimationFrame(draw);
+let soundSetup, micSetup;
+function audioStatus(message) {
+  $('audio-label').textContent = message || (ctx?.state === 'running' ? (mic ? 'Desk sound and microphone ready.' : 'Desk sound on. Microphone is off.') : 'Desk sound is off. Enable it to listen to participants.');
+  $('enable-sound').hidden = ctx?.state === 'running';
+  $('enable-mic').hidden = !!mic;
+}
+async function enableSound() {
+  ctx ||= new AudioContext();
+  // Resume directly in the click gesture, before awaiting worklet loading.
+  const resumed = ctx.resume();
+  soundSetup ||= ctx.audioWorklet.addModule('worklets.js').then(() => {
+    audioReady = true;
+    for (const p of people.values()) attachPlayer(p);
+    ctx.onstatechange = () => {
+      if (ctx.state !== 'running') {
+        releaseTalk();
+        for (const p of people.values()) p.player?.flush();
+      }
+      audioStatus();
+    };
+  }).catch(error => { soundSetup = null; throw error; });
+  await Promise.all([soundSetup, resumed]); audioStatus();
+}
+async function enableMicrophone() {
+  if (micSetup) return micSetup;
+  micSetup = (async () => {
+    await enableSound();
+    mic = await openMic(ctx);
+    mic.onChunk(f => {
+      myLevel = Math.max(myLevel * 0.8, rms(f));
+      if (talkTarget === null || !ws || ws.readyState !== 1) return;
+      const i16 = floatToInt16(f), buf = new ArrayBuffer(2 + i16.byteLength);
+      new Uint16Array(buf, 0, 1)[0] = talkTarget;
+      new Int16Array(buf, 2).set(i16); ws.send(buf);
+    });
+    for (const track of mic.stream.getAudioTracks()) track.addEventListener('ended', () => {
+      releaseTalk(); mic = null; micSetup = null; audioStatus('Microphone disconnected. Enable it again to talk.');
+    });
+    audioStatus();
   })();
-};
+  try { await micSetup; } catch (error) { micSetup = null; throw error; }
+}
+$('enable-sound').onclick = () => enableSound().catch(() => audioStatus('Sound could not start. Try enabling sound again.'));
+$('enable-mic').onclick = () => enableMicrophone().catch(() => audioStatus('Microphone unavailable. Allow microphone access in your browser, then try again.'));
+bindHold($('all'), 0);
+connect(); loadInfo().catch(() => toast('Could not load desk settings. Reconnecting…'));
+(function draw() {
+  myLevel *= 0.92;
+  $('mymeter').style.width = Math.min(100, myLevel * 600) + '%';
+  $('mymeter').style.background = talkTarget !== null ? 'var(--hot)' : 'var(--ok)';
+  for (const p of people.values()) if (p.meter) p.meter.style.width = Math.min(100, (p.player?.level() || 0) * 600) + '%';
+  requestAnimationFrame(draw);
+})();
 
 const typing = () => ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
 document.addEventListener('keydown', (e) => {

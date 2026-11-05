@@ -93,7 +93,11 @@
   #standbybar { display:none; background:#1b1a14; border:1px solid #4a4220; border-radius:12px; padding:12px 16px; margin-bottom:16px; color:#e8dcb0; font-size:13px; }
   #standbybar b { color:#fff; font-weight:600; }
   body.standby #standbybar { display:block; }
-  body.standby #mark, body.standby #endsession, body.standby .pstart, body.standby .pphone, body.standby .arr select, body.standby .arr .go { display:none !important; }
+  body.standby #mark, body.standby #endsession, body.standby .pstart, body.standby .arr .go, body.standby .nextup button { display:none !important; }
+  .nextup { display:none; align-items:center; gap:8px; background:#1b1a14; border:1px solid #4a4220; border-radius:8px; padding:6px 8px; font-size:13px; }
+  .nextup span { flex:1; } .nextup b { font-weight:500; } .nextup img { width:28px; height:28px; border-radius:6px; object-fit:cover; }
+  .nextup button { padding:5px 10px; font-size:12px; background:var(--ok); border-color:var(--ok); color:#000; }
+  .pphone { width:auto; }
   body:not(.standby) #startsession { display:none; }
   .find { position:relative; }
   .find input { width:280px; padding:7px 10px; font-size:13px; text-transform:none; letter-spacing:0; }
@@ -267,6 +271,7 @@ function renderGrid(list) {
     el.innerHTML = `
       <h2><span><span class="who"></span><span class="badge relb"></span></span> <small>Phone ${id}</small></h2>
       <div class="status"></div>
+      <div class="nextup"></div>
       <div class="meter"><i></i></div>
       <div class="row">
         <button class="grow talk">Hold to talk</button>
@@ -312,6 +317,7 @@ function paintState(p) {
   rb.style.display = f ? '' : 'none';
   if (f) { rb.textContent = f.release ? 'release ✓' : 'no release yet'; rb.className = 'badge relb ' + (f.release ? 'yes' : 'no'); }
   p.el.querySelector('.endp').style.display = p.waiting ? 'none' : '';
+  paintNext(p);
   const b = p.el.querySelector('.aimode');
   b.textContent = p.mode === 'auto' ? 'AI directing — on' : 'AI off';
   b.classList.toggle('aion', p.mode === 'auto');
@@ -363,6 +369,7 @@ function applyMode() {
   $('peoplehead').textContent = sb ? 'People for the next session' : 'People this session';
   $('stitle').placeholder = sb ? 'Name the next session…' : 'Name this session…';
   for (const b of document.querySelectorAll('.arr .add')) b.textContent = sb ? 'Add to next session' : 'Add';
+  for (const p of people.values()) paintNext(p);
 }
 for (const b of document.querySelectorAll('#micmode button')) b.onclick = () => {
   micAs = b.dataset.as;
@@ -384,7 +391,7 @@ function connect() {
     }
     const m = JSON.parse(e.data);
     if (m.type === 'participants') { renderGrid(m.list); renderFolk(); renderArrivals(); }
-    if (m.type === 'people') { folk = m.list; renderFolk(); renderGrid(lastList); }
+    if (m.type === 'people') { folk = m.list; renderFolk(); for (const p of people.values()) paintNext(p); renderArrivals(); }
     if (m.type === 'session') renderSession(m);
     if (m.type === 'personSaved' && m.ref === 'new') setTimeout(() => document.querySelector(`.person[data-pid="${m.pid}"] .pname`)?.focus(), 50);
     if (m.type === 'registry' || m.type === 'people') allRegs = null;   // search reloads the full list next time
@@ -470,15 +477,17 @@ function renderFolk() {
         <textarea class="pnotes" placeholder="Notes (age group, access needs, how they found it…)"></textarea>
         <div class="docs pfiles"></div>
         <div class="row"><button class="pattach">Attach…</button><input type="file" class="pfile" multiple hidden>
-          <select class="pphone" style="width:auto"></select><button class="pstart grow">Start on phone</button><button class="quiet pdel" title="Remove (only before they've started)">✕</button></div>
+          <select class="pphone" title="The phone they'll use"></select><button class="pstart grow">Start now</button><button class="quiet pdel" title="Remove (only before they've started)">✕</button></div>
         <div class="meta"></div>`;
       const save = () => ws.send(JSON.stringify({ type: 'personSave', pid: x.pid, name: el.querySelector('.pname').value.trim(), contact: el.querySelector('.pcontact').value.trim(), notes: el.querySelector('.pnotes').value, release: el.querySelector('.prel').checked }));
       for (const c of ['.pname', '.pcontact', '.pnotes', '.prel']) { el.querySelector(c).onchange = save; el.querySelector(c).onkeydown = (e) => { if (e.key === 'Enter' && c !== '.pnotes') e.target.blur(); e.stopPropagation(); }; }
       el.querySelector('.pattach').onclick = () => el.querySelector('.pfile').click();
       el.querySelector('.pfile').onchange = (e) => { upload([...e.target.files], x.pid); e.target.value = ''; };
+      el.querySelector('.pphone').onchange = (e) => ws.send(JSON.stringify({ type: 'personSave', pid: x.pid, next: Number(e.target.value) || null }));
       el.querySelector('.pstart').onclick = () => {
         const ph = Number(el.querySelector('.pphone').value);
-        if (!ph) return toast('No phone is connected and free');
+        if (!ph) return toast('Choose a phone for them first');
+        if (!people.get(ph)?.connected) return toast(`Phone ${ph} isn't connected`);
         const cur = people.get(ph);
         if (cur && !cur.waiting && !confirm(`Phone ${ph} has ${cur.name || 'someone'} on it. End them and start ${el.querySelector('.pname').value || 'this person'}?`)) return;
         ws.send(JSON.stringify({ type: 'personStart', pid: x.pid, phone: ph }));
@@ -501,10 +510,12 @@ function renderFolk() {
     el.querySelector('.pfiles').innerHTML = x.files.map((d) => `<a href="${fileUrl(d.file)}" target="_blank">📄 ${esc(d.name)}</a>`).join('');
     const onPhone = [...people.values()].find((p) => p.connected && !p.waiting && p.pid === x.pid);
     el.querySelector('.meta').innerHTML = onPhone ? `<span style="color:var(--ok)">● on phone ${onPhone.id} now</span>` : x.visits.length ? x.visits.map((v) => `phone ${v.phone}, ${fmtT(v.start)}–${fmtT(v.end)}`).join(' · ') : 'not started yet';
-    const sel = el.querySelector('.pphone'), free = [...people.values()].filter((p) => p.connected).sort((a, b) => a.id - b.id);
-    const want = free.map((p) => `<option value="${p.id}">Phone ${p.id}${p.waiting ? '' : ' (busy)'}</option>`).join('') || '<option value="">no phone</option>';
-    if (sel.innerHTML !== want) { const v = sel.value; sel.innerHTML = want; const firstFree = free.find((p) => p.waiting); sel.value = free.some((p) => String(p.id) === v) ? v : (firstFree ? firstFree.id : (free[0]?.id || '')); }
-    el.querySelector('.pstart').style.display = onPhone ? 'none' : '';
+    const sel = el.querySelector('.pphone');
+    const want = phoneOptions();
+    if (sel.innerHTML !== want) sel.innerHTML = want;
+    if (sel !== document.activeElement) sel.value = x.next ? String(x.next) : '';
+    sel.style.display = onPhone ? 'none' : '';
+    el.querySelector('.pstart').style.display = onPhone || !x.next ? 'none' : '';
     el.querySelector('.pdel').style.display = x.visits.length || (!x.registered && x.files.length) ? 'none' : '';
     el.querySelector('.pdel').title = x.registered ? 'Take them off this session (their registration stays)' : 'Remove';
   }
@@ -516,25 +527,50 @@ function ping() { try { const o = ctx.createOscillator(), g = ctx.createGain(); 
 function bigPhoto(src) { $('zoom').querySelector('img').src = src; $('zoom').style.display = 'flex'; }
 function renderArrivals() {
   const box = $('arrivals'), waiting = regs.filter((r) => !r.sessions.length);
-  const phones = [...people.values()].filter((p) => p.connected).sort((a, b) => a.id - b.id);
-  const opts = phones.map((p) => `<option value="${p.id}">Phone ${p.id}${p.waiting ? '' : ' (busy)'}</option>`).join('') || '<option value="">no phone</option>';
-  const firstFree = phones.find((p) => p.waiting)?.id;
+  const opts = phoneOptions();
+  let firstFree = null;   // first phone with nobody on it and nobody assigned
+  for (let id = 1; id <= MAX && !firstFree; id++) { const p = people.get(id); if (p && p.connected && p.waiting && !nextFor(id)) firstFree = id; }
   box.innerHTML = waiting.map((r) => `<div class="arr" data-pid="${r.pid}"><img src="${r.photo}?k=${KEY}" alt="">
     <div class="t"><b><span>#${r.number}</span>${esc(r.name)}</b><span class="hint">registered ${new Date(r.registered).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${r.face ? 'face matching ✓' : 'no face matching — link by hand'}</span>
-    <div class="row"><select>${opts}</select><button class="go">Start on phone</button><button class="quiet add" title="Add to this session without a phone">Add</button></div></div></div>`).join('');
+    <div class="row"><select title="The phone they'll use">${opts}</select><button class="add" title="Add them to the session on this phone">Add</button><button class="go" title="Add them and start them on this phone now">Start now</button></div></div></div>`).join('');
   box.querySelectorAll('.arr').forEach((el) => {
     const pid = el.dataset.pid, sel = el.querySelector('select');
-    if (firstFree) sel.value = firstFree;
+    sel.value = firstFree ? String(firstFree) : '';
     el.querySelector('img').onclick = () => bigPhoto(el.querySelector('img').src);
     el.querySelector('.go').onclick = () => {
-      const ph = Number(sel.value); if (!ph) return toast('No phone is connected');
+      const ph = Number(sel.value); if (!ph) return toast('Choose a phone first');
+      if (!people.get(ph)?.connected) return toast(`Phone ${ph} isn't connected`);
       const cur = people.get(ph); if (cur && !cur.waiting && !confirm(`Phone ${ph} has ${cur.name || 'someone'} on it. End them and start this person?`)) return;
       ws.send(JSON.stringify({ type: 'arrivalStart', pid, phone: ph }));
     };
-    el.querySelector('.add').onclick = () => ws.send(JSON.stringify({ type: 'arrivalAdd', pid }));
+    el.querySelector('.add').onclick = () => ws.send(JSON.stringify({ type: 'arrivalAdd', pid, phone: Number(sel.value) || null }));
   });
   applyMode();
 }
+// ---- phones: who is assigned to which ----
+function phoneOptions() {
+  let o = '<option value="">No phone yet</option>';
+  for (let id = 1; id <= MAX; id++) {
+    const p = people.get(id), busy = p && p.connected && !p.waiting;
+    o += `<option value="${id}">Phone ${id}${!p || !p.connected ? ' (not connected)' : busy ? ` (${esc(p.name || 'busy')} on it)` : ''}</option>`;
+  }
+  return o;
+}
+function nextFor(id) { return folk.find((x) => x.next === id && !x.visits.some((v) => v.end == null)); }
+function paintNext(p) {
+  const box = p.el?.querySelector('.nextup'); if (!box) return;
+  const x = nextFor(p.id);
+  if (!x) { box.style.display = 'none'; return; }
+  box.style.display = 'flex';
+  const img = x.photo ? `<img src="${fileUrl(x.photo)}" alt="">` : '';
+  const label = `${img}<span>Next: <b>${x.number ? '#' + x.number + ' ' : ''}${esc(x.name || 'unnamed')}</b>${info?.standby ? ' · starts after Start session' : p.waiting ? '' : ' · after ' + esc(p.name || 'the current person')}</span>`;
+  if (box.dataset.k !== label + p.waiting) {
+    box.dataset.k = label + p.waiting;
+    box.innerHTML = label + (p.waiting ? '<button>Start</button>' : '');
+    const b = box.querySelector('button'); if (b) b.onclick = () => ws.send(JSON.stringify({ type: 'personStart', pid: x.pid, phone: p.id }));
+  }
+}
+
 // ---- search everyone who has registered ----
 let allRegs = null;
 async function registrations() {

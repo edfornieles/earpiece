@@ -94,6 +94,7 @@ function upsertPerson(d) {
   if (!x) { x = { pid: d.pid || newPid(), name: '', contact: '', notes: '', release: false, files: [], visits: [], added: new Date().toISOString() }; people.push(x); }
   for (const k of ['name', 'contact', 'notes']) if (typeof d[k] === 'string') x[k] = d[k].slice(0, k === 'notes' ? 4000 : 200);
   if (typeof d.release === 'boolean') x.release = d.release;
+  if ('next' in d) x.next = Number(d.next) >= 1 && Number(d.next) <= MAX_PHONES ? Number(d.next) : null;   // the phone they're assigned to
   if (typeof d.name === 'string') {   // keep names in the session record in step
     for (const v of session.participants) if (v.pid === x.pid) v.name = x.name;
     saveSession();
@@ -589,10 +590,11 @@ function beginParticipant(s, name, pid) {
   if (!s.waiting) endParticipant(s, 'new participant');
   // the person record: given by the control room, or matched by name to someone added but not started yet
   let who = pid && personBy(pid);
+  if (!who) who = people.find((x) => x.next === s.id && !x.visits.some((v) => v.end == null));   // assigned to this phone
   if (!who && name) who = people.find((x) => x.name.toLowerCase() === name.toLowerCase() && !x.visits.length);
   if (!who) who = upsertPerson({ name: name || '' });
   if (!who.name && name) who.name = name;
-  who.visits.push({ phone: s.id, start: Number(clock()) }); savePeople();
+  who.visits.push({ phone: s.id, start: Number(clock()) }); who.next = null; savePeople();
   s.pid = who.pid;
   s.waiting = false; s.name = who.name || name || ''; s.history = []; s.startedAt = Date.now(); s.lastActivity = Date.now();
   logEvent('participant_start', { id: s.id, name: s.name, pid: who.pid });
@@ -793,6 +795,7 @@ wss.on('connection', (ws, req) => {
           const t = m.type === 'arrivalStart' && sessions.get(Number(m.phone));
           if (m.type === 'arrivalStart' && !(t && t.ws)) throw new Error('That phone isn\'t connected.');
           const x = linkPerson(SESSION_DIR, m.pid, -1, STANDBY ? 'added to the next session' : t ? 'on phone ' + t.id : 'added in the control room');
+          if (m.type === 'arrivalAdd' && m.phone) upsertPerson({ pid: x.pid, next: m.phone });
           if (t && beginParticipant(t, x.name, x.pid) !== false) send(t.ws, { type: 'welcome', id: t.id, waiting: false, name: t.name });
         } catch (e) { send(ws, { type: 'error', id: Number(m.phone) || 0, text: e.message }); }
       }

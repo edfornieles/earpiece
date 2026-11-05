@@ -9,6 +9,7 @@
     ['/control', 'Live desk'],
     ['/session', 'Session'],
     ['/programs', 'Programs'],
+    ['/room', 'Room'],
     ['/people', 'Registrations'],
     ['/phones', 'Phones'],
     ['/screens', 'Screens'],
@@ -44,6 +45,7 @@
       const st = document.getElementById('navstate');
       st.className = 'st' + (s.standby ? '' : ' rec');
       st.textContent = s.standby ? `○ Standby${s.title ? ' — next: ' + s.title : ''}` : `● Recording${s.title ? ' — ' + s.title : ''}`;
+      if(s.observer?.enabled)st.textContent+=' · Vision on';
       st.title = s.standby ? 'Nothing is being recorded' : 'Recording since ' + new Date(s.since).toLocaleTimeString();
     } catch { document.getElementById('navstate').textContent = 'server not reachable'; }
   }

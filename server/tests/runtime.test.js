@@ -85,7 +85,7 @@ test('recording server connection, visit and audio isolation regressions', { tim
   const request = (route, body, key = 'control') => fetch(`http://127.0.0.1:${port}/api/${route}${route.includes('?') ? '&' : '?'}k=${key}`, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
   await t.test('operator pages load and phones cannot start their own participant visit', async () => {
-    for (const page of ['phones', 'session', 'screens', 'programs']) {
+    for (const page of ['phones', 'session', 'screens', 'programs', 'room']) {
       const response = await fetch(`http://127.0.0.1:${port}/${page}?k=control`);
       assert.equal(response.status, 200); assert.match(await response.text(), /setup\.js/);
     }
@@ -95,6 +95,16 @@ test('recording server connection, visit and audio isolation regressions', { tim
     await until(() => control.messages.some(m => m.type === 'state' && m.id === 1 && m.audioReady), 'audio readiness reported');
     const phones = await (await request('phones')).json();
     assert.equal(phones.devices[0].audioReady, true); assert.equal(phones.devices[0].waiting, true);
+  });
+
+  await t.test('room metadata requires desk access and vision starts disabled without fresh frames', async () => {
+    assert.equal((await request('room',undefined,'monitor')).status,403);
+    const room=await(await request('room')).json();assert.equal(room.enabled,false);assert.equal(room.shareWithAgents,false);
+    assert.equal((await request('room',{action:'observe',cameraId:'missing'})).status,400);
+    const saved=await request('room',{action:'save',revision:room.revision,name:'Test studio',notes:'A private room'});assert.equal(saved.status,200);
+    assert.equal((await request('room',{action:'save',revision:room.revision,name:'Stale'})).status,400);
+    assert.equal((await request('room-frame?observation=missing',undefined,'phone')).status,403);
+    assert.equal((await request('room-frame?observation=missing')).status,404);
   });
 
   await t.test('draft generation requires the desk key and rejects invalid briefs without changing preparation', async () => {

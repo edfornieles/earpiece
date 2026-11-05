@@ -25,3 +25,7 @@ consent.md
 
 # Local performance scores (may contain private scripts).
 server/programs/
+
+# Private studio/gallery inventory
+.room.json
+.room.json.tmp

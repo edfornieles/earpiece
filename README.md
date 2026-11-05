@@ -8,6 +8,7 @@ Participant microphone audio returns to the desk, recording and that participant
 
 - [Server and operator guide](server/README.md): installation, phones, the Studio desk, recording, cameras and exports.
 - [Programs guide](server/docs/programs.md): AI script drafting, role tracks, scene coordination and running a score.
+- [Room vision trial](server/docs/room.md): practise observing your studio, label objects and review live observations.
 - [Android guide](android/README.md): installing, configuring and updating the dedicated phone app.
 
 From a fresh checkout, use Node.js 22 or newer:
@@ -28,7 +29,7 @@ Configure the server's OpenAI key and local Pocket-TTS service as described in t
 4. At **Live desk**, assign participants, **Start session** to record, start their visits, and **Start program** when everyone is ready. Recording and score playback are separate actions.
 5. Use live talk, global pause/resume/stop, and individual repeat/continue controls during the performance. **End session** saves the recording and returns to standby.
 
-You can also select **No program — free direction** and work from the AI brief and live controls. Phones are added on **Phones**, camera displays on **Screens**, and completed recordings appear in **Library** and **Files**.
+You can also select **No program — free direction** and work from the AI brief and live controls. **Room** provides opt-in camera observation and a reviewed object inventory for studio trials. Phones are added on **Phones**, camera displays on **Screens**, and completed recordings appear in **Library** and **Files**.
 
 ## Development
 

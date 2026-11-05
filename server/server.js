@@ -27,6 +27,7 @@ const { loadRoomMics, RoomMics } = require('./roommics');
 const { Registry } = require('./registry');
 const { ProgramStore, ProgramRunner } = require('./programs');
 const { generateProgram } = require('./program-drafts');
+const { RoomObserver } = require('./room');
 let generatingProgram=false;
 const programStore = new ProgramStore(path.join(__dirname, 'programs'));
 let programRunner;
@@ -335,6 +336,11 @@ const roomMics = roomCfg ? new RoomMics(roomCfg, SESSION_DIR, T0, (type, data, l
 session.room_mics = roomCfg ? roomCfg.names : [];
 saveSession();
 
+const roomObserver=new RoomObserver(path.join(__dirname,'.room.json'),{
+  cameras:()=>cameras,maxPhones:()=>MAX_PHONES,event:(type,data)=>logEvent(type,data)
+});
+setInterval(()=>roomObserver.tick(),1000);
+
 // ---------- http ----------
 const PUB = path.join(__dirname, 'public');
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.mp4': 'video/mp4', '.png': 'image/png', '.wav': 'audio/wav', '.srt': 'text/plain', '.csv': 'text/csv', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.fcpxml': 'application/xml', '.webmanifest': 'application/manifest+json', '.md': 'text/plain; charset=utf-8', '.jsonl': 'text/plain; charset=utf-8', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.pdf': 'application/pdf', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.webm': 'video/webm', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg', '.gif': 'image/gif', '.heic': 'image/heic' };
@@ -447,6 +453,25 @@ const server = http.createServer(async (req, res) => {
   }
   if (p.startsWith('/api/')) {
     if (!ctl) { res.writeHead(403); return res.end(); }
+    if(p==='/api/room-frame') {
+      const frame=roomObserver.frames.get(u.searchParams.get('observation'));
+      if(!frame){res.writeHead(404);return res.end('Analysed frame expired. Analyse again.');}
+      res.writeHead(200,{'content-type':'image/jpeg','cache-control':'no-store'});return res.end(frame);
+    }
+    if(p==='/api/room') {
+      try {
+        if(req.method==='POST'){
+          const d=await readSetupBody(req);
+          if(d.action==='observe')await roomObserver.observe(d.cameraId,d.question);
+          else if(d.action==='start')roomObserver.start(d.cameraId,d.interval);
+          else if(d.action==='stop')roomObserver.stop();
+          else if(d.action==='save')roomObserver.save(d);
+          else if(d.action==='bind')roomObserver.bind(d);
+          else throw Error('Choose a Room action.');
+        }
+        return json(res,roomObserver.view());
+      }catch(e){return json(res,{error:e.message},400);}
+    }
     if(p==='/api/program-draft' && req.method==='POST') {
       if(generatingProgram)return json(res,{error:'Mother is already writing a draft. Wait for it to finish or cancel it first.'},409);
       generatingProgram=true;const controller=new AbortController();
@@ -567,7 +592,7 @@ const server = http.createServer(async (req, res) => {
         return { name: d, title: s.title || '', start: s.start_iso, participants: (s.participants || []).map((x) => x.name || `Phone ${x.phone}`), duration: s.exports?.duration || null, cameras: (s.cameras || []).length, live: d === stamp };
       }));
     }
-    if (p === '/api/status') return json(res, { standby: STANDBY, name: stamp, title: session.title || '', since: session.start_iso, monitorKey: MONITOR_KEY });
+    if (p === '/api/status') return json(res, { standby: STANDBY, name: stamp, title: session.title || '', since: session.start_iso, monitorKey: MONITOR_KEY, observer:{enabled:roomObserver.enabled,busy:roomObserver.busy,cameraId:roomObserver.cameraId} });
     if (p === '/api/trash') return json(res, { items: readTrash().reverse().map((t) => ({ id: t.id, kind: t.kind, label: t.label, size: t.size, at: t.at, count: t.moves.length })) });
     if (req.method === 'POST' && ['/api/trash-restore', '/api/trash-purge', '/api/delete-session', '/api/delete-registration'].includes(p)) {
       let body = ''; for await (const c of req) body += c;
@@ -717,6 +742,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/phones') p = '/phones.html';
   if (p === '/session') p = '/session.html';
   if (p === '/programs') p = '/programs.html';
+  if (p === '/room') p = '/room.html';
   if (p === '/screens') p = '/screens.html';
   const file = path.join(PUB, path.normalize(p).replace(/^(\.\.[\/\\])+/, ''));
   if (!file.startsWith(PUB) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
@@ -795,7 +821,7 @@ function systemPrompt(s) {
   const el = Math.floor((Date.now() - (s.startedAt || Date.now())) / 1000);
   return `${brief}\n\n---\nParticipant's name: ${s.name || 'unknown'}. Time since they started: ${Math.floor(el / 60)}m ${el % 60}s.\n` +
     `Lines in square brackets are stage information from the system, not speech. ` +
-    `Lines marked as the human director are things a person in the control room said to the participant directly; stay consistent with them.`;
+    `Lines marked as the human director are things a person in the control room said to the participant directly; stay consistent with them.` + roomObserver.prompt();
 }
 
 async function aiTurn(s) {
@@ -1272,6 +1298,7 @@ function startCatalogue(dir) {
 
 // ---------- shutdown: close everything, convert video, write exports ----------
 async function shutdown(restart) {
+  roomObserver.stop();
   if (closing) return; closing = true;
   if (STANDBY) {   // nothing to save but the preparation; let the cameras go so the recording can open them
     for (const c of wss.clients) { try { c.close(1012, restart === 'record' ? 'session starting' : 'stopping'); } catch {} }

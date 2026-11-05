@@ -28,7 +28,7 @@ The server prints its operator and phone links. The live desk connects immediate
 - `Ctrl+C` stops the server; during recording it saves first. Wait for the saved message before closing the terminal.
 - `START_RECORDING=1 npm start` skips standby; ordinarily prepare the session before starting recording.
 
-The sidebar groups the operator pages: **Workspace** (Live desk, Session, Programs), **People** (Registrations), **Equipment** (Phones, Screens), and **Archive** (Library, Files, Trash). Group headings have distinct accents in both light and dark themes. On smaller screens navigation moves above the page.
+The sidebar groups the operator pages: **Workspace** (Live desk, Session, Programs, Room), **People** (Registrations), **Equipment** (Phones, Screens), and **Archive** (Library, Files, Trash). Group headings have distinct accents in both light and dark themes. On smaller screens navigation moves above the page.
 
 ## Let Mother write the first script
 
@@ -66,6 +66,14 @@ Keep the phones in the control centre; participants wear only their earpieces. E
 Participant microphone audio goes only to the control desk and that phone's recording, never to another participant. The director can talk to one selected phone, or explicitly to everyone; each AI voice goes only to its assigned phone. Losing the desk connection or moving away from its browser window releases push-to-talk.
 
 Pair the intended earpiece and verify that both playback and microphone use it, away from the phone. Test Bluetooth range and whether headsets reconnect or switch to another nearby device. A connected phone or an enabled audio service is not proof that its earpiece microphone is in use. The desk flags a reported missing earpiece; known native routing and Android-version limitations are recorded in the [Android review](docs/android-app-review.md).
+
+## Studio and gallery observation
+
+Open **Room** to practise with the Mac camera or a configured network camera. **Analyse once** asks Mother to describe a fresh frame, identify visible objects and people, and answer an optional question. Review the exact **Analysed frame** with its capture time and approximate image regions; live video and older analysis remain visually separate.
+
+Name and confirm proposed objects, or draw a region manually, to build a persistent inventory. **Start observing** repeats analyses at a controlled interval; use **Stop** when finished. Continuous observation sends selected frames to the configured OpenAI vision model, runs separately from recording, and stops on a server restart or metadata edit. It never advances program cues. Object recognition is approximate; person/phone matches label one frame only, with continuous tracking still to come.
+
+Sharing reviewed landmarks and fresh visual context with directors is an explicit opt-in. It is off by default, and observations older than 30 seconds are excluded. See the [Room trial guide](docs/room.md) for setup, privacy boundaries, limits and rehearsal.
 
 ## Cameras
 
@@ -132,6 +140,7 @@ One-time setup: `npm run setup-faces` (needs Python 3: `brew install python` if 
 ## Local data and updates
 
 - `.env`, `.keys.json`, `.settings.json`: service credentials, stable access links, voice choices and phone slot count.
+- `.room.json`: private room setup and reviewed object inventory; analysed frames stay in memory.
 - `programs/`: saved private scores and versions. These are separate from recordings and ignored by Git.
 - `recordings/_next/`: standby preparation, including the copied program and assignments.
 - `recordings/<timestamp>/`: completed or current recording, including its immutable score copy, transcripts and cue events.
@@ -185,6 +194,7 @@ Word timings use OpenAI transcription; API usage is charged to the configured ac
 OPENAI_API_KEY=...                         # required for AI features; keep private
 OPENAI_TEXT_MODEL=gpt-4o-mini              # existing live-direction default
 OPENAI_PROGRAM_MODEL=gpt-4o-mini           # optional writer override; defaults to text model
+OPENAI_VISION_MODEL=gpt-4o-mini            # optional Room observer override
 OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
 POCKET_TTS_URL=http://localhost:8123        # local speech service
 AI_IDLE_SECS=20                            # free direction only; programs own their pacing

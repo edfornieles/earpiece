@@ -2,7 +2,7 @@
 
 ## Prepare before recording
 
-1. Open **Programs**, create a program or use the four-role example, and save it.
+1. Open **Programs**. Describe the performance in “Let Mother write the first draft”, choose a role count and approximate duration, and press **Generate first draft**. Edit the generated scenes and role tracks, then save the program. A blank program and the four-role example are also available.
 2. Open **Session → Performance program**. Choose a saved program, shared or independent timing, and one distinct phone per role. Press **Save program choice**.
 3. Assign participants to the matching phones from the live desk. Add more permanent slots on Phones if required.
 4. Press **Start session** to begin recording. The chosen program version and role assignments carry into that recording. Start each assigned participant visit at the desk and check its earpiece and audio readiness.
@@ -40,3 +40,11 @@ A headset loss, phone disconnection, ended visit or new participant invalidates 
 The recording stores the full chosen program version and role assignments in session.json. Cue starts/ends, shared scene transitions, holds and completion are logged on the session timeline; delivered speech is included in the existing transcript and audio recordings. Edits and scripts are stored locally under server/programs, ignored by Git.
 
 Role coordination exchanges cue state only. Participant microphones remain private to their own agent, desk monitoring and recording; they are never forwarded to another participant.
+
+## Generating a first draft
+
+Give Mother a broad description of the desired effect, how people should move or interact, tone, pace, hesitations, and any constraints. The writer uses the existing server OpenAI key and `OPENAI_PROGRAM_MODEL` (falling back to `OPENAI_TEXT_MODEL`, then the existing gpt-4o-mini default). Its structured-output request has a separate 14,000-token writing budget; the live director retains its short-response configuration. The output is validated against role, scene, cue and dependency rules, with one repair attempt for invalid scores. API format follows the [official OpenAI structured output documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+Generation supports 1–16 roles and an approximate duration of 1–120 minutes. The editor still supports up to 32 manually authored roles. The output is an editable, unsaved program with no ID or revision. It does not change a saved program, selected session, recording or phone playback. If an editor draft is already open, the generated result waits until you explicitly open it; unsaved edits require a discard confirmation. The description is retained in this browser tab's session storage, and remains available after failure or cancellation. Cancel stops the request; one draft is generated at a time on the server.
+
+The duration is a creative target, not a guaranteed running time. Questions, conversations and readiness holds can change the length. Review generated physical actions and cue timing during rehearsal.

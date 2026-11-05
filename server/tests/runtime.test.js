@@ -97,6 +97,14 @@ test('recording server connection, visit and audio isolation regressions', { tim
     assert.equal(phones.devices[0].audioReady, true); assert.equal(phones.devices[0].waiting, true);
   });
 
+  await t.test('draft generation requires the desk key and rejects invalid briefs without changing preparation', async () => {
+    const before=await(await request('program-run')).json();
+    assert.equal((await request('program-draft',{brief:'Write a score',roles:2,minutes:5},'phone')).status,403);
+    const invalid=await request('program-draft',{brief:'',roles:2,minutes:5});assert.equal(invalid.status,400);assert.match((await invalid.json()).error,/Describe/);
+    assert.deepEqual((await(await request('program-run')).json()).selection,before.selection);
+    assert.equal((await(await request('programs')).json()).programs.length,0);
+  });
+
   await t.test('dedicated session page saves brief and details; rejects stale edits and wrong keys', async () => {
     const data = await (await request('setup')).json();
     assert.equal((await request('session-meta', { instance: data.instance, title: 'Rehearsal', notes: 'Session context' })).status, 200);

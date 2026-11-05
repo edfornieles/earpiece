@@ -46,3 +46,38 @@ function renderScene(){
 $('save').onclick=async()=>{if(saving)return;saving=true;$('save').disabled=true;const sent=JSON.stringify(draft);try{const {program}=await api('programs',JSON.parse(sent));if(JSON.stringify(draft)===sent){draft=program;dirty=false;}else{draft.id=program.id;draft.revision=program.revision;}await refreshLibrary();render();toast('Program saved');}catch(e){toast(e.message);}finally{saving=false;$('save').disabled=!dirty;}};
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
 refreshLibrary().catch(e=>toast(e.message));
+
+// AI writing is separate from the saved library and the session's immutable score.
+let generationController=null, pendingGenerated=null;
+const generationFields=['draft-brief','draft-roles','draft-minutes'];
+function storeWritingBrief(){try{sessionStorage.setItem('mother-writing-brief',JSON.stringify({brief:$('draft-brief').value,roles:$('draft-roles').value,minutes:$('draft-minutes').value}));}catch{}}
+try{const saved=JSON.parse(sessionStorage.getItem('mother-writing-brief')||'null');if(saved){$('draft-brief').value=saved.brief||'';$('draft-roles').value=saved.roles||4;$('draft-minutes').value=saved.minutes||10;}}catch{}
+for(const field of generationFields)$(field).addEventListener('input',storeWritingBrief);
+function writingBusy(busy){$('generate-draft').disabled=busy;$('cancel-draft').hidden=!busy;for(const id of generationFields)$(id).disabled=busy;}
+function openGenerated(){
+ if(!pendingGenerated)return;
+ if(dirty&&!confirm('Replace the unsaved draft currently in the editor with the generated draft?'))return;
+ open(structuredClone(pendingGenerated));changed();
+ $('open-generated').hidden=true;
+ $('generation-state').textContent='First draft ready. Edit the scenes and role tracks below, then save your program.';
+}
+$('open-generated').onclick=openGenerated;
+$('generate-draft').onclick=async()=>{
+ if(generationController)return;
+ const request={brief:$('draft-brief').value.trim(),roles:Number($('draft-roles').value),minutes:Number($('draft-minutes').value)};
+ if(!request.brief){$('generation-state').textContent='Describe what you want the performance to achieve.';$('draft-brief').focus();return;}
+ if(!Number.isInteger(request.roles)||request.roles<1||request.roles>16||!Number.isFinite(request.minutes)||request.minutes<1||request.minutes>120){$('generation-state').textContent='Choose 1–16 roles and approximately 1–120 minutes.';return;}
+ storeWritingBrief();generationController=new AbortController();writingBusy(true);
+ $('generation-state').textContent='Mother is writing the scenes and role tracks… this can take a minute.';
+ try{
+  const result=await api('program-draft',request,{signal:generationController.signal});
+  pendingGenerated=result.program;
+  $('generated-summary').textContent=`${pendingGenerated.title} — ${pendingGenerated.roles.length} roles, ${pendingGenerated.scenes.length} scenes. Ready to edit; not saved or selected for a session.`;
+  $('generated-result').hidden=false;$('open-generated').hidden=false;
+  $('generation-state').textContent='Your first draft is ready. Open it when you want to edit.';
+  if(!draft)openGenerated();
+ }catch(error){$('generation-state').textContent=error.name==='AbortError'?'Writing cancelled. Your description and editor draft are preserved.':error.message;}
+ finally{generationController=null;writingBusy(false);}
+};
+$('cancel-draft').onclick=()=>generationController?.abort();
+window.addEventListener('beforeunload',e=>{if(generationController){e.preventDefault();e.returnValue='';}});

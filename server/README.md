@@ -1,40 +1,71 @@
 # Mother
 
-A command system for the gallery. Dedicated phones with earphones connect to a control room on this Mac. An AI director (OpenAI listening and thinking, the Watercooler voice speaking) directs each participant, and you can cut in at any time. Cameras are shown live and recorded. Every session becomes one folder, ready to edit.
+Mother directs and records a gallery performance. Dedicated phones remain at the control centre; participants wear only their earpieces and microphones. The Studio interface combines live human direction, a private AI director per phone, and prepared scores with multiple roles. Cameras, room microphones and phone conversations can be recorded together.
 
-## Run a session
+## Install and start
 
-```
-cd ~/Downloads/earpiece
+Use Node.js 22 or newer. From this repository:
+
+```sh
+cd server
+npm install
 npm start
 ```
 
-- **Control room** opens in the browser (the link stays the same every time, so bookmark it). Headphones on, click **Start control room**.
-- It starts in **standby**: nothing is recorded. Prepare the next session — name, notes, documents, people, arrivals. Cameras show live and phones can connect.
-- **● Start session** starts recording, taking over everything you prepared.
-- **End session** stops recording, saves and exports, and goes back to standby for the next one.
-- **Library** and **Files**: the links in the top right.
-- `Ctrl+C` stops everything (if a session is recording it's saved first — wait for "saved:").
-- `START_RECORDING=1 npm start` skips standby.
+The existing performance installation is a standalone copy at `~/Downloads/earpiece`; run `npm start` there when using that installation. Keep its `.env`, keys, settings, programs, registrations and recordings in place when updating source files. Copying a checkout does not copy that runtime data automatically.
 
-Before a session, quit **Stremio**. Its background server uses up the Mac's network connections, and then the tunnel and AI stop working.
+Set `OPENAI_API_KEY` in `.env` for transcription, direction and script writing. Run the local Pocket-TTS service at `http://localhost:8123`, or configure `POCKET_TTS_URL`. Speech generation and voice previews require that service. Camera and room microphone recording require `ffmpeg` (`brew install ffmpeg` on macOS).
+
+The server prints its operator and phone links. The live desk connects immediately when opened; there is no **Start control room** gate. Use **Enable sound** to monitor phone returns and **Enable microphone** to allow live talk. Denying desk microphone permission does not block the desk or listening. Wear headphones at the desk to avoid feedback.
+
+## Prepare and record
+
+- The server starts in **standby**: nothing is recorded. Prepare the session title, notes, documents, participants and optional score. Cameras can show live and phones can connect.
+- **Start session** starts recording and adopts the prepared details, people, documents and selected program version.
+- Start each participant's visit from the desk. A connected phone alone does not start a visit or open its participant microphone feed.
+- If using a score, press **Start program** separately after its assigned visits and earpieces are ready. This lets you record the lead-in.
+- **End session** stops recording, saves and exports, and returns to standby.
+- `Ctrl+C` stops the server; during recording it saves first. Wait for the saved message before closing the terminal.
+- `START_RECORDING=1 npm start` skips standby; ordinarily prepare the session before starting recording.
+
+The sidebar groups the operator pages: **Workspace** (Live desk, Session, Programs), **People** (Registrations), **Equipment** (Phones, Screens), and **Archive** (Library, Files, Trash). Group headings have distinct accents in both light and dark themes. On smaller screens navigation moves above the page.
+
+## Let Mother write the first script
+
+Open **Programs → Let Mother write the first draft**. Describe the desired experience, how it develops, movement, relationships between people, tone, pauses, and constraints. Choose **1–16 roles** and an approximate duration, then **Generate first draft**.
+
+Mother creates named roles and an ordered score of scenes and cue tracks. The result opens as an **unsaved, editable draft**. Edit the title, overall brief, private role instructions, scene order and individual cues, then press **Save program**. If you already have a program open, generation waits for you to choose whether to open its result; it does not replace ongoing edits automatically. Cancelling or a failed request preserves your description and editor draft.
+
+Generation uses the configured OpenAI key and a separate long-form writing request. It does not change the live director's short replies, save a program automatically, change the selected session, start recording or send speech to phones. Treat the requested minutes as a creative target: conversations and manual readiness holds affect the actual duration.
+
+## Choose a score before recording
+
+In **Session → Performance program**, select a saved program, set **shared scenes** or **independent** timing, assign a distinct phone to every role, and press **Save program choice**. Add more permanent phone slots on Phones if needed. Choose **No program — free direction** to use the ordinary AI brief and live controls instead.
+
+The selected script is copied into the prepared session, with its version and assignments, and carries into the recording. Later library edits cannot silently change it. Before recording, load the latest version and save the choice again to adopt an edit. The program choice and assignments are locked while recording.
+
+Each role has its own position in the score. In shared timing, marked scene boundaries wait for every role; independent timing allows separate progress. Explicit cross-role dependencies work in either mode. Cues support speech, timed silence, desk confirmation, questions, bounded conversations, and waiting for another role's cue. Shared timing coordinates cues and scenes; it is not sample-accurate common timecode. Prerecorded clip uploads are not yet supported by Programs.
+
+During live intervention, the affected role is held while the controller speaks. After transcription, Mother can return to the score, wait for a reply, or give a bounded conversational response. Its state and reason appear on the desk. Failed decisions and reply timeouts ask for desk attention. You can always override with repeat/resume or continue. Resuming interrupted speech repeats the current cue from its beginning; stopping and starting the whole program begins at scene one. Reconnecting equipment never silently resumes a paused score, and a changed participant requires stopping and restarting it.
+
+See [Programs: authoring, runtime controls and limitations](docs/programs.md) for full details. The editor supports up to 32 manually authored roles; first-draft generation currently supports up to 16.
 
 ## Phones
 
-Open **Phones** in the top navigation. Each phone has a permanent numbered slot and connection link. Choose a slot to scan its QR code, or click **Add phone** to create another slot. You can use more than four phones; new slots appear in the control room immediately and are saved across server restarts. The Phones page shows whether each phone is connected and has enabled audio.
+Open **Phones** under Equipment in the sidebar. Each phone has a permanent numbered slot and connection link. Choose a slot to scan its QR code, or click **Add phone** to create another slot. You can use more than four phones; new slots appear in the control room immediately and are saved across server restarts. The Phones page shows whether each phone is connected and has enabled audio.
 
 First-time setup for a dedicated Android phone, plugged in over USB:
 ```
 brew install android-platform-tools     # once
 ./phone-setup.sh 1                      # 1 = the slot for this phone
 ```
-This keeps the screen on while charging, turns on Do Not Disturb, and installs and opens the bundled Android app. If no APK is available it opens the browser version instead. For browser setup, use the QR code on **Phones**, tap **Enable audio**, allow microphone access, and optionally add the page to the home screen.
+This keeps the screen on while charging, turns on Do Not Disturb, and installs and opens the bundled Android app. If no APK is available it opens the browser version instead. For Android setup, scan the slot QR code and choose **Open Mother app**, or **Install Mother for Android** if needed. Merely opening that setup URL does not take the slot away from an existing native connection. For browser-only use, choose **Enable browser audio**, allow microphone access, and keep the browser page active. Opening an actual second endpoint for the same slot replaces the previous one.
 
 Keep the phones in the control centre; participants wear only their earpieces. Enable audio on each phone during setup (the browser may need a tap to allow microphone access and playback). From the desk, use **Start on phone** in Arrivals or start someone from their person card. When they're done, click **End participant → ready for next**. The desk starts and ends each visit; the microphone feed is muted between visits and resumes automatically for the next visit on an already prepared phone.
 
 Participant microphone audio goes only to the control desk and that phone's recording, never to another participant. The director can talk to one selected phone, or explicitly to everyone; each AI voice goes only to its assigned phone. Losing the desk connection or moving away from its browser window releases push-to-talk.
 
-Use wired earphones with a mic on the phones. Bluetooth earbuds can jump to another device mid-session.
+Pair the intended earpiece and verify that both playback and microphone use it, away from the phone. Test Bluetooth range and whether headsets reconnect or switch to another nearby device. A connected phone or an enabled audio service is not proof that its earpiece microphone is in use. The desk flags a reported missing earpiece; known native routing and Android-version limitations are recorded in the [Android review](docs/android-app-review.md).
 
 ## Cameras
 
@@ -77,7 +108,7 @@ A separate computer in its own space plays the intro film next to a QR code. Peo
 
 New registrations appear in the control room under **Arrivals** (with a chime): check their photo against the person, pick a phone, **Start on phone**. Their photo and signed consent are copied into the session folder.
 
-**Registrations** (`/people`) lists everyone who has registered. To connect someone to a session by hand — they didn't agree to face matching, matching missed them, or they started on a phone without registering — open their card, **Connect to a session…**, pick the session and either the phone visit that was them or "they were there". Names, exports and the catalogue update.
+**Registrations** (`/people`) lists everyone who has registered. To connect someone to a session by hand — they didn't agree to face matching, matching missed them, or they were added as a walk-in — open their card, **Connect to a session…**, pick the session and either the phone visit that was them or "they were there". Names, exports and the catalogue update.
 
 Registrations are kept in `participants/` (personal data — never share or commit that folder).
 
@@ -87,22 +118,34 @@ For people who ticked the face-matching box, the catalogue looks for their face 
 
 One-time setup: `npm run setup-faces` (needs Python 3: `brew install python` if it's missing). Matching is automatic and can be wrong — the crops are there so you can check.
 
-## Controls
+## Live desk controls
 
-- **Hold to talk** (or hold `1`–`4`): speak to one phone. `space` speaks to everyone. This cuts the AI off; the AI knows what you said and carries on after you stop.
-- **AI directing — on / off**, **Next direction**, **Private note to the AI** (it puts your note in its own words).
-- **Mark** (`M`): drops a labelled marker on the edit timeline, e.g. "door opens".
-- **Session page**: the AI brief, session name, notes and attached documents. The brief is saved to `brief.txt`, with a copy of each saved edit in the current session.
-- **Screens page**: open camera monitor windows and copy or scan display links for other devices.
-- Number keys **1–9** talk to phones 1–9; use the on-screen card for higher numbered phones.
+- Select a phone in the participant list to see its controls, status and transcript. The list scales beyond four phones.
+- **Hold to talk**, or hold number keys **1–9**, addresses the matching phone. Hold **Space** to address everyone; **L** latches talk-to-all. Higher numbered phones use their on-screen controls. Enable the desk microphone first. Losing focus or the connection releases talk.
+- **My own voice** sends the controller's voice directly; **As the AI voice** transcribes it and speaks it in the selected voice after release.
+- Unassigned phones use **AI directing — on / off**, **Next direction**, typed speech, and private AI instructions. A selected program owns direction on its assigned phones, suppressing the ordinary idle/nudge loop; their advance button becomes **Continue program cue**. Typed speech or private overrides hold an affected program role for desk recovery.
+- The program panel shows each role's scene, current passage, state and any hold reason. It provides **Start program**, **Pause all roles**, **Resume program**, **Stop program**, and per-role repeat/resume or continue.
+- **Mark** (`M`) drops a labelled marker on the recording timeline.
+- **Session** contains the program selection, AI brief, title, notes and documents. Brief edits are saved to `brief.txt`, with a copy in the session; they do not interrupt speech already playing.
+- **Screens** opens camera monitor windows and provides display links for other devices.
+
+## Local data and updates
+
+- `.env`, `.keys.json`, `.settings.json`: service credentials, stable access links, voice choices and phone slot count.
+- `programs/`: saved private scores and versions. These are separate from recordings and ignored by Git.
+- `recordings/_next/`: standby preparation, including the copied program and assignments.
+- `recordings/<timestamp>/`: completed or current recording, including its immutable score copy, transcripts and cue events.
+- `participants/`: registration details, consent forms and photos; keep these private.
+
+Back up these separately from source control. Do not replace them when updating the application. Android signing material also remains outside the checkout.
 
 ## What a session folder contains
 
 ```
 recordings/2026-11-05-14-03-12/
-  session.json        start time (to the millisecond), participants, cameras, files
+  session.json        start time, participants, cameras, files, selected program version and role assignments
   transcript.txt      who said what, when, including your private notes to the AI
-  events.jsonl        everything that happened, timed
+  events.jsonl        timed events, including program cues, holds and scene transitions
   audio/              director-mic.wav, phoneN-mic.wav (what they said),
                       phoneN-ai.wav (the AI voice), phoneN-heard.wav (everything in their ear)
                       room-<name>.wav (one per room mic)
@@ -134,15 +177,29 @@ catalogue/
   sheets/<camera>/    contact sheets: each row is one minute
 ```
 
-Word timings use OpenAI Whisper (a few pence per hour of speech). Build it again for an old session with `node catalogue.js recordings/<session>`.
+Word timings use OpenAI transcription; API usage is charged to the configured account. Build it again for an old session with `node catalogue.js recordings/<session>`.
 
 ## Settings (.env)
 
-```
-OPENAI_API_KEY=...                         required
-OPENAI_TEXT_MODEL=gpt-4o-mini              the AI's mind; try gpt-4.1 for better direction
-AI_IDLE_SECS=20                            silence before the AI moves on
-AI_MODE=auto                               or off = AI starts silent
+```dotenv
+OPENAI_API_KEY=...                         # required for AI features; keep private
+OPENAI_TEXT_MODEL=gpt-4o-mini              # existing live-direction default
+OPENAI_PROGRAM_MODEL=gpt-4o-mini           # optional writer override; defaults to text model
+OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
+POCKET_TTS_URL=http://localhost:8123        # local speech service
+AI_IDLE_SECS=20                            # free direction only; programs own their pacing
+AI_MODE=auto                               # off starts free-direction phones silently
 PUBLIC_URL=https://earpiece.edfornieles.com
-MAX_PHONES=4                              initial phone slots; add more from Phones
+PORT=8080                                 # set 8787 for the existing local installation
+MAX_PHONES=4                              # initial slots; add more on Phones
 ```
+
+If a network-dependent feature drops out, check the phone Wi-Fi, public connection, OpenAI response and local TTS service separately. Heavy streaming applications can interfere with a performance network; isolate and rehearse the actual setup before use.
+
+## Verification
+
+```sh
+npm test
+```
+
+The automated suite uses disposable copies, mock speech and isolated recordings. It covers phone audio isolation, active visits, talk ownership, stale transcription, program version adoption, cue progression, dependencies, interruptions, draft validation/repair, cancellation and protection of existing edits. Real OpenAI script generation has also been checked in the browser. Full multi-phone audio routing, adaptive conversation quality and headset walking range still require hardware rehearsal.

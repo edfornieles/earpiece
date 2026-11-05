@@ -26,6 +26,8 @@ const { exportSession } = require('./exports');
 const { loadRoomMics, RoomMics } = require('./roommics');
 const { Registry } = require('./registry');
 const { ProgramStore, ProgramRunner } = require('./programs');
+const { generateProgram } = require('./program-drafts');
+let generatingProgram=false;
 const programStore = new ProgramStore(path.join(__dirname, 'programs'));
 let programRunner;
 
@@ -445,6 +447,19 @@ const server = http.createServer(async (req, res) => {
   }
   if (p.startsWith('/api/')) {
     if (!ctl) { res.writeHead(403); return res.end(); }
+    if(p==='/api/program-draft' && req.method==='POST') {
+      if(generatingProgram)return json(res,{error:'Mother is already writing a draft. Wait for it to finish or cancel it first.'},409);
+      generatingProgram=true;const controller=new AbortController();
+      const disconnected=()=>{if(!res.writableEnded)controller.abort();};res.on('close',disconnected);
+      try {
+        const input=await readSetupBody(req);
+        const generated=await generateProgram(input,{signal:controller.signal,brief:readBrief()});
+        if(!res.destroyed)return json(res,generated);
+      }catch(e){
+        if(!res.destroyed)return json(res,{error:e.name==='TimeoutError'?'Draft generation took too long. Your description is preserved; try again.':e.message},400);
+      }finally{generatingProgram=false;res.removeListener('close',disconnected);}
+      return;
+    }
     if (p === '/api/programs') {
       try { return json(res, req.method === 'POST' ? { program:programStore.save(await readSetupBody(req)) } : { programs:programStore.list() }); }
       catch(e) { return json(res,{error:e.message},400); }

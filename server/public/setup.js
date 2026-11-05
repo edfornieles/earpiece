@@ -4,8 +4,8 @@ const Setup = (() => {
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const url = (route) => `${route}${route.includes('?') ? '&' : '?'}k=${encodeURIComponent(key)}`;
-  async function api(route, body) {
-    const res = await fetch(url('/api/' + route), body === undefined ? {} : { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body) });
+  async function api(route, body, options = {}) {
+    const res = await fetch(url('/api/' + route), { ...(body === undefined ? {} : { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body) }), signal:options.signal });
     let data; try { data = await res.json(); } catch { throw new Error(res.status === 403 ? 'Open this page from the control room using its current link.' : 'The server could not complete this request.'); }
     if (!res.ok || data.error) throw new Error(data.error || 'Request failed.');
     return data;

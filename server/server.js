@@ -159,6 +159,126 @@ function unlinkPerson(dir, pid) {   // undo a link that has no phone visit (some
   registry.forgetSession(pid, path.basename(dir));
   if (live) { savePeople(); toControls({ type: 'registry', list: recentRegs() }); } else writePeople(dir, plist);
 }
+// ---------- trash: deleted sessions, files and registrations wait here until you empty it ----------
+const TRASH = path.join(REC_ROOT, '_trash');
+const trashIndexFile = path.join(TRASH, 'index.json');
+const readTrash = () => { try { return JSON.parse(fs.readFileSync(trashIndexFile, 'utf8')); } catch { return []; } };
+const writeTrash = (list) => { fs.mkdirSync(TRASH, { recursive: true }); fs.writeFileSync(trashIndexFile, JSON.stringify(list, null, 2)); };
+const sizeOf = (f) => { try { const st = fs.statSync(f); return st.isDirectory() ? fs.readdirSync(f).reduce((a, x) => a + sizeOf(path.join(f, x)), 0) : st.size; } catch { return 0; } };
+// moves files into the trash; returns [{ from, to }] relative to the earpiece folder, for restoring
+function trashMove(id, absPaths) {
+  const moves = [];
+  for (const a of absPaths) {
+    if (!fs.existsSync(a)) continue;
+    const rel = path.relative(__dirname, a), to = path.join(TRASH, id, rel);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(a, to);
+    moves.push({ from: rel, to: path.relative(__dirname, to) });
+  }
+  return moves;
+}
+const trashId = () => new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomBytes(2).toString('hex');
+function deleteSession(name) {
+  const dir = sessionDirOf(name);
+  if (!dir || name.startsWith('_')) throw new Error('no such session');
+  if (name === stamp) throw new Error('This session is recording — end it first.');
+  let title = ''; try { title = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')).title || ''; } catch {}
+  const id = trashId(), size = sizeOf(dir);
+  const reg = registry.list.filter((x) => x.sessions.some((y) => y.session === name)).map((x) => ({ pid: x.pid, entry: x.sessions.find((y) => y.session === name) }));
+  for (const r of reg) registry.forgetSession(r.pid, name);
+  const moves = trashMove(id, [dir]);
+  writeTrash([...readTrash(), { id, kind: 'session', label: title ? `${title} (${name})` : name, session: name, size, at: new Date().toISOString(), moves, registry: reg }]);
+}
+// files inside a finished session (or documents in the live one); session.json and people.json are kept in step
+function deleteFiles(dir, rels) {
+  const name = path.basename(dir), live = name === stamp;
+  const abs = rels.map((r) => path.join(dir, path.normalize(r).replace(/^(\.\.[\/\\])+/, ''))).filter((a) => a.startsWith(dir + path.sep) && fs.existsSync(a));
+  if (live && abs.some((a) => !path.relative(dir, a).startsWith('documents' + path.sep))) throw new Error('This session is recording — only documents can be deleted until it ends.');
+  if (abs.some((a) => /^(session\.json|people\.json|next\.json)$/.test(path.relative(dir, a)))) throw new Error('The session record itself can\'t be deleted — delete the whole session instead.');
+  if (!abs.length) throw new Error('nothing to delete');
+  const gone = new Set(abs.map((a) => path.relative(dir, a)));
+  const size = abs.reduce((a, f) => a + sizeOf(f), 0), id = trashId();
+  const moves = trashMove(id, abs);
+  // keep the records in step
+  const sj = live ? session : JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
+  const records = { session: {}, people: [] };   // what the records said about these files, to put back on restore
+  for (const k of ['documents', 'video', 'room_audio']) if (Array.isArray(sj[k])) { records.session[k] = sj[k].filter((x) => gone.has(x.file)); sj[k] = sj[k].filter((x) => !gone.has(x.file)); }
+  const plist = live ? people : readPeople(dir);
+  for (const x of plist) {
+    const r = { pid: x.pid, files: (x.files || []).filter((f) => gone.has(f.file)), photo: gone.has(x.photo) ? x.photo : null, consent: gone.has(x.consent) ? x.consent : null };
+    if (r.files.length || r.photo || r.consent) records.people.push(r);
+    x.files = (x.files || []).filter((f) => !gone.has(f.file)); if (gone.has(x.photo)) x.photo = null; if (gone.has(x.consent)) x.consent = null;
+  }
+  if (live) { saveSession(); savePeople(); toControls({ type: 'session', title: session.title, notes: session.notes || '', documents: session.documents || [] }); }
+  else {
+    fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(sj, null, 2)); writePeople(dir, plist);
+    if ([...gone].some((r) => /^(audio|video)\//.test(r))) { try { exportSession(dir); } catch {} }   // timelines without the deleted media
+  }
+  writeTrash([...readTrash(), { id, kind: 'files', label: `${abs.length === 1 ? path.basename(abs[0]) : abs.length + ' files'} from ${sj.title || name}`, session: name, size, at: new Date().toISOString(), moves, records }]);
+  return abs.length;
+}
+// a registration: their photo and signed consent, everywhere they were copied. Recordings of them stay.
+function deleteRegistration(pid) {
+  const x = registry.get(pid); if (!x) throw new Error('no such registration');
+  const id = trashId(), paths = [path.join(registry.dir, pid)], snapshots = [];
+  for (const sref of x.sessions) {
+    const dir = sessionDirOf(sref.session); if (!dir) continue;
+    const live = sref.session === stamp, plist = live ? people : readPeople(dir), rec = plist.find((y) => y.pid === pid);
+    if (!rec) continue;
+    snapshots.push({ session: sref.session, record: JSON.parse(JSON.stringify(rec)) });
+    for (const f of rec.files || []) if (f.file.startsWith('documents/') && f.file.includes('_' + pid + '/')) paths.push(path.join(dir, path.dirname(f.file)));
+    Object.assign(rec, { name: `Removed participant #${x.number}`, contact: '', notes: '', photo: null, consent: null, registered: false, removed: true, release: false,
+      files: (rec.files || []).filter((f) => !f.file.includes('_' + pid + '/')) });
+    if (live) savePeople(); else writePeople(dir, plist);
+  }
+  const moves = trashMove(id, [...new Set(paths)]);
+  registry.list = registry.list.filter((y) => y.pid !== pid); registry.save();
+  writeTrash([...readTrash(), { id, kind: 'registration', label: `Registration #${x.number} ${x.name}`, size: moves.reduce((a, m) => a + sizeOf(path.join(__dirname, m.to)), 0), at: new Date().toISOString(), moves, entry: x, snapshots }]);
+  toControls({ type: 'registry', list: recentRegs() });
+}
+function restoreTrash(id) {
+  const list = readTrash(), item = list.find((t) => t.id === id); if (!item) throw new Error('not in the trash');
+  for (const m of item.moves) {
+    const from = path.join(__dirname, m.to), to = path.join(__dirname, m.from);
+    if (fs.existsSync(to) && !fs.statSync(to).isDirectory()) throw new Error(`Can't restore: ${m.from} already exists`);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    if (fs.existsSync(to)) { for (const f of fs.readdirSync(from)) fs.renameSync(path.join(from, f), path.join(to, f)); } else fs.renameSync(from, to);
+  }
+  if (item.kind === 'session') for (const r of item.registry || []) { const x = registry.get(r.pid); if (x && !x.sessions.find((y) => y.session === item.session)) { x.sessions.push(r.entry); registry.save(); } }
+  if (item.kind === 'registration') {
+    if (!registry.get(item.entry.pid)) { registry.list.push(item.entry); registry.save(); }
+    for (const snap of item.snapshots || []) {
+      const dir = sessionDirOf(snap.session); if (!dir) continue;
+      const live = snap.session === stamp, plist = live ? people : readPeople(dir), i = plist.findIndex((y) => y.pid === snap.record.pid);
+      if (i >= 0) plist[i] = snap.record; else plist.push(snap.record);
+      if (live) savePeople(); else writePeople(dir, plist);
+    }
+    toControls({ type: 'registry', list: recentRegs() });
+  }
+  if (item.kind === 'files' && item.records) {   // put the files back in the records
+    const dir = sessionDirOf(item.session);
+    if (dir) {
+      const live = item.session === stamp;
+      const sj = live ? session : JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
+      for (const [k, list] of Object.entries(item.records.session || {})) { sj[k] = sj[k] || []; for (const e of list) if (!sj[k].find((x) => x.file === e.file)) sj[k].push(e); }
+      const plist = live ? people : readPeople(dir);
+      for (const r of item.records.people || []) {
+        const x = plist.find((y) => y.pid === r.pid); if (!x) continue;
+        for (const f of r.files) if (!x.files.find((y) => y.file === f.file)) x.files.push(f);
+        if (r.photo) x.photo = r.photo; if (r.consent) x.consent = r.consent;
+      }
+      if (live) { saveSession(); savePeople(); toControls({ type: 'session', title: session.title, notes: session.notes || '', documents: session.documents || [] }); }
+      else { fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(sj, null, 2)); writePeople(dir, plist); try { exportSession(dir); } catch {} }
+    }
+  }
+  fs.rmSync(path.join(TRASH, id), { recursive: true, force: true });
+  writeTrash(list.filter((t) => t.id !== id));
+}
+function purgeTrash(id) {   // permanent
+  const list = readTrash();
+  for (const t of list.filter((t) => !id || t.id === id)) fs.rmSync(path.join(TRASH, t.id), { recursive: true, force: true });
+  writeTrash(id ? list.filter((t) => t.id !== id) : []);
+}
 const joinHits = new Map();   // ip -> recent registration times (keeps the public form from being flooded)
 saveSession();
 const NULL_STREAM = { write() {}, end(cb) { if (cb) cb(); } };
@@ -222,7 +342,7 @@ function lanAddress() {
   const v4 = all.filter((a) => a.family === 'IPv4' && !a.internal && !/^169\.254\./.test(a.address));
   return (v4.find((a) => a.n === 'en0') || v4.find((a) => /^(192\.168|10\.|172\.)/.test(a.address)) || v4[0])?.address || null;
 }
-const sessionDirOf = (name) => { const d = path.join(REC_ROOT, path.basename(String(name || ''))); return fs.existsSync(d) ? d : null; };
+const sessionDirOf = (name) => { const b = path.basename(String(name || '')); if (!b || (b.startsWith('_') && b !== '_next')) return null; const d = path.join(REC_ROOT, b); return fs.existsSync(d) ? d : null; };
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
@@ -336,6 +456,19 @@ const server = http.createServer(async (req, res) => {
         return { name: d, title: s.title || '', start: s.start_iso, participants: (s.participants || []).map((x) => x.name || `Phone ${x.phone}`), duration: s.exports?.duration || null, cameras: (s.cameras || []).length, live: d === stamp };
       }));
     }
+    if (p === '/api/status') return json(res, { standby: STANDBY, name: stamp, title: session.title || '', since: session.start_iso, monitorKey: MONITOR_KEY });
+    if (p === '/api/trash') return json(res, { items: readTrash().reverse().map((t) => ({ id: t.id, kind: t.kind, label: t.label, size: t.size, at: t.at, count: t.moves.length })) });
+    if (req.method === 'POST' && ['/api/trash-restore', '/api/trash-purge', '/api/delete-session', '/api/delete-registration'].includes(p)) {
+      let body = ''; for await (const c of req) body += c;
+      const d = JSON.parse(body || '{}');
+      try {
+        if (p === '/api/trash-restore') restoreTrash(d.id);
+        if (p === '/api/trash-purge') purgeTrash(d.id || null);
+        if (p === '/api/delete-session') deleteSession(String(d.session || ''));
+        if (p === '/api/delete-registration') deleteRegistration(d.pid);
+        return json(res, { ok: true });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     const dir = sessionDirOf(u.searchParams.get('s'));
     if (!dir) return json(res, { error: 'no such session' }, 404);
     if (p === '/api/session') {
@@ -349,6 +482,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, { session: s, transcript, files, catalogue, people: path.basename(dir) === stamp ? people : readPeople(dir) });
     }
     if (p === '/api/open') { if (process.platform === 'darwin') spawn('open', [dir]); return json(res, { ok: true }); }
+    if (p === '/api/delete-files' && req.method === 'POST') {
+      let body = ''; for await (const c of req) body += c;
+      try { return json(res, { ok: true, deleted: deleteFiles(dir, JSON.parse(body || '{}').paths || []) }); } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     if (p === '/api/tree') {   // every file in the session folder, for the files page
       const out = [];
       (function walk(d) {
@@ -465,6 +602,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/join') p = '/join.html';
   if (p === '/welcome') p = '/welcome.html';
   if (p === '/people') p = '/people.html';
+  if (p === '/trash') p = '/trash.html';
   const file = path.join(PUB, path.normalize(p).replace(/^(\.\.[\/\\])+/, ''));
   if (!file.startsWith(PUB) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
   res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });

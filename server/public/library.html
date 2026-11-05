@@ -9,7 +9,7 @@
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system, system-ui, sans-serif; }
   header { padding:14px 22px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
   header h1 { font-size:15px; font-weight:500; margin:0; }
-  main { display:grid; grid-template-columns: 340px 1fr; height:calc(100vh - 50px); }
+  main { display:grid; grid-template-columns: 340px 1fr; height:calc(100vh - 92px); }
   #list { border-right:1px solid var(--line); overflow-y:auto; }
   #search { margin:12px; width:calc(100% - 24px); }
   .item { padding:12px 16px; border-bottom:1px solid var(--line); cursor:pointer; }
@@ -39,7 +39,7 @@
 </style>
 </head>
 <body>
-<header><h1>Library</h1><span class="hint">Every session is a folder in <code>recordings/</code>. Import <code>exports/timeline.fcpxml</code> into Resolve or Premiere to get everything lined up.</span><a id="reglink" style="color:var(--dim);font-size:13px;text-decoration:none">Registrations →</a></header>
+<header><h1>Library</h1><span class="hint">Every session is a folder in <code>recordings/</code>. Import <code>exports/timeline.fcpxml</code> into Resolve or Premiere to get everything lined up.</span></header>
 <main>
   <section id="list"><input id="search" placeholder="Search names, titles, transcripts…"></section>
   <section id="detail"><p class="hint">Choose a session.</p></section>
@@ -48,7 +48,6 @@
 const KEY = new URLSearchParams(location.search).get('k');
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
-document.getElementById('reglink').href = '/people?k=' + new URLSearchParams(location.search).get('k');
 const api = (p, opts) => fetch(`/api/${p}${p.includes('?') ? '&' : '?'}k=${KEY}`, opts).then((r) => r.json());
 const size = (b) => b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.ceil(b / 1e3) + ' KB';
 const dur = (s) => s ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : '';
@@ -95,6 +94,7 @@ async function open(name) {
     <div class="row">
       <input id="title" placeholder="Title for this session" value="${esc(s.title || '')}"><button id="savetitle">Save title</button>
       <button id="allfiles">All files →</button>
+      <button id="delsess" style="color:#e88" ${live ? 'disabled title="This session is recording"' : ''}>Delete session…</button>
       <button id="openf">Open folder in Finder</button>
       <button id="reexp" ${live ? 'disabled title="exports when the session ends"' : ''}>Rebuild exports</button>
     </div>
@@ -139,6 +139,13 @@ async function open(name) {
     drop(el, x.pid);
     $('folk').appendChild(el);
   }
+  $('delsess').onclick = async () => {
+    if (!confirm(`Delete “${s.title || name}”?\n\nThe whole session folder — recordings, video, documents, exports — goes to the Trash. You can restore it from there until you empty the Trash.`)) return;
+    const r = await api('delete-session', { method: 'POST', body: JSON.stringify({ session: name }) });
+    if (r.error) return alert(r.error);
+    current = null; location.hash = ''; sessions = await api('sessions'); render();
+    $('detail').innerHTML = '<p class="hint">Moved to the Trash.</p>';
+  };
   $('allfiles').onclick = () => (location.href = `/files?k=${KEY}&s=${encodeURIComponent(name)}`);
   $('openf').onclick = () => api('open?s=' + encodeURIComponent(name));
   $('reexp').onclick = async () => { const r = await api('export?s=' + encodeURIComponent(name)); if (r.error) alert(r.error); open(name); };
@@ -146,5 +153,6 @@ async function open(name) {
 }
 load();
 </script>
+<script src="nav.js"></script>
 </body>
 </html>

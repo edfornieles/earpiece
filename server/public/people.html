@@ -41,7 +41,6 @@
   <h1>Registrations</h1>
   <input id="q" placeholder="Search name, email, number…" style="width:260px">
   <select id="show"><option value="all">Everyone</option><option value="waiting">Not in a session yet</option><option value="today">Registered today</option></select>
-  <nav><a id="welcome" target="_blank">Welcome screen ↗</a><a id="files">Files</a><a id="lib">Library</a><a id="ctl">Control room</a></nav>
 </header>
 <main>
   <div id="warn"></div>
@@ -56,8 +55,6 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':
 const api = (p, opts) => fetch(`/api/${p}${p.includes('?') ? '&' : '?'}k=${KEY}`, opts).then((r) => r.json());
 const post = (p, body) => api(p, { method: 'POST', body: JSON.stringify(body) });
 function toast(t) { $('toast').textContent = t; $('toast').style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => ($('toast').style.display = 'none'), 2200); }
-for (const [id, path] of [['files', '/files'], ['lib', '/library'], ['ctl', '/control']]) $(id).href = `${path}?k=${KEY}`;
-fetch('/api/info?k=' + KEY).then((r) => r.json()).then((i) => { $('welcome').href = `/welcome?k=${(i.screens?.local || '').split('k=')[1] || KEY}`; });
 
 let regs = [], sessions = [];
 const when = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -85,7 +82,7 @@ function render() {
       </div></div>
     <textarea class="o" placeholder="Notes">${esc(x.notes)}</textarea>
     <div class="sess">${x.sessions.length ? x.sessions.map((s) => `<div>In <a href="/files?k=${KEY}&s=${encodeURIComponent(s.session)}" target="_blank">${esc(title(s.session))}</a> <span class="meta">(${esc(s.how)})</span><span class="x" data-unlink="${esc(s.session)}" title="Remove from this session (only if they weren't on a phone in it)">remove</span></div>`).join('') : '<span class="meta">Not in a session yet</span>'}</div>
-    <button class="open">Connect to a session…</button>
+    <div style="display:flex;gap:8px"><button class="open" style="flex:1">Connect to a session…</button><button class="delreg" style="color:#e88" title="Delete this registration (e.g. if they ask to be removed)">Delete…</button></div>
     <div class="link">
       <select class="ss"><option value="">Choose a session…</option>${sessions.map((s) => `<option value="${esc(s.name)}">${esc((s.title ? s.title + ' — ' : '') + new Date(s.start).toLocaleString())}${s.live ? ' (now)' : ''}</option>`).join('')}</select>
       <div class="visits"></div>
@@ -122,6 +119,13 @@ $('grid').addEventListener('click', async (e) => {
   const card = e.target.closest('.p'); if (!card) return;
   const pid = card.dataset.pid;
   if (e.target.matches('.open')) { card.classList.toggle('linking'); return; }
+  if (e.target.matches('.delreg')) {
+    const x = regs.find((r) => r.pid === pid);
+    if (!confirm(`Delete the registration of ${x.name} (#${x.number})?\n\nTheir name, email, photo and signed consent are removed — here and from ${x.sessions.length ? 'the ' + x.sessions.length + ' session(s) they were in' : 'any session'} — and go to the Trash (restorable until you empty it).\n\nRecordings of them (their voice on the phone tracks, camera footage) stay: delete those files from the session's Files page if needed.`)) return;
+    const r = await post('delete-registration', { pid });
+    if (r.error) return toast('⚠ ' + r.error);
+    toast('Registration moved to the Trash'); await load(); return;
+  }
   if (e.target.dataset.visit !== undefined) {
     const s = card.querySelector('.visits').dataset.session, visit = Number(e.target.dataset.visit);
     const r = await post('link?s=' + encodeURIComponent(s), { pid, visit });
@@ -139,5 +143,6 @@ $('grid').addEventListener('click', async (e) => {
 $('zoom').onclick = () => ($('zoom').style.display = 'none');
 load(); setInterval(() => { if (!document.querySelector('.p.linking') && !document.activeElement?.closest?.('.p')) load(); }, 15000);
 </script>
+<script src="nav.js"></script>
 </body>
 </html>

@@ -128,8 +128,6 @@
     <button id="mark" title="Drop a marker on the timeline (M)">Mark <kbd>M</kbd></button>
     <button id="startsession" title="Start recording: cameras, room mics, phones — with everything you've prepared">● Start session</button>
     <button id="endsession" title="Stop recording and save; go back to standby to prepare the next session">End session</button>
-    <a id="files" target="_blank">Files ↗</a>
-    <a id="lib" target="_blank">Library ↗</a>
     <span class="rec" id="recstate">REC</span>
   </nav>
 </header>
@@ -140,7 +138,7 @@
     <div id="room"></div>
     <div id="grid"></div>
     <div id="peoplebox">
-      <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="_blank" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
+      <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="earpiece_pages" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
       <div id="arrivals"></div>
       <h3><span id="peoplehead">People this session</span><span class="find" id="findbox"><input id="findperson" placeholder="Find someone who has registered…" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><div class="results" id="findres"></div></span></h3>
       <div id="folk"></div>
@@ -212,7 +210,7 @@ const $ = (id) => document.getElementById(id);
 const MAX = 4;
 let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [], micAs = 'own';
 const people = new Map();
-$('lib').href = '/library?k=' + KEY; $('files').href = '/files?k=' + KEY; $('peoplelink').href = '/people?k=' + KEY;
+$('peoplelink').href = '/people?k=' + KEY;
 
 function toast(t) { $('toast').textContent = t; $('toast').style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => ($('toast').style.display = 'none'), 1800); }
 function person(id) {
@@ -726,5 +724,6 @@ document.addEventListener('keyup', (e) => {
   if (e.code === 'Space' || /^Digit[1-4]$/.test(e.code)) setTalk(latched ? 0 : null);
 });
 </script>
+<script src="nav.js"></script>
 </body>
 </html>

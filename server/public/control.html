@@ -63,6 +63,7 @@
   <h1>Control room <span id="mock" class="hint"></span></h1>
   <nav>
     <button id="mark" title="Drop a marker on the timeline (M)">Mark <kbd>M</kbd></button>
+    <button id="endsession" title="Close this session's recordings and exports, start a new one">End session</button>
     <a id="lib" target="_blank">Library ↗</a>
     <span class="rec">REC</span>
   </nav>
@@ -76,6 +77,11 @@
     <div class="panel">
       <h3>Your mic</h3>
       <div class="meter"><i id="mymeter"></i></div>
+      <div class="tabs" id="micmode">
+        <button data-as="own" class="sel">My own voice</button>
+        <button data-as="voice">As the AI voice</button>
+      </div>
+      <div class="hint" id="micmodehint">They hear you directly, live.</div>
       <button id="all">Hold to talk to everyone</button>
       <input id="speakall" placeholder="Type a line → every phone hears it in the voice (Enter)">
       <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>4</kbd> = one phone · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
@@ -113,7 +119,7 @@
 const KEY = new URLSearchParams(location.search).get('k');
 const $ = (id) => document.getElementById(id);
 const MAX = 4;
-let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [];
+let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [], micAs = 'own';
 const people = new Map();
 $('lib').href = '/library?k=' + KEY;
 
@@ -212,7 +218,7 @@ function paintState(p) {
   if (s.hidden) { txt = '⚠ phone screen is off — they can’t hear anything'; cls += ' hot'; }
   else if (s.headsetDropped) { txt = '⚠ headset out of range — AI paused until it reconnects'; cls += ' hot'; }
   else if (p.waiting) txt = 'phone is on the consent screen';
-  else if (s.held) { txt = 'you are talking'; cls += ' hot'; }
+  else if (s.held) { txt = micAs === 'voice' ? 'you are talking — they’ll hear it in the AI voice when you let go' : 'you are talking'; cls += ' hot'; }
   else if (s.headset === false && !p.waiting && !s.speaking && !s.thinking) { txt = 'no headset on the phone — sound comes from the phone itself'; cls += ' hot'; }
   else if (s.speaking) { txt = 'AI speaking…'; cls += ' ai'; }
   else if (s.thinking) { txt = 'AI thinking…'; cls += ' ai'; }
@@ -227,7 +233,7 @@ function appendLine(p, l, replay) {
   const d = document.createElement('div');
   if (l.who === 'error') { d.className = 'err'; d.textContent = '⚠ ' + l.text; }
   else if (l.who === 'note') { d.className = 'note'; d.textContent = l.text; }
-  else { d.className = l.who === 'typed' ? 'ai' : l.who; d.innerHTML = `<b>${l.who === 'ai' ? 'AI' : l.who === 'typed' ? 'Voice (typed)' : l.who === 'director' ? 'You' : esc(p.name || 'Them')}</b>${esc(l.text)}`; }
+  else { d.className = ['typed', 'voiced'].includes(l.who) ? 'ai' : l.who; d.innerHTML = `<b>${l.who === 'ai' ? 'AI' : l.who === 'typed' ? 'Voice (typed)' : l.who === 'voiced' ? 'You (AI voice)' : l.who === 'director' ? 'You' : esc(p.name || 'Them')}</b>${esc(l.text)}`; }
   const atBottom = p.log.scrollHeight - p.log.scrollTop - p.log.clientHeight < 40;
   p.log.appendChild(d);
   if (atBottom || replay) p.log.scrollTop = p.log.scrollHeight;
@@ -235,9 +241,9 @@ function appendLine(p, l, replay) {
 
 function setTalk(target) {
   if (talkTarget === target) return;
-  if (talkTarget !== null) ws.send(JSON.stringify({ type: 'talk', target: talkTarget, on: false }));
+  if (talkTarget !== null) ws.send(JSON.stringify({ type: 'talk', target: talkTarget, on: false, as: micAs }));
   talkTarget = target;
-  if (target !== null) ws.send(JSON.stringify({ type: 'talk', target, on: true }));
+  if (target !== null) ws.send(JSON.stringify({ type: 'talk', target, on: true, as: micAs }));
   $('all').classList.toggle('on', target === 0);
 }
 function bindHold(btn, target) {
@@ -247,11 +253,19 @@ function bindHold(btn, target) {
 }
 function mark() { const t = prompt('Marker label (optional):', '') ; if (t === null) return; ws.send(JSON.stringify({ type: 'mark', text: t || 'Mark' })); }
 $('mark').onclick = mark;
+$('endsession').onclick = () => { if (confirm('End this session? Recordings are closed and exported, and a fresh session starts. Phones stay connected.')) ws.send(JSON.stringify({ type: 'endSession' })); };
+for (const b of document.querySelectorAll('#micmode button')) b.onclick = () => {
+  micAs = b.dataset.as;
+  document.querySelectorAll('#micmode button').forEach((x) => x.classList.toggle('sel', x === b));
+  $('micmodehint').textContent = micAs === 'voice'
+    ? 'They hear what you said, transcribed and spoken in each phone’s AI voice, about 2 s after you let go.'
+    : 'They hear you directly, live.';
+};
 
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws?role=control&k=${KEY}`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => ws.send(JSON.stringify({ type: 'getBrief' }));
+  ws.onopen = () => { ws.send(JSON.stringify({ type: 'getBrief' })); if (connect.seen) { loadInfo(); for (const p of people.values()) if (p.log) p.log.innerHTML = ''; } connect.seen = true; };
   ws.onmessage = (e) => {
     if (typeof e.data !== 'string') {
       const id = new Uint16Array(e.data, 0, 1)[0];
@@ -264,6 +278,7 @@ function connect() {
     if (m.type === 'transcript') appendLine(person(m.id), m);
     if (m.type === 'error') appendLine(person(m.id), { who: 'error', text: m.text });
     if (m.type === 'cameras') renderCams(m.list);
+    if (m.type === 'sessionEnding') { toast('Saving this session — a new one starts in a few seconds…'); for (const p of people.values()) { p.lines = []; } }
     if (m.type === 'marked') toast(`Marker at ${m.t}s: ${m.text}`);
     if (m.type === 'brief') {
       if (!m.saved || document.activeElement !== $('brief')) $('brief').value = m.text;

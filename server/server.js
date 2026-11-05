@@ -76,16 +76,19 @@ class WavTrack {
     fs.writeSync(this.fd, h, 0, 44, 0); this.lastHeader = Date.now();
   }
   write(pcm) {   // pads silence so every track starts at the session start and stays on its clock
+    if (this.closed) return;
     const n = pcm.length >> 1, now = Date.now();
     const gap = Math.floor(((now - T0) / 1000) * RATE) - n - this.samples;
     if (gap > RATE * 0.15) { fs.writeSync(this.fd, Buffer.alloc(gap * 2), 0, gap * 2, 44 + this.samples * 2); this.samples += gap; }
     fs.writeSync(this.fd, pcm, 0, n * 2, 44 + this.samples * 2); this.samples += n;
     if (now - this.lastHeader > 2000) this.writeHeader();
   }
-  close() { this.writeHeader(); fs.closeSync(this.fd); }
+  close() { if (this.closed) return; this.closed = true; this.writeHeader(); fs.closeSync(this.fd); }
 }
 const tracks = new Map();
-const track = (name) => { if (!tracks.has(name)) tracks.set(name, new WavTrack(name)); return tracks.get(name); };
+let closing = false;
+const NULL_TRACK = { write() {} };
+const track = (name) => { if (closing) return NULL_TRACK; if (!tracks.has(name)) tracks.set(name, new WavTrack(name)); return tracks.get(name); };
 
 // ---------- cameras ----------
 const cameras = loadConfig(__dirname).map((c) => new Camera(c, SESSION_DIR, T0, (type, data, loud) => {
@@ -359,9 +362,20 @@ setInterval(() => {
 setInterval(() => toControls({ type: 'cameras', list: cameras.map((c) => c.status()) }), 2000);
 
 // ---------- human director talk ----------
+// Speaks text word-for-word in the phone's chosen AI voice (typed lines, and the director's speech in "AI voice" mode).
+function speakAs(t, text, who) {
+  if (!t || !t.ws) return;
+  stopAi(t, 'director ' + who);
+  const turn = ++t.turn;
+  t.history.push({ role: 'assistant', content: text + ' [these words came from the human director and were spoken in your voice]' });
+  transcript(t, who, text);
+  t.lastActivity = Date.now();
+  say(t, text, turn);
+}
+
 let talk = null;
-function talkStart(target) {
-  talk = { targets: new Set(), pcm: [] };
+function talkStart(target, as) {
+  talk = { targets: new Set(), pcm: [], as: as === 'voice' ? 'voice' : 'own' };
   for (const s of sessions.values()) {
     if (!s.ws || (target !== 0 && target !== s.id)) continue;
     talk.targets.add(s.id); stopAi(s, 'human director cut in'); s.edHold = true; state(s);
@@ -375,6 +389,7 @@ async function talkStop() {
   let text = '';
   try { text = (await ai.transcribe(Buffer.concat(t.pcm))).trim(); } catch (e) { return console.error('  director transcription: ' + e.message); }
   if (!text) return;
+  if (t.as === 'voice') { for (const id of t.targets) speakAs(sessions.get(id), text, 'voiced'); return; }
   for (const id of t.targets) {
     const s = sessions.get(id); if (!s) continue;
     transcript(s, 'director', text);
@@ -407,6 +422,7 @@ wss.on('connection', (ws, req) => {
         if (!talk) talkStart(target);
         talk.pcm.push(pcm);
         track('director-mic').write(pcm);
+        if (talk.as === 'voice') return;   // AI-voice mode: they hear it after transcription, in the AI voice
         for (const id of talk.targets) {
           const s = sessions.get(id);
           if (s && s.ws && s.ws.readyState === 1) s.ws.send(pcm);
@@ -416,7 +432,8 @@ wss.on('connection', (ws, req) => {
       }
       let m; try { m = JSON.parse(data); } catch { return; }
       const s = sessions.get(m.id);
-      if (m.type === 'talk') { logEvent(m.on ? 'talk_start' : 'talk_stop', { target: m.target }); if (m.on) talkStart(m.target); else talkStop(); }
+      if (m.type === 'talk') { logEvent(m.on ? 'talk_start' : 'talk_stop', { target: m.target, as: m.as }); if (m.on) talkStart(m.target, m.as); else talkStop(); }
+      if (m.type === 'endSession') { toControls({ type: 'sessionEnding' }); shutdown(true); }
       if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() }); }
       if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
       if (m.type === 'end' && s) endParticipant(s, 'ended by director');
@@ -428,16 +445,7 @@ wss.on('connection', (ws, req) => {
       }
       if (m.type === 'speak' && m.text) {   // typed by the director, spoken word for word in the AI's voice
         const text = String(m.text).trim().slice(0, 600);
-        const targets = m.id ? [sessions.get(m.id)] : [...sessions.values()];
-        for (const t of targets) {
-          if (!t || !t.ws) continue;
-          stopAi(t, 'director typed a line');
-          const turn = ++t.turn;
-          t.history.push({ role: 'assistant', content: text + ' [these words were typed by the human director and spoken in your voice]' });
-          transcript(t, 'typed', text);
-          t.lastActivity = Date.now();
-          say(t, text, turn);
-        }
+        for (const t of (m.id ? [sessions.get(m.id)] : [...sessions.values()])) speakAs(t, text, 'typed');
       }
       if (m.type === 'mark') { logEvent('mark', { text: String(m.text || 'Mark').slice(0, 200) }); toControls({ type: 'marked', t: clock(), text: m.text || 'Mark' }); }
       if (m.type === 'instruct' && s && m.text && !s.waiting) {
@@ -556,9 +564,9 @@ server.listen(PORT, async () => {
 });
 
 // ---------- shutdown: close everything, convert video, write exports ----------
-let closing = false;
-async function shutdown() {
+async function shutdown(restart) {
   if (closing) return; closing = true;
+  for (const c of wss.clients) { try { c.close(1012, 'session ending'); } catch {} }
   console.log('\n  stopping — finishing recordings…');
   for (const s of sessions.values()) endParticipant(s, 'session ended');
   logEvent('session_end');
@@ -581,7 +589,7 @@ async function shutdown() {
     console.log(`  exports written: timeline.fcpxml, markers.csv (${ex.markers})${ex.subtitles.length ? ', ' + ex.subtitles.join(', ') : ''}`);
   } catch (e) { console.log('  ! export failed: ' + e.message); }
   console.log('\n  saved: ' + SESSION_DIR + '\n');
-  process.exit(0);
+  process.exit(restart === true ? 75 : 0);   // 75 = start a fresh session (see run.js)
 }
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown(false));
+process.on('SIGTERM', () => shutdown(false));

@@ -54,21 +54,38 @@ const voiceOf = (id) => settings.voices[id] || ai.VOICES[0].name;
 const styleOf = (id) => ({ emotion: 'neutral', pitch: 0, speed: 1, ...(settings.styles[id] || {}) });
 
 // ---------- session folder ----------
+// Two modes, chosen by run.js. STANDBY: nothing is recorded; you prepare the next session (name, notes,
+// documents, people), kept in recordings/_next. RECORDING: a new session folder, which takes over
+// whatever was prepared. "Start session" and "End session" switch between them.
+const STANDBY = process.env.EARPIECE_MODE !== 'record';
+const NEXT_DIR = path.join(REC_ROOT, '_next');
 const T0 = Date.now();
-const stamp = new Date(T0 - new Date(T0).getTimezoneOffset() * 60000).toISOString().replace(/[:T]/g, '-').slice(0, 19);
-const SESSION_DIR = path.join(REC_ROOT, stamp);
+const stamp = STANDBY ? '_next' : new Date(T0 - new Date(T0).getTimezoneOffset() * 60000).toISOString().replace(/[:T]/g, '-').slice(0, 19);
+const SESSION_DIR = STANDBY ? NEXT_DIR : path.join(REC_ROOT, stamp);
 const AUDIO_DIR = path.join(SESSION_DIR, 'audio');
-fs.mkdirSync(AUDIO_DIR, { recursive: true });
+fs.mkdirSync(STANDBY ? NEXT_DIR : AUDIO_DIR, { recursive: true });
 const clock = () => ((Date.now() - T0) / 1000).toFixed(2);
 const session = { name: stamp, title: '', start_iso: new Date(T0).toISOString(), start_epoch_ms: T0, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, participants: [], cameras: [] };
-const saveSession = () => fs.writeFileSync(path.join(SESSION_DIR, 'session.json'), JSON.stringify(session, null, 2));
+const saveSession = () => fs.writeFileSync(path.join(SESSION_DIR, STANDBY ? 'next.json' : 'session.json'), JSON.stringify(session, null, 2));
+// what was prepared in standby: title, notes, documents (people are adopted below)
+const prepared = (() => { try { return JSON.parse(fs.readFileSync(path.join(NEXT_DIR, 'next.json'), 'utf8')); } catch { return null; } })();
+if (prepared) for (const k of ['title', 'notes', 'documents']) if (prepared[k]) session[k] = prepared[k];
+let adopted = false;
+if (!STANDBY && fs.existsSync(NEXT_DIR)) {   // a new recording takes over the prepared documents and people
+  try {
+    if (fs.existsSync(path.join(NEXT_DIR, 'documents'))) fs.renameSync(path.join(NEXT_DIR, 'documents'), path.join(SESSION_DIR, 'documents'));
+    if (fs.existsSync(path.join(NEXT_DIR, 'people.json'))) fs.copyFileSync(path.join(NEXT_DIR, 'people.json'), path.join(SESSION_DIR, 'people.json'));
+    fs.rmSync(NEXT_DIR, { recursive: true, force: true });
+    adopted = true;
+  } catch (e) { console.log('  ! could not take over the prepared session: ' + e.message); }
+}
 
 // ---------- people: everyone who takes part, with their details and documents (release forms etc.) ----------
 // Kept in people.json in the session folder. Contact details stay there: the catalogue only uses names
 // and whether a release is on file.
 const readPeople = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'people.json'), 'utf8')); } catch { return []; } };
 const writePeople = (dir, list) => fs.writeFileSync(path.join(dir, 'people.json'), JSON.stringify(list, null, 2));
-let people = [];
+let people = readPeople(SESSION_DIR);
 const newPid = () => 'p' + crypto.randomBytes(3).toString('hex');
 const savePeople = () => { writePeople(SESSION_DIR, people); toControls({ type: 'people', list: people }); };
 const personBy = (pid) => people.find((x) => x.pid === pid);
@@ -88,6 +105,10 @@ const safeName = (s) => String(s || '').normalize('NFKD').replace(/[^\w.\- ]+/g,
 
 // ---------- registrations (welcome station) ----------
 const registry = new Registry(__dirname);
+if (adopted) {   // registrations added to "the next session" now belong to this one
+  for (const x of registry.list) for (const s of x.sessions) if (s.session === '_next') s.session = stamp;
+  registry.save();
+}
 const regView = (x) => ({ pid: x.pid, number: x.number, name: x.name, email: x.email, face: x.face, registered: x.registered, notes: x.notes || '', sessions: x.sessions, photo: `/participants/${x.pid}/photo.jpg` });
 const recentRegs = () => registry.list.filter((x) => Date.now() - Date.parse(x.registered) < 36 * 3600e3).map(regView);
 // Connect a registration to a session — live or finished — optionally to one phone visit in it.
@@ -135,8 +156,9 @@ function unlinkPerson(dir, pid) {   // undo a link that has no phone visit (some
 }
 const joinHits = new Map();   // ip -> recent registration times (keeps the public form from being flooded)
 saveSession();
-const events = fs.createWriteStream(path.join(SESSION_DIR, 'events.jsonl'), { flags: 'a' });
-const transcriptFile = fs.createWriteStream(path.join(SESSION_DIR, 'transcript.txt'), { flags: 'a' });
+const NULL_STREAM = { write() {}, end(cb) { if (cb) cb(); } };
+const events = STANDBY ? NULL_STREAM : fs.createWriteStream(path.join(SESSION_DIR, 'events.jsonl'), { flags: 'a' });
+const transcriptFile = STANDBY ? NULL_STREAM : fs.createWriteStream(path.join(SESSION_DIR, 'transcript.txt'), { flags: 'a' });
 function logEvent(type, data = {}) { events.write(JSON.stringify({ t: clock(), type, ...data }) + '\n'); }
 
 class WavTrack {
@@ -165,13 +187,13 @@ class WavTrack {
 const tracks = new Map();
 let closing = false;
 const NULL_TRACK = { write() {} };
-const track = (name) => { if (closing) return NULL_TRACK; if (!tracks.has(name)) tracks.set(name, new WavTrack(name)); return tracks.get(name); };
+const track = (name) => { if (closing || STANDBY) return NULL_TRACK; if (!tracks.has(name)) tracks.set(name, new WavTrack(name)); return tracks.get(name); };
 
 // ---------- cameras ----------
 const cameras = loadConfig(__dirname).map((c) => new Camera(c, SESSION_DIR, T0, (type, data, loud) => {
   logEvent(type, data);
   if (loud) console.log(`  ! ${data.name || data.cam}: ${type.replace('_', ' ')} ${data.detail || data.message || ''}`);
-}));
+}, { previewOnly: STANDBY }));
 session.cameras = cameras.map((c) => ({ id: c.id, name: c.name }));
 // ---------- room microphones ----------
 const roomCfg = loadRoomMics(__dirname);
@@ -284,7 +306,7 @@ const server = http.createServer(async (req, res) => {
         const url = base + (c.id ? '&cam=' + c.id : '');
         screens.items.push({ id: c.id, name: c.name, url, qr: await QRCode.toString(url, { type: 'svg', margin: 1 }) });
       }
-      return json(res, { phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()), roomMics: roomMics ? roomMics.status() : null, screens });
+      return json(res, { standby: STANDBY, instance: T0, title: session.title || '', phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()), roomMics: roomMics ? roomMics.status() : null, screens });
     }
     if (p === '/api/registry') return json(res, { list: [...registry.list].reverse().map(regView), consent: registry.consent() });
     if (p === '/api/registry-update' && req.method === 'POST') {
@@ -303,7 +325,7 @@ const server = http.createServer(async (req, res) => {
       } catch (e) { return json(res, { error: e.message }, 502); }
     }
     if (p === '/api/sessions') {
-      const list = fs.existsSync(REC_ROOT) ? fs.readdirSync(REC_ROOT).filter((d) => fs.existsSync(path.join(REC_ROOT, d, 'session.json'))).sort().reverse() : [];
+      const list = fs.existsSync(REC_ROOT) ? fs.readdirSync(REC_ROOT).filter((d) => !d.startsWith('_') && fs.existsSync(path.join(REC_ROOT, d, 'session.json'))).sort().reverse() : [];
       return json(res, list.map((d) => {
         let s = {}; try { s = JSON.parse(fs.readFileSync(path.join(REC_ROOT, d, 'session.json'), 'utf8')); } catch {}
         return { name: d, title: s.title || '', start: s.start_iso, participants: (s.participants || []).map((x) => x.name || `Phone ${x.phone}`), duration: s.exports?.duration || null, cameras: (s.cameras || []).length, live: d === stamp };
@@ -555,6 +577,11 @@ function stopAi(s, why) {
 }
 
 function beginParticipant(s, name, pid) {
+  if (STANDBY) {   // nobody starts until the session is recording
+    send(s.ws, { type: 'reset' });
+    toControls({ type: 'error', id: 0, text: `Phone ${s.id}: not recording yet — press Start session first.` });
+    return false;
+  }
   if (!s.waiting) endParticipant(s, 'new participant');
   // the person record: given by the control room, or matched by name to someone added but not started yet
   let who = pid && personBy(pid);
@@ -708,7 +735,8 @@ wss.on('connection', (ws, req) => {
       let m; try { m = JSON.parse(data); } catch { return; }
       const s = sessions.get(m.id);
       if (m.type === 'talk') { logEvent(m.on ? 'talk_start' : 'talk_stop', { target: m.target, as: m.as }); if (m.on) talkStart(m.target, m.as); else talkStop(); }
-      if (m.type === 'endSession') { toControls({ type: 'sessionEnding' }); shutdown(true); }
+      if (m.type === 'endSession' && !STANDBY) { toControls({ type: 'sessionEnding' }); shutdown(true); }
+      if (m.type === 'startSession' && STANDBY) { toControls({ type: 'sessionStarting' }); shutdown('record'); }
       if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() }); }
       if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
       if (m.type === 'end' && s) endParticipant(s, 'ended by director');
@@ -750,15 +778,14 @@ wss.on('connection', (ws, req) => {
         try {
           const t = m.type === 'arrivalStart' && sessions.get(Number(m.phone));
           if (m.type === 'arrivalStart' && !(t && t.ws)) throw new Error('That phone isn\'t connected.');
-          const x = linkPerson(SESSION_DIR, m.pid, -1, t ? 'on phone ' + t.id : 'added in the control room');
-          if (t) { beginParticipant(t, x.name, x.pid); send(t.ws, { type: 'welcome', id: t.id, waiting: false, name: t.name }); }
+          const x = linkPerson(SESSION_DIR, m.pid, -1, STANDBY ? 'added to the next session' : t ? 'on phone ' + t.id : 'added in the control room');
+          if (t && beginParticipant(t, x.name, x.pid) !== false) send(t.ws, { type: 'welcome', id: t.id, waiting: false, name: t.name });
         } catch (e) { send(ws, { type: 'error', id: Number(m.phone) || 0, text: e.message }); }
       }
       if (m.type === 'personStart') {   // start someone on a phone from here, instead of the phone's own screen
         const x = personBy(m.pid), t = sessions.get(Number(m.phone));
         if (x && t && t.ws) {
-          beginParticipant(t, x.name, x.pid);
-          send(t.ws, { type: 'welcome', id: t.id, waiting: false, name: t.name });   // takes the phone past its start screen
+          if (beginParticipant(t, x.name, x.pid) !== false) send(t.ws, { type: 'welcome', id: t.id, waiting: false, name: t.name });   // takes the phone past its start screen
         } else send(ws, { type: 'error', id: Number(m.phone) || 0, text: 'That phone isn\'t connected.' });
       }
       if (m.type === 'getBrief') { let b = ''; try { b = fs.readFileSync(BRIEF_FILE, 'utf8'); } catch {} send(ws, { type: 'brief', text: b }); }
@@ -860,7 +887,7 @@ function startQuickTunnel() {
 server.listen(PORT, async () => {
   const controlUrl = `http://localhost:${PORT}/control?k=${CONTROL_KEY}`;
   console.log('\n  EARPIECE' + (ai.MOCK ? '  (MOCK AI)' : ''));
-  console.log('  session folder: ' + SESSION_DIR);
+  console.log(STANDBY ? '  STANDBY — nothing is recording. Prepare the next session, then press Start session in the control room.' : '  RECORDING — session folder: ' + SESSION_DIR);
   if (!ai.MOCK && !process.env.OPENAI_API_KEY) console.log('  ! no OPENAI_API_KEY in .env — the AI will not work');
   if (!ai.MOCK) {
     try { await fetch((process.env.POCKET_TTS_URL || 'http://localhost:8123').replace(/\/+$/, '') + '/', { signal: AbortSignal.timeout(2000) }); console.log('  voice: Watercooler (Pocket-TTS) reachable'); }
@@ -869,13 +896,13 @@ server.listen(PORT, async () => {
   console.log(cameras.length ? `  cameras: ${cameras.map((c) => c.name).join(', ')}` : '  cameras: none (add them in cameras.json)');
   for (const c of cameras) c.start();
   console.log(roomMics ? `  room mics: ${roomCfg.names.join(', ')} (${roomCfg.device})` : '  room mics: none (add them in roommics.json)');
-  if (roomMics) roomMics.start();
+  if (roomMics && !STANDBY) roomMics.start();
   console.log('\n  CONTROL ROOM (open on this computer, use headphones):\n  ' + controlUrl);
   console.log('  LIBRARY: http://localhost:' + PORT + '/library?k=' + CONTROL_KEY);
   if (process.platform === 'darwin' && !process.env.NO_OPEN) spawn('open', [controlUrl]);
   if (process.env.PUBLIC_URL) announce(process.env.PUBLIC_URL);
   else if (!process.env.NO_TUNNEL) startQuickTunnel();
-  logEvent('session_start');
+  logEvent('session_start', { prepared: adopted });
 });
 
 // ---------- catalogue: built in the background after a session (see catalogue.js) ----------
@@ -891,6 +918,13 @@ function startCatalogue(dir) {
 // ---------- shutdown: close everything, convert video, write exports ----------
 async function shutdown(restart) {
   if (closing) return; closing = true;
+  if (STANDBY) {   // nothing to save but the preparation; let the cameras go so the recording can open them
+    for (const c of wss.clients) { try { c.close(1012, restart === 'record' ? 'session starting' : 'stopping'); } catch {} }
+    for (const c of cameras) c.stop();
+    await new Promise((r) => { const t0 = Date.now(); const check = () => (cameras.every((c) => !c.prev || c.prev.exitCode !== null || c.prev.signalCode) || Date.now() - t0 > 5000) ? r() : setTimeout(check, 100); check(); });
+    if (restart === 'record') console.log('\n  — starting the session —\n');
+    process.exit(restart === 'record' ? 76 : 0);   // 76 = start recording (see run.js)
+  }
   for (const c of wss.clients) { try { c.close(1012, 'session ending'); } catch {} }
   console.log('\n  stopping — finishing recordings…');
   for (const s of sessions.values()) endParticipant(s, 'session ended');
@@ -919,7 +953,7 @@ async function shutdown(restart) {
   } catch (e) { console.log('  ! export failed: ' + e.message); }
   if (process.env.NO_CATALOGUE !== '1') { try { startCatalogue(SESSION_DIR); console.log('  building the catalogue in the background — progress shows in the library'); } catch (e) { console.log('  ! catalogue: ' + e.message); } }
   console.log('\n  saved: ' + SESSION_DIR + '\n');
-  process.exit(restart === true ? 75 : 0);   // 75 = start a fresh session (see run.js)
+  process.exit(restart === true ? 75 : 0);   // 75 = back to standby (see run.js)
 }
 process.on('SIGINT', () => shutdown(false));
 process.on('SIGTERM', () => shutdown(false));

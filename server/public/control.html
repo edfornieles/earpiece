@@ -88,6 +88,13 @@
   .arr .t b { font-weight:500; } .arr .t b span { color:#e3c45a; margin-right:6px; }
   .arr .row button, .arr .row select { padding:6px 9px; font-size:13px; white-space:nowrap; }
   #screenqr svg { width:150px; height:auto; background:#fff; border-radius:8px; }
+  #startsession { background:var(--hot); border-color:var(--hot); font-weight:600; }
+  .rec.standby { color:var(--dim); } .rec.standby::before { content:'○'; }
+  #standbybar { display:none; background:#1b1a14; border:1px solid #4a4220; border-radius:12px; padding:12px 16px; margin-bottom:16px; color:#e8dcb0; font-size:13px; }
+  #standbybar b { color:#fff; font-weight:600; }
+  body.standby #standbybar { display:block; }
+  body.standby #mark, body.standby #endsession, body.standby .pstart, body.standby .pphone, body.standby .arr select, body.standby .arr .go { display:none !important; }
+  body:not(.standby) #startsession { display:none; }
   #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#222; border:1px solid var(--line); padding:8px 14px; border-radius:8px; display:none; }
 </style>
 </head>
@@ -97,21 +104,23 @@
     <input id="stitle" placeholder="Name this session…" title="Session name — saved with the recordings"></div>
   <nav>
     <button id="mark" title="Drop a marker on the timeline (M)">Mark <kbd>M</kbd></button>
-    <button id="endsession" title="Close this session's recordings and exports, start a new one">End session</button>
+    <button id="startsession" title="Start recording: cameras, room mics, phones — with everything you've prepared">● Start session</button>
+    <button id="endsession" title="Stop recording and save; go back to standby to prepare the next session">End session</button>
     <a id="files" target="_blank">Files ↗</a>
     <a id="lib" target="_blank">Library ↗</a>
-    <span class="rec">REC</span>
+    <span class="rec" id="recstate">REC</span>
   </nav>
 </header>
 <main>
   <section>
+    <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
     <div id="cams"></div>
     <div id="room"></div>
     <div id="grid"></div>
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="_blank" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
       <div id="arrivals"></div>
-      <h3><span>People this session</span><button id="addperson">+ Add person</button></h3>
+      <h3><span id="peoplehead">People this session</span><button id="addperson">+ Add person</button></h3>
       <div id="folk"></div>
       <div class="hint" style="margin-top:8px">Everyone who starts on a phone appears here. Add people ahead of time to fill in details and start them on a phone from here. Drop a file on a person to attach it (release form, ID photo, notes). Contact details stay in this session's folder — they aren't given to the AI or put in the edit notes.</div>
     </div>
@@ -331,7 +340,16 @@ function bindHold(btn, target) {
 }
 function mark() { const t = prompt('Marker label (optional):', '') ; if (t === null) return; ws.send(JSON.stringify({ type: 'mark', text: t || 'Mark' })); }
 $('mark').onclick = mark;
-$('endsession').onclick = () => { if (confirm('End this session? Recordings are closed and exported, and a fresh session starts. Phones stay connected.')) ws.send(JSON.stringify({ type: 'endSession' })); };
+$('endsession').onclick = () => { if (confirm('End this session? Recording stops, everything is saved and exported, and you go back to standby to prepare the next one. Phones reconnect by themselves.')) ws.send(JSON.stringify({ type: 'endSession' })); };
+$('startsession').onclick = () => { if (confirm(`Start recording${$('stitle').value ? ' “' + $('stitle').value + '”' : ''} now?`)) { $('stitle').blur(); $('snotes').blur(); ws.send(JSON.stringify({ type: 'startSession' })); } };
+function applyMode() {
+  const sb = !!info?.standby;
+  document.body.classList.toggle('standby', sb);
+  $('recstate').textContent = sb ? 'STANDBY' : 'REC'; $('recstate').className = 'rec' + (sb ? ' standby' : '');
+  $('peoplehead').textContent = sb ? 'People for the next session' : 'People this session';
+  $('stitle').placeholder = sb ? 'Name the next session…' : 'Name this session…';
+  for (const b of document.querySelectorAll('.arr .add')) b.textContent = sb ? 'Add to next session' : 'Add';
+}
 for (const b of document.querySelectorAll('#micmode button')) b.onclick = () => {
   micAs = b.dataset.as;
   document.querySelectorAll('#micmode button').forEach((x) => x.classList.toggle('sel', x === b));
@@ -362,6 +380,7 @@ function connect() {
     if (m.type === 'arrival') { toast(`New arrival: #${m.person.number} ${m.person.name}`); ping(); }
     if (m.type === 'cameras') renderCams(m.list);
     if (m.type === 'room') renderRoom(m.room);
+    if (m.type === 'sessionStarting') toast('Starting the session — recording in a few seconds…');
     if (m.type === 'sessionEnding') { toast('Saving this session — a new one starts in a few seconds…'); for (const p of people.values()) { p.lines = []; } }
     if (m.type === 'marked') toast(`Marker at ${m.t}s: ${m.text}`);
     if (m.type === 'brief') {
@@ -381,6 +400,7 @@ async function loadInfo() {
   info = await (await fetch('/api/info?k=' + KEY)).json();
   $('session').innerHTML = `Folder: ${esc(info.session)}`;
   renderScreens();
+  applyMode();
   if (info.mock) $('mock').textContent = '· MOCK AI';
   renderCams(info.cameras);
   renderRoom(info.roomMics);
@@ -488,6 +508,7 @@ function renderArrivals() {
     };
     el.querySelector('.add').onclick = () => ws.send(JSON.stringify({ type: 'arrivalAdd', pid }));
   });
+  applyMode();
 }
 $('addperson').onclick = () => ws.send(JSON.stringify({ type: 'personSave', ref: 'new', name: '' }));
 

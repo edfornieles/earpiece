@@ -10,8 +10,12 @@ npm start
 ```
 
 - **Control room** opens in the browser (the link stays the same every time, so bookmark it). Headphones on, click **Start control room**.
-- **Library**: the link in the top right.
-- `Ctrl+C` ends the session. The video is converted for the editor and the exports are written. Wait for "saved:".
+- It starts in **standby**: nothing is recorded. Prepare the next session — name, notes, documents, people, arrivals. Cameras show live and phones can connect.
+- **● Start session** starts recording, taking over everything you prepared.
+- **End session** stops recording, saves and exports, and goes back to standby for the next one.
+- **Library** and **Files**: the links in the top right.
+- `Ctrl+C` stops everything (if a session is recording it's saved first — wait for "saved:").
+- `START_RECORDING=1 npm start` skips standby.
 
 Before a session, quit **Stremio**. Its background server uses up the Mac's network connections, and then the tunnel and AI stop working.
 

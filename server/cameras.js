@@ -42,18 +42,22 @@ function inputArgs(url, preview) {
 }
 
 class Camera {
-  constructor(cfg, sessionDir, T0, log) {
+  constructor(cfg, sessionDir, T0, log, opts = {}) {
     Object.assign(this, cfg);
     this.slug = safe(cfg.name);
     this.dir = path.join(sessionDir, 'video', this.slug);
-    fs.mkdirSync(this.dir, { recursive: true });
+    this.previewOnly = !!opts.previewOnly;   // standby between sessions: show the picture, record nothing
+    if (!this.previewOnly) fs.mkdirSync(this.dir, { recursive: true });
     this.T0 = T0; this.log = log;
     this.frame = null; this.frameAt = 0; this.viewers = new Set();
     this.segments = [];          // { file, wallStart }
     this.stopped = false; this.recording = false; this.previewing = false;
   }
 
-  start() { this.startRecorder(); if (!isLocal(this.main)) this.startPreview(); }
+  start() {
+    if (this.previewOnly) return this.startPreview();
+    this.startRecorder(); if (!isLocal(this.main)) this.startPreview();
+  }
 
   // ---- recording ----
   startRecorder() {
@@ -106,7 +110,9 @@ class Camera {
   // ---- live preview (small, low frame rate JPEGs) ----
   startPreview() {
     if (this.stopped) return;
-    const args = ['-hide_banner', '-loglevel', 'error', ...inputArgs(this.preview, true),
+    const src = this.preview || this.main;
+    const input = isLocal(src) && src !== 'test' ? localInput(src).input : inputArgs(src, true);
+    const args = ['-hide_banner', '-loglevel', 'error', ...input,
       '-an', '-vf', `fps=${PREVIEW_FPS},scale='min(${PREVIEW_W},iw)':-2`, '-q:v', '6', '-f', 'mjpeg', 'pipe:1'];
     const p = spawn('ffmpeg', args);
     this.prev = p;
@@ -148,6 +154,7 @@ class Camera {
   }
   finalize() {
     const out = [];
+    if (this.previewOnly) return out;
     for (const run of this.runs || []) {
       let rows = [];
       try { rows = fs.readFileSync(run.listFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => l.split(',')); } catch {}

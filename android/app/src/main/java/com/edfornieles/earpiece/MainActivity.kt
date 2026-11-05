@@ -114,7 +114,7 @@ class MainActivity : Activity() {
             slotLabel.text = if (slot > 0) "Phone $slot" else ""
             statusText.text = when {
                 !AudioService.connected -> AudioService.status
-                !AudioService.headset -> "no headset — connect the earpiece"
+                !AudioService.headset -> "connected · phone speaker & mic (no headset)"
                 else -> "connected · " + AudioService.headsetName
             }
             if (AudioService.resetCount != seenReset) {

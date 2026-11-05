@@ -282,7 +282,7 @@ class AudioService : Service() {
             val outs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             val bt = outs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
             val any = bt ?: outs.firstOrNull { it.type in headsetTypes }
-            if (bt != null) routeTo(am, bt)
+            if (bt != null) routeTo(am, bt) else if (any != null) routeWired(am) else routeSpeaker(am)
             val now = any != null
             val name = any?.productName?.toString() ?: ""
             if (now != headset || name != headsetName) {
@@ -300,12 +300,34 @@ class AudioService : Service() {
         main.postDelayed(object : Runnable { override fun run() { if (!stopping) { check.run(); main.postDelayed(this, 5000) } } }, 5000)
     }
 
+    /** No headset: play through the phone's loudspeaker and listen with its own microphone. */
+    private fun routeSpeaker(am: AudioManager) {
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                val spk = am.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                if (spk != null && am.communicationDevice?.id != spk.id) am.setCommunicationDevice(spk)
+            } else {
+                @Suppress("DEPRECATION")
+                run { if (am.isBluetoothScoOn) { am.stopBluetoothSco(); am.isBluetoothScoOn = false }; if (!am.isSpeakerphoneOn) am.isSpeakerphoneOn = true }
+            }
+        } catch (_: Exception) {}
+    }
+
+    /** Wired earphones: let Android route to them (and their mic, if they have one). */
+    private fun routeWired(am: AudioManager) {
+        try {
+            if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
+            else @Suppress("DEPRECATION") run { if (am.isSpeakerphoneOn) am.isSpeakerphoneOn = false; if (am.isBluetoothScoOn) { am.stopBluetoothSco(); am.isBluetoothScoOn = false } }
+        } catch (_: Exception) {}
+    }
+
     private fun routeTo(am: AudioManager, dev: AudioDeviceInfo) {
         try {
             if (Build.VERSION.SDK_INT >= 31) {
                 if (am.communicationDevice?.id != dev.id) am.setCommunicationDevice(dev)
             } else {
                 @Suppress("DEPRECATION")
+                if (am.isSpeakerphoneOn) am.isSpeakerphoneOn = false
                 if (!am.isBluetoothScoOn) { am.startBluetoothSco(); am.isBluetoothScoOn = true }
             }
         } catch (_: Exception) {}

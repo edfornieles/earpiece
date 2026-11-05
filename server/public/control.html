@@ -49,6 +49,8 @@
   .panel h3 { margin:0; font-size:12px; color:var(--dim); font-weight:500; text-transform:uppercase; letter-spacing:.06em; display:flex; justify-content:space-between; }
   #qr svg { width:150px; height:auto; background:#fff; border-radius:8px; }
   #link { word-break:break-all; color:var(--dim); font-size:11px; }
+  details.shape label, #globalvoice label { display:flex; align-items:center; gap:8px; } details.shape input[type=range], #globalvoice input[type=range] { flex:1; width:auto; padding:0; }
+  .row select { width:auto; min-width:0; } .row select.voice { flex:1 1 55%; } .row select.emotion { flex:1 1 45%; }
   .tabs { display:flex; gap:6px; } .tabs button { padding:5px 9px; font-size:12px; } .tabs button.sel { background:var(--fg); color:#000; }
   kbd { background:#222; border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:11px; }
   #gate { position:fixed; inset:0; background:rgba(0,0,0,.85); display:flex; align-items:center; justify-content:center; z-index:9; }
@@ -88,8 +90,13 @@
     </div>
     <div class="panel">
       <h3>Voice</h3>
-      <div class="row"><select id="voiceall" style="flex:1"></select><button id="preview">▶ Preview</button></div>
-      <div class="hint">Sets the voice on every phone (each card can override). Preview plays here, not on the phones.</div>
+      <div id="globalvoice">
+        <div class="row"><select class="voice" style="flex:1"></select><select class="emotion"></select></div>
+        <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
+        <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
+      </div>
+      <div class="row"><button id="preview" class="grow">▶ Preview here</button></div>
+      <div class="hint">Changes here apply to every phone; each card can then differ. Emotion is only available on the expressive voices. Preview plays through your Mac, not the phones.</div>
       <audio id="previewAudio"></audio>
     </div>
     <div class="panel">
@@ -180,7 +187,11 @@ function renderGrid(list) {
         <button class="nudge">Next direction</button>
       </div>
       <input class="speak" placeholder="Type a line → they hear it in the voice (Enter)">
-      <div class="row" style="align-items:center"><span class="hint">Voice</span><select class="voice" style="flex:1"></select></div>
+      <div class="row" style="align-items:center"><select class="voice" style="flex:1" title="Voice"></select><select class="emotion" title="Emotion"></select></div>
+      <details class="shape"><summary class="hint">Pitch &amp; speed</summary>
+        <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
+        <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
+      </details>
       <input class="instruct" placeholder="Private note to the AI (it rephrases), then Enter">
       <div class="log"></div>
       <button class="quiet endp">End participant → ready for next</button>`;
@@ -190,10 +201,7 @@ function renderGrid(list) {
     el.querySelector('.aimode').onclick = () => ws.send(JSON.stringify({ type: 'mode', id, mode: p.mode === 'auto' ? 'off' : 'auto' }));
     el.querySelector('.nudge').onclick = () => ws.send(JSON.stringify({ type: 'nudge', id }));
     el.querySelector('.endp').onclick = () => { if (confirm(`End ${p.name || 'this participant'} on Phone ${id}? The phone goes back to the consent screen.`)) ws.send(JSON.stringify({ type: 'end', id })); };
-    const vs = el.querySelector('.voice');
-    vs.innerHTML = voices.map((v) => `<option>${esc(v)}</option>`).join('');
-    vs.value = p.voice || voices[0] || '';
-    vs.onchange = () => ws.send(JSON.stringify({ type: 'voice', id, voice: vs.value }));
+    wireVoice(el, id, p);
     const spk = el.querySelector('.speak');
     spk.onkeydown = (e) => { if (e.key === 'Enter' && spk.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id, text: spk.value.trim() })); spk.value = ''; } e.stopPropagation(); };
     spk.onkeyup = (e) => e.stopPropagation();
@@ -208,7 +216,7 @@ function renderGrid(list) {
 
 function paintState(p) {
   if (!p.el) return;
-  const vsel = p.el.querySelector('.voice'); if (vsel && p.voice && document.activeElement !== vsel) vsel.value = p.voice;
+  syncVoice(p.el, p.voice, p.style);
   p.el.querySelector('.who').textContent = p.waiting ? 'Waiting for next participant' : (p.name || 'Participant');
   p.el.querySelector('.endp').style.display = p.waiting ? 'none' : '';
   const b = p.el.querySelector('.aimode');
@@ -274,7 +282,7 @@ function connect() {
     }
     const m = JSON.parse(e.data);
     if (m.type === 'participants') renderGrid(m.list);
-    if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, voice: m.voice, st: m }); paintState(p); }
+    if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, voice: m.voice, style: m.style, st: m }); paintState(p); }
     if (m.type === 'transcript') appendLine(person(m.id), m);
     if (m.type === 'error') appendLine(person(m.id), { who: 'error', text: m.text });
     if (m.type === 'cameras') renderCams(m.list);
@@ -301,14 +309,48 @@ async function loadInfo() {
   if (!$('tabs').children.length) info.devices.forEach((d) => { const b = document.createElement('button'); b.textContent = 'Phone ' + d.device; b.onclick = () => showDevice(d.device); $('tabs').appendChild(b); });
   if (info.devices[0]?.qr) showDevice(1); else setTimeout(loadInfo, 1500);
 }
+// ---- voices ----
+function fillVoice(root) {
+  const vs = root.querySelector('.voice');
+  if (vs.options.length !== voices.length) vs.innerHTML = voices.map((v) => `<option>${esc(v.name)}</option>`).join('');
+}
+function syncVoice(root, voice, style) {
+  if (!root || !voices.length) return;
+  fillVoice(root);
+  const vs = root.querySelector('.voice'), em = root.querySelector('.emotion'), pi = root.querySelector('.pitch'), sp = root.querySelector('.speed');
+  style = style || { emotion: 'neutral', pitch: 0, speed: 1 };
+  if (voice && document.activeElement !== vs) vs.value = voice;
+  const emos = (voices.find((v) => v.name === vs.value) || {}).emotions || [];
+  const want = emos.map((e) => `<option>${e}</option>`).join('');
+  if (em.dataset.list !== want) { em.innerHTML = want; em.dataset.list = want; }
+  em.style.display = emos.length ? '' : 'none';
+  if (emos.length && document.activeElement !== em) em.value = emos.includes(style.emotion) ? style.emotion : emos[0];
+  if (document.activeElement !== pi) pi.value = style.pitch;
+  if (document.activeElement !== sp) sp.value = style.speed;
+  root.querySelector('.pv').textContent = (style.pitch > 0 ? '+' : '') + style.pitch;
+  root.querySelector('.sv').textContent = Number(style.speed).toFixed(2) + '×';
+}
+function wireVoice(root, id, p) {
+  fillVoice(root);
+  const send = (extra) => ws.send(JSON.stringify({ type: 'voice', id, ...extra }));
+  root.querySelector('.voice').onchange = (e) => { send({ voice: e.target.value }); };
+  root.querySelector('.emotion').onchange = (e) => send({ emotion: e.target.value });
+  root.querySelector('.pitch').onchange = (e) => send({ pitch: Number(e.target.value) });
+  root.querySelector('.speed').onchange = (e) => send({ speed: Number(e.target.value) });
+  root.querySelector('.pitch').oninput = (e) => (root.querySelector('.pv').textContent = (e.target.value > 0 ? '+' : '') + e.target.value);
+  root.querySelector('.speed').oninput = (e) => (root.querySelector('.sv').textContent = Number(e.target.value).toFixed(2) + '×');
+  if (p) syncVoice(root, p.voice, p.style); else syncVoice(root, voices[0].name);
+}
 fetch('/api/voices?k=' + KEY).then((r) => r.json()).then((v) => {
   voices = v.voices;
-  $('voiceall').innerHTML = voices.map((n) => `<option>${esc(n)}</option>`).join('');
-  $('voiceall').value = v.byPhone[1] || v.default;
-  for (const p of people.values()) if (p.el) { const vs = p.el.querySelector('.voice'); vs.innerHTML = voices.map((n) => `<option>${esc(n)}</option>`).join(''); vs.value = p.voice || voices[0]; }
+  wireVoice($('globalvoice'), 0, { voice: v.byPhone[1] || v.default, style: v.styles[1] });
+  for (const p of people.values()) if (p.el) wireVoice(p.el, p.id, p);
 });
-$('voiceall').onchange = () => ws.send(JSON.stringify({ type: 'voice', id: 0, voice: $('voiceall').value }));
-$('preview').onclick = () => { const a = $('previewAudio'); a.src = `/api/preview?k=${KEY}&voice=${encodeURIComponent($('voiceall').value)}&r=${Date.now()}`; a.play(); };
+$('preview').onclick = () => {
+  const g = $('globalvoice'), a = $('previewAudio');
+  const q = new URLSearchParams({ k: KEY, voice: g.querySelector('.voice').value, emotion: g.querySelector('.emotion').value || '', pitch: g.querySelector('.pitch').value, speed: g.querySelector('.speed').value, r: Date.now() });
+  a.src = '/api/preview?' + q; a.play();
+};
 $('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim() })); e.target.value = ''; } e.stopPropagation(); };
 $('speakall').onkeyup = (e) => e.stopPropagation();
 $('savebrief').onclick = () => ws.send(JSON.stringify({ type: 'saveBrief', text: $('brief').value }));

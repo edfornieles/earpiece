@@ -142,7 +142,13 @@ async function think(messages) {
 }
 
 // Streams the Watercooler voice; calls onPcm(int16 buffer at 24 kHz) as audio arrives.
-async function speak(text, onPcm, signal, voiceUrl) {
+async function speak(text, onPcmRaw, signal, voice, style = {}) {
+  const sh = shaper(style.pitch, style.speed, onPcmRaw);
+  const onPcm = sh ? (b) => sh.write(b) : onPcmRaw;
+  if (signal && sh) signal.addEventListener('abort', () => sh.kill());
+  try { await speakRaw(text, onPcm, signal, voice); } finally { if (sh) await sh.end(); }
+}
+async function speakRaw(text, onPcm, signal, voiceUrl) {
   const dec = new WavStreamDecoder();
   if (MOCK) {                                   // 1.5 s of soft tone, delivered in pieces
     const sr = 24000, n = sr * 1.5, f = new Float32Array(n);
@@ -164,28 +170,71 @@ async function speak(text, onPcm, signal, voiceUrl) {
 }
 
 // Voices Pocket-TTS can speak in. The first is the default.
+// Pocket-TTS copies everything — identity AND manner — from the sample a voice is cloned from,
+// so "emotion" means switching to the same actor recorded in a different state (Expresso dataset).
+const X = 'hf://kyutai/tts-voices/expresso/';
 const VOICES = [
-  ['Watercooler', 'hf://kyutai/tts-voices/vctk/p329_023.wav'],
-  ['Narrator', 'hf://kyutai/tts-voices/unmute-prod-website/ex04_narration_longform_00001.wav'],
-  ['Alba', 'hf://kyutai/tts-voices/alba-mackenna/casual.wav'],
-  ['Marius', 'hf://kyutai/tts-voices/voice-donations/Selfie.wav'],
-  ['Javert', 'hf://kyutai/tts-voices/voice-donations/Butter.wav'],
-  ['Jean', 'hf://kyutai/tts-voices/ears/p010/freeform_speech_01_enhanced.wav'],
-  ['Cosette', 'hf://kyutai/tts-voices/expresso/ex04-ex02_confused_001_channel1_499s.wav'],
-  ['Anna', 'hf://kyutai/tts-voices/vctk/p228_023_enhanced.wav'],
-  ['Vera', 'hf://kyutai/tts-voices/vctk/p229_023_enhanced.wav'],
-  ['Fantine', 'hf://kyutai/tts-voices/vctk/p244_023_enhanced.wav'],
-  ['Charles', 'hf://kyutai/tts-voices/vctk/p254_023_enhanced.wav'],
-  ['Paul', 'hf://kyutai/tts-voices/vctk/p259_023_enhanced.wav'],
-  ['George', 'hf://kyutai/tts-voices/vctk/p315_023_enhanced.wav'],
-  ['Mary', 'hf://kyutai/tts-voices/vctk/p333_023_enhanced.wav'],
-  ['Michael', 'hf://kyutai/tts-voices/vctk/p360_023_enhanced.wav'],
-  ['Eve', 'hf://kyutai/tts-voices/vctk/p361_023_enhanced.wav'],
-  ['Bill', 'hf://kyutai/tts-voices/voice-zero/bill_boerst.wav'],
-  ['Peter', 'hf://kyutai/tts-voices/voice-zero/peter_yearsley.wav'],
-  ['Stuart', 'hf://kyutai/tts-voices/voice-zero/stuart_bell.wav'],
-  ['Caro', 'hf://kyutai/tts-voices/voice-zero/caro_davy.wav']
-].map(([name, url]) => ({ name, url }));
-const voiceUrl = (name) => (VOICES.find((v) => v.name === name) || VOICES[0]).url;
+  { name: 'Watercooler', url: 'hf://kyutai/tts-voices/vctk/p329_023.wav' },
+  { name: 'Cosette (expressive)', emotions: {
+    neutral: 'ex04-ex03_default_001_channel1_3s', calm: 'ex04-ex02_calm_002_channel1_480s', whisper: 'ex04-ex03_whisper_001_channel1_198s',
+    happy: 'ex04-ex02_happy_001_channel1_118s', sad: 'ex04-ex01_sad-sympathetic_001_channel1_267s', angry: 'ex04-ex02_angry_001_channel1_119s',
+    fearful: 'ex04-ex02_fearful_001_channel1_316s', awe: 'ex04-ex02_awe_001_channel1_982s', bored: 'ex04-ex02_bored_001_channel1_254s',
+    confused: 'ex04-ex02_confused_001_channel1_499s', desire: 'ex04-ex02_desire_001_channel1_657s', disgusted: 'ex04-ex02_disgusted_004_channel1_169s',
+    sarcastic: 'ex04-ex02_sarcastic_001_channel1_519s', laughing: 'ex04-ex02_laughing_001_channel1_147s', fast: 'ex04-ex03_fast_001_channel1_208s',
+    projected: 'ex04-ex03_projected_001_channel1_192s', narration: 'ex04-ex01_narration_001_channel1_605s' } },
+  { name: 'Expressive 2', emotions: {
+    calm: 'ex03-ex01_calm_001_channel1_1143s', happy: 'ex03-ex01_happy_001_channel1_334s', sad: 'ex03-ex02_sad-sympathetic_001_channel1_454s',
+    angry: 'ex03-ex01_angry_001_channel1_201s', awe: 'ex03-ex01_awe_001_channel1_1323s', confused: 'ex03-ex01_confused_001_channel1_909s',
+    desire: 'ex03-ex01_desire_004_channel1_545s', disgusted: 'ex03-ex01_disgusted_004_channel1_170s', sarcastic: 'ex03-ex01_sarcastic_001_channel1_435s',
+    sleepy: 'ex03-ex01_sleepy_001_channel1_619s', laughing: 'ex03-ex01_laughing_001_channel1_188s', narration: 'ex03-ex02_narration_001_channel1_674s' } },
+  { name: 'Expressive 3', emotions: {
+    neutral: 'ex01-ex02_default_001_channel1_168s', whisper: 'ex01-ex02_whisper_001_channel1_579s', fast: 'ex01-ex02_fast_001_channel1_104s',
+    projected: 'ex01-ex02_projected_001_channel1_46s', enunciated: 'ex01-ex02_enunciated_001_channel1_432s' } },
+  { name: 'Narrator', url: 'hf://kyutai/tts-voices/unmute-prod-website/ex04_narration_longform_00001.wav' },
+  { name: 'Alba', url: 'hf://kyutai/tts-voices/alba-mackenna/casual.wav' },
+  { name: 'Marius', url: 'hf://kyutai/tts-voices/voice-donations/Selfie.wav' },
+  { name: 'Javert', url: 'hf://kyutai/tts-voices/voice-donations/Butter.wav' },
+  { name: 'Jean', url: 'hf://kyutai/tts-voices/ears/p010/freeform_speech_01_enhanced.wav' },
+  { name: 'Anna', url: 'hf://kyutai/tts-voices/vctk/p228_023_enhanced.wav' },
+  { name: 'Vera', url: 'hf://kyutai/tts-voices/vctk/p229_023_enhanced.wav' },
+  { name: 'Fantine', url: 'hf://kyutai/tts-voices/vctk/p244_023_enhanced.wav' },
+  { name: 'Charles', url: 'hf://kyutai/tts-voices/vctk/p254_023_enhanced.wav' },
+  { name: 'Paul', url: 'hf://kyutai/tts-voices/vctk/p259_023_enhanced.wav' },
+  { name: 'George', url: 'hf://kyutai/tts-voices/vctk/p315_023_enhanced.wav' },
+  { name: 'Mary', url: 'hf://kyutai/tts-voices/vctk/p333_023_enhanced.wav' },
+  { name: 'Michael', url: 'hf://kyutai/tts-voices/vctk/p360_023_enhanced.wav' },
+  { name: 'Eve', url: 'hf://kyutai/tts-voices/vctk/p361_023_enhanced.wav' },
+  { name: 'Bill', url: 'hf://kyutai/tts-voices/voice-zero/bill_boerst.wav' },
+  { name: 'Peter', url: 'hf://kyutai/tts-voices/voice-zero/peter_yearsley.wav' },
+  { name: 'Stuart', url: 'hf://kyutai/tts-voices/voice-zero/stuart_bell.wav' },
+  { name: 'Caro', url: 'hf://kyutai/tts-voices/voice-zero/caro_davy.wav' }
+];
+const emotionsOf = (name) => Object.keys((VOICES.find((v) => v.name === name) || {}).emotions || {});
+function voiceUrl(name, emotion) {
+  const v = VOICES.find((x) => x.name === name) || VOICES[0];
+  if (!v.emotions) return v.url;
+  const file = v.emotions[emotion] || v.emotions.neutral || v.emotions.calm || Object.values(v.emotions)[0];
+  return X + file + '.wav';
+}
 
-module.exports = { VOICES, voiceUrl, TTS_URL, Vad, transcribe, think, speak, WavStreamDecoder, wavBytes, floatToInt16Buf, RATE, MOCK };
+// Pitch (semitones) and speed (×) applied after the voice is generated, through ffmpeg, as it streams.
+const { spawn } = require('child_process');
+function shaper(pitch, speed, onPcm) {
+  pitch = Number(pitch) || 0; speed = Number(speed) || 1;
+  if (Math.abs(pitch) < 0.05 && Math.abs(speed - 1) < 0.02) return null;
+  const p = Math.pow(2, pitch / 12);
+  let tempo = speed / p; const tempos = [];
+  while (tempo > 2) { tempos.push(2); tempo /= 2; }
+  while (tempo < 0.5) { tempos.push(0.5); tempo /= 0.5; }
+  tempos.push(tempo);
+  const af = `asetrate=${Math.round(RATE * p)},aresample=${RATE},` + tempos.map((t) => `atempo=${t.toFixed(4)}`).join(',');
+  const ff = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 's16le', '-ar', String(RATE), '-ac', '1', '-i', 'pipe:0',
+    '-af', af, '-f', 's16le', '-ar', String(RATE), '-ac', '1', '-flush_packets', '1', 'pipe:1']);
+  ff.stdout.on('data', (d) => onPcm(Buffer.from(d)));
+  ff.on('error', () => {});
+  ff.stdin.on('error', () => {});
+  const done = new Promise((r) => ff.on('close', r));
+  return { write: (b) => ff.stdin.write(b), end: () => { ff.stdin.end(); return done; }, kill: () => ff.kill('SIGKILL') };
+}
+
+module.exports = { VOICES, voiceUrl, emotionsOf, shaper, TTS_URL, Vad, transcribe, think, speak, WavStreamDecoder, wavBytes, floatToInt16Buf, RATE, MOCK };

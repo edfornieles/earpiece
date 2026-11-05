@@ -34,7 +34,8 @@
   <h1 id="headline">Set up this phone</h1>
   <p style="color:#a9a6a0;margin:0">Keep this phone at the control centre. Pair its earpiece, enable audio, and leave the screen on.</p>
   <p style="color:#a9a6a0;margin:0;font-size:15px">Participant registration and consent are handled separately. The control desk starts and ends every visit.</p>
-  <button id="start">Enable audio</button>
+  <a id="native" hidden style="text-align:center;padding:18px;border-radius:14px;background:#e8e6e1;color:#0b0b0b;text-decoration:none">Open Mother app</a>
+  <button id="start">Enable browser audio</button>
 </main>
 
 <main id="live">
@@ -127,7 +128,8 @@ $('start').onclick = async () => {
   keepAwake();
   try { if (!audioOn) await startAudio(); else await ctx.resume(); }
   catch (err) { alert('Could not start audio: ' + err.message); $('start').disabled = false; return; }
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'hello' }));
+  if (!ws || ws.readyState > 1) connect();
+  else if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'hello' }));
   $('start').disabled = false;
   showReady();
 };
@@ -147,7 +149,12 @@ $('resume').onclick = async () => {
   if (!ws || ws.readyState > 1) connect(); else ws.send(JSON.stringify({ type: 'visible' }));
   $('warn').style.display = 'none';
 };
-connect();
+// Opening a setup link must not steal a slot from an already running native app.
+// Connect the browser only after the operator explicitly enables browser audio.
+if (/Android/i.test(navigator.userAgent)) {
+  const app = $('native'); app.hidden = false;
+  app.href = 'earpiece://connect?' + new URLSearchParams({ server: location.origin, k: KEY || '', device: String(DEVICE || slotId) });
+}
 </script>
 </body>
 </html>

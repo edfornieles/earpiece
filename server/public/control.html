@@ -305,6 +305,7 @@ function paintState(p) {
   if (s.hidden) { txt = '⚠ phone screen is off — they can’t hear anything'; cls += ' hot'; }
   else if (s.headsetDropped) { txt = '⚠ headset out of range — AI paused until it reconnects'; cls += ' hot'; }
   else if (!s.audioReady) { txt = 'Enable audio on this phone at the desk'; cls += ' hot'; }
+  else if (s.headset === false) { txt = 'Phone connected — no earpiece connected'; cls += ' hot'; }
   else if (p.waiting) txt = 'Ready — waiting for the desk';
   else if (s.held) { txt = micAs === 'voice' ? 'you are talking — they’ll hear it in the AI voice when you let go' : 'you are talking'; cls += ' hot'; }
   else if (s.headset === false && !p.waiting && !s.speaking && !s.thinking) { txt = 'no headset on the phone — sound comes from the phone itself'; cls += ' hot'; }

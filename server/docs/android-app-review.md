@@ -1,5 +1,7 @@
 # Android app review — 5 November 2026
 
+Historical review snapshot. The Mother follow-up at the end records completed changes.
+
 ## Verified state
 
 - GitHub account and repository access confirmed for `edfornieles/earpiece`, with push permission.
@@ -99,3 +101,7 @@ The 13 server regression tests pass in the connected checkout. Real earpiece rou
 - Which headset/earpiece model is used, and does it have a microphone?
 - How far and through which rooms/walls will participants move from the control centre?
 - Should locked-screen operation be the normal mode? The native service is intended to support it; the browser page currently relies on remaining awake.
+
+## Mother follow-up
+
+The interface and native app have been renamed Mother. Build 7 was built successfully with a protected persistent signing identity. The connected Samsung was migrated from 1.0.4 after backing up its previous APK and complete preferences; its saved configuration was restored byte-for-byte. The phone now uses the operator screen without participant consent or a Begin step. The update script no longer automatically uninstalls after a failed update. Native readiness is announced when the initialized microphone service connects, including while waiting for the desk. Remaining findings above are still review items unless explicitly addressed here.

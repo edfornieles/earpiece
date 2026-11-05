@@ -33,7 +33,7 @@
 </head>
 <body class="setup">
 <div class="wrap">
-  <div class="film"><video id="v" playsinline loop preload="auto"></video><div class="none" id="none"><div>No intro film yet.<br>Save it as <b>intro.mp4</b> in the earpiece folder.</div></div></div>
+  <div class="film"><video id="v" playsinline loop preload="auto"></video><div class="none" id="none"><div>No intro film yet.<br>Save it as <b>intro.mp4</b> in the project folder.</div></div></div>
   <div class="side">
     <h1>Scan to take part</h1>
     <div class="qr" id="qr"></div>
@@ -61,10 +61,10 @@ async function load() {
     const notes = [];
     if (!d.public) notes.push('<span class="warn">The code points at this Mac on the local wifi, so people\'s phones must be on the same wifi. Start the server with the public link (PUBLIC_URL) so it works on mobile data.</span>');
     if (d.draft) notes.push('<span class="warn">The consent form is still the draft (consent.example.md). Save your checked version as consent.md.</span>');
-    if (!d.video) notes.push('No intro film found — the screen shows just the code. Save the film as intro.mp4 in the earpiece folder.');
+    if (!d.video) notes.push('No intro film found — the screen shows just the code. Save the film as intro.mp4 in the project folder.');
     notes.push('Registration link: ' + (d.joinUrl || '—'));
     $('info').innerHTML = notes.join('<br><br>');
-  } catch { $('info').textContent = 'Can\'t reach the earpiece server.'; }
+  } catch { $('info').textContent = 'Can\'t reach the Mother server.'; }
 }
 load(); setInterval(load, 60000);   // picks up a new tunnel address or a new film
 $('go').onclick = async () => {

@@ -85,7 +85,7 @@ test('recording server connection, visit and audio isolation regressions', { tim
   const request = (route, body, key = 'control') => fetch(`http://127.0.0.1:${port}/api/${route}${route.includes('?') ? '&' : '?'}k=${key}`, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
   await t.test('operator pages load and phones cannot start their own participant visit', async () => {
-    for (const page of ['phones', 'session', 'screens']) {
+    for (const page of ['phones', 'session', 'screens', 'programs']) {
       const response = await fetch(`http://127.0.0.1:${port}/${page}?k=control`);
       assert.equal(response.status, 200); assert.match(await response.text(), /setup\.js/);
     }
@@ -232,4 +232,41 @@ test('recording server connection, visit and audio isolation regressions', { tim
     await until(() => ready, 'server restarts');
     assert.equal((await (await request('phones')).json()).maxPhones, 5);
   });
+  await t.test('program selection is versioned, survives recording startup, and routes each role privately', async () => {
+    const setup = await (await request('setup')).json();
+    const draft = { title:'A private two-part score', roles:[{id:'a',name:'A'},{id:'b',name:'B'}], scenes:[{id:'one',name:'Opening',together:true,tracks:{a:[{id:'a1',type:'speak',text:'Only role A hears this.'},{id:'a2',type:'wait'}],b:[{id:'b1',type:'wait'},{id:'b2',type:'speak',text:'Only role B hears this.'},{id:'b3',type:'wait'}]}}] };
+    assert.equal((await request('programs',draft,'wrong')).status,403);
+    const saved = (await (await request('programs',draft)).json()).program;
+    const choice={instance:setup.instance,id:saved.id,revision:saved.revision,assignments:{a:1,b:2},timing:'shared'};
+    assert.equal((await request('program-selection',{...choice,assignments:{a:1,b:1}})).status,400);
+    assert.equal((await request('program-selection',{...choice,instance:0})).status,409);
+    assert.equal((await request('program-selection',choice)).status,200);
+    await request('programs',{...saved,title:'Edited later'});
+    assert.equal((await (await request('program-run')).json()).selection.snapshot.title,draft.title);
+    assert.equal((await request('program-run',{instance:setup.instance,action:'start'})).status,400);
+    const exited=once(child,'exit');child.kill('SIGTERM');await exited;
+    child=spawn(process.execPath,[path.join(tmp,'server.js')],{env:{PATH:process.env.PATH,PORT:String(port),EARPIECE_MODE:'record',MOCK_AI:'1',AI_MODE:'auto',NO_OPEN:'1',NO_TUNNEL:'1',NO_CATALOGUE:'1'},stdio:['ignore','pipe','pipe']});
+    let ready=false;child.stdout.on('data',d=>{if(String(d).includes('CONTROL ROOM'))ready=true;});child.stderr.on('data',()=>{});await until(()=>ready,'recording with selected program');
+    const runSetup=await(await request('program-run')).json();assert.equal(runSetup.selection.snapshot.revision,1);assert.equal(runSetup.selection.assignments.b,2);assert.equal(runSetup.run.status,'prepared');
+    assert.equal((await request('program-selection',{...choice,instance:runSetup.instance})).status,400);
+    assert.equal((await request('program-run',{instance:runSetup.instance,action:'start'})).status,400);
+    const desk=await connect('control'),a=await connect('phone',1),b=await connect('phone',2);
+    for(const [id,phone] of [[1,a],[2,b]]){
+      phone.send({type:'hello'});phone.send({type:'headset',connected:true});desk.send({type:'personSave',pid:'role'+id,name:'Role '+id});desk.send({type:'personStart',pid:'role'+id,phone:id});
+    }
+    await until(()=>[1,2].every(id=>desk.messages.some(m=>m.type==='state'&&m.id===id&&!m.waiting&&m.headset===true)),'both role visits ready');
+    assert.equal((await request('program-run',{instance:runSetup.instance,action:'start'})).status,200);
+    await until(()=>a.binary.length>0,'role A receives its passage');assert.equal(b.binary.length,0);
+    await until(()=>desk.messages.some(m=>m.type==='program'&&m.run.roles.some(r=>r.role==='a'&&r.status==='waiting')),'role A passage finishes');
+    const aCount=a.binary.length;
+    assert.equal((await request('program-run',{instance:runSetup.instance,action:'next',phone:2})).status,200);
+    await until(()=>b.binary.length>0,'role B receives its passage');assert.equal(a.binary.length,aCount);
+    await request('program-run',{instance:runSetup.instance,action:'pause'});
+    const stopped=await(await request('program-run')).json();assert.equal(stopped.run.status,'paused');
+    const recordInfo=await(await request('info')).json();
+    const recording=JSON.parse(fs.readFileSync(path.join(tmp,'recordings',recordInfo.name,'session.json')));
+    assert.equal(recording.program.snapshot.title,draft.title);
+    assert.ok(fs.readFileSync(path.join(tmp,'recordings',recordInfo.name,'events.jsonl'),'utf8').includes('program_cue_start'));
+  });
+
 });

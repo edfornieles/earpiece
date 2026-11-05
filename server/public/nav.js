@@ -8,6 +8,7 @@
   const pages = [
     ['/control', 'Live desk'],
     ['/session', 'Session'],
+    ['/programs', 'Programs'],
     ['/people', 'Registrations'],
     ['/phones', 'Phones'],
     ['/screens', 'Screens'],

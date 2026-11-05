@@ -1,4 +1,6 @@
-# Mother Programs — proposed behaviour
+# Mother Programs — original proposal
+
+The first implementation is now documented in [programs.md](programs.md). This document records the earlier design discussion; the implementation guide states current behaviour and limits.
 
 A mostly scripted performance with freedom for Mother to adapt; either independent participant progress or a shared timeline. After a controller intervention, Mother decides when to return to the score. The controller can always pause, resume, skip, repeat, or take over. This is a proposal, not an implemented playback engine.
 

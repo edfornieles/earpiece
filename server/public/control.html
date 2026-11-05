@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Live desk — Mother</title>
+<link rel="stylesheet" href="programs.css">
 <style>
   :root { --bg:#0e0e0e; --card:#171717; --line:#2a2a2a; --fg:#e8e6e1; --dim:#8a8780; --hot:#d9482b; --ok:#5fa36a; --ai:#7a8fd6; }
   * { box-sizing:border-box; }
@@ -132,6 +133,7 @@
   <section>
     <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
     <div id="audio-status" role="status"><span id="audio-label">Desk sound is off. Enable it to listen to participants.</span><button id="enable-sound">Enable sound</button><button id="enable-mic">Enable microphone</button></div>
+    <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
     <div class="desk-heading"><h2>Participants</h2><span class="hint">Select a phone to direct</span></div>
     <div class="desk-workspace"><div id="roster" aria-label="Phones"></div><div id="grid"></div></div>
     <div class="desk-heading"><h2>Gallery</h2><span class="hint">Live camera feeds &amp; room microphones</span></div>
@@ -184,7 +186,7 @@
 <script>
 const KEY = new URLSearchParams(location.search).get('k');
 const $ = (id) => document.getElementById(id);
-let MAX = 0, selectedPhone = 1, audioReady = false;
+let MAX = 0, selectedPhone = 1, audioReady = false, programView = null;
 function attachPlayer(p) {
   if (p.player) return;
   p.gain = ctx.createGain(); p.gain.gain.value = p.listening ? 1 : 0; p.gain.connect(ctx.destination);
@@ -321,7 +323,10 @@ function paintState(p) {
   p.el.querySelector('.endp').style.display = p.waiting ? 'none' : '';
   paintNext(p);
   const b = p.el.querySelector('.aimode');
-  b.textContent = p.mode === 'auto' ? 'AI directing — on' : 'AI off';
+  const scripted=programView && Object.values(programView.assignments || {}).includes(p.id);
+  b.disabled=!!scripted;
+  b.textContent = scripted ? 'Following selected program' : p.mode === 'auto' ? 'AI directing — on' : 'AI off';
+  p.el.querySelector('.nudge').textContent=scripted?'Continue program cue':'Next direction';
   b.classList.toggle('aion', p.mode === 'auto');
   const s = p.st; let txt = '', cls = 'status';
   if (s.hidden) { txt = '⚠ phone screen is off — they can’t hear anything'; cls += ' hot'; }
@@ -403,6 +408,7 @@ function connect() {
       return;
     }
     const m = JSON.parse(e.data);
+    if(m.type==='program'){programView=m.run;for(const p of people.values())paintState(p);}
     if (m.type === 'phonesChanged') { MAX = m.maxPhones; renderGrid(lastList); renderFolk(); renderArrivals(); }
     if (m.type === 'participants') { renderGrid(m.list); renderFolk(); renderArrivals(); }
     if (m.type === 'people') { folk = m.list; renderFolk(); for (const p of people.values()) paintNext(p); renderArrivals(); }
@@ -723,6 +729,7 @@ document.addEventListener('keyup', (e) => {
   if (e.code === 'Space' || /^Digit[1-9]$/.test(e.code)) setTalk(latched ? 0 : null);
 });
 </script>
+<script src="program-session.js"></script>
 <script src="nav.js"></script>
 </body>
 </html>

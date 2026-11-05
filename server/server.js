@@ -25,6 +25,9 @@ const { loadConfig, Camera } = require('./cameras');
 const { exportSession } = require('./exports');
 const { loadRoomMics, RoomMics } = require('./roommics');
 const { Registry } = require('./registry');
+const { ProgramStore, ProgramRunner } = require('./programs');
+const programStore = new ProgramStore(path.join(__dirname, 'programs'));
+let programRunner;
 
 const PORT = Number(process.env.PORT || 8080);
 const RATE = 24000;
@@ -70,7 +73,7 @@ const session = { name: stamp, title: '', start_iso: new Date(T0).toISOString(),
 const saveSession = () => fs.writeFileSync(path.join(SESSION_DIR, STANDBY ? 'next.json' : 'session.json'), JSON.stringify(session, null, 2));
 // what was prepared in standby: title, notes, documents (people are adopted below)
 const prepared = (() => { try { return JSON.parse(fs.readFileSync(path.join(NEXT_DIR, 'next.json'), 'utf8')); } catch { return null; } })();
-if (prepared) for (const k of ['title', 'notes', 'documents']) if (prepared[k]) session[k] = prepared[k];
+if (prepared) for (const k of ['title', 'notes', 'documents', 'program']) if (prepared[k]) session[k] = prepared[k];
 let adopted = false;
 if (!STANDBY && fs.existsSync(NEXT_DIR)) {   // a new recording takes over the prepared documents and people
   try {
@@ -442,7 +445,48 @@ const server = http.createServer(async (req, res) => {
   }
   if (p.startsWith('/api/')) {
     if (!ctl) { res.writeHead(403); return res.end(); }
-    if (p === '/api/setup') return json(res, { instance: T0, name: stamp, standby: STANDBY, title: session.title, notes: session.notes || '', documents: session.documents || [], brief: readBrief() });
+    if (p === '/api/programs') {
+      try { return json(res, req.method === 'POST' ? { program:programStore.save(await readSetupBody(req)) } : { programs:programStore.list() }); }
+      catch(e) { return json(res,{error:e.message},400); }
+    }
+    if (p === '/api/program-selection' && req.method === 'POST') {
+      try {
+        const d=await readSetupBody(req);
+        if (d.instance !== T0) return json(res,{error:'The session changed. Reload before choosing a program.'},409);
+        if (!STANDBY) throw Error('Choose the program before recording. End this session to prepare another.');
+        let selected=null;
+        if(d.id) {
+          const snapshot=programStore.get(d.id); if(!snapshot)throw Error('That program no longer exists.');
+          if(d.revision!==snapshot.revision)throw Error('The program changed. Reload the current version before choosing it.');
+          const assignments={}, used=new Set();
+          for(const role of snapshot.roles) {
+            const phone=Number(d.assignments?.[role.id]);
+            if(!Number.isInteger(phone) || phone<1 || phone>MAX_PHONES || used.has(phone))throw Error('Assign a different valid phone to every role. Add phone slots on Phones if needed.');
+            assignments[role.id]=phone;used.add(phone);
+          }
+          selected={snapshot,assignments,timing:d.timing==='independent'?'independent':'shared'};
+        }
+        session.program=selected;saveSession();programRunner.configure(selected);
+        return json(res,{ok:true,program:selected});
+      }catch(e){return json(res,{error:e.message},400);}
+    }
+    if (p === '/api/program-run') {
+      try {
+        if(req.method==='POST') {
+          const d=await readSetupBody(req);
+          if(d.instance!==T0)return json(res,{error:'The session changed. Reload the desk.'},409);
+          if(STANDBY)throw Error('Start recording and start the assigned participant visits before running the program.');
+          if(d.action==='start')programRunner.start();
+          else if(d.action==='pause')programRunner.pause();
+          else if(d.action==='resume')programRunner.resume(d.phone==null?undefined:Number(d.phone));
+          else if(d.action==='next')programRunner.next(Number(d.phone));
+          else if(d.action==='stop')programRunner.stop();
+          else throw Error('Choose a program control.');
+        }
+        return json(res,{instance:T0,standby:STANDBY,selection:session.program || null,run:programRunner.view()});
+      }catch(e){return json(res,{error:e.message},400);}
+    }
+    if (p === '/api/setup') return json(res, { instance: T0, name: stamp, standby: STANDBY, title: session.title, notes: session.notes || '', documents: session.documents || [], brief: readBrief(), program: session.program || null, maxPhones: MAX_PHONES });
     if (['/api/session-meta', '/api/brief'].includes(p) && req.method === 'POST') {
       try {
         const d = await readSetupBody(req);
@@ -657,6 +701,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/trash') p = '/trash.html';
   if (p === '/phones') p = '/phones.html';
   if (p === '/session') p = '/session.html';
+  if (p === '/programs') p = '/programs.html';
   if (p === '/screens') p = '/screens.html';
   const file = path.join(PUB, path.normalize(p).replace(/^(\.\.[\/\\])+/, ''));
   if (!file.startsWith(PUB) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
@@ -705,7 +750,7 @@ class Session {
     this.edHold = false; this.lastActivity = Date.now(); this.turn = 0;
     this.pending = Buffer.alloc(0); this.ttsDone = true; this.playT0 = 0; this.playSent = 0; this.abort = null;
     this.vad = new ai.Vad({
-      onStart: () => { if (this.speaking && this.mode === 'auto') stopAi(this, 'participant interrupted'); state(this); },
+      onStart: () => { if (this.speaking && (this.mode === 'auto' || programRunner?.manages(this.id))) stopAi(this, 'participant interrupted'); state(this); },
       onUtterance: (pcm) => {   // pcm = 300 ms pre-roll + speech + 800 ms of quiet
         if (this.waiting) return;
         const now = Date.now(), dur = pcm.length / 2 / RATE;
@@ -716,7 +761,7 @@ class Session {
 }
 
 async function heard(s, pcm, when = {}) {
-  const visit = s.visitToken;
+  const visit = s.visitToken, programToken=programRunner?.token(s.id);
   if (s.waiting || !visit) return;
   state(s);
   let text;
@@ -726,6 +771,7 @@ async function heard(s, pcm, when = {}) {
   transcript(s, 'participant', text, when);
   s.history.push({ role: 'user', content: `Participant: "${text}"` });
   s.lastActivity = Date.now();
+  if (programRunner?.manages(s.id)) { if(!s.edHold && programRunner.token(s.id)===programToken) programRunner.reply(s.id,text); return; }
   if (s.mode === 'auto' && !s.edHold) aiTurn(s);
 }
 
@@ -738,6 +784,7 @@ function systemPrompt(s) {
 }
 
 async function aiTurn(s) {
+  if (programRunner?.manages(s.id)) return;
   if (s.hidden || s.waiting || s.headsetDropped) return;
   if (s.thinking || s.speaking) { s.again = true; return; }
   const turn = ++s.turn;
@@ -760,11 +807,13 @@ function say(s, text, turn, u) {
   s.abort = new AbortController();
   state(s);
   ai.speak(text, (pcm) => { if (turn === s.turn) s.pending = Buffer.concat([s.pending, pcm]); }, s.abort.signal, ai.voiceUrl(voiceOf(s.id), styleOf(s.id).emotion), styleOf(s.id))
-    .catch((e) => { if (e.name !== 'AbortError') report(s, e); })
+    .catch((e) => { if (s.programDone && turn===s.turn) {const pending=s.programDone;s.programDone=null;pending.reject(e);} if (e.name !== 'AbortError') report(s, e); })
     .finally(() => { if (turn === s.turn) s.ttsDone = true; });
 }
 
-function stopAi(s, why) {
+function stopAi(s, why, programInternal = false) {
+  if (!programInternal && programRunner?.manages(s.id)) programRunner.hold(s.id,why,['participant interrupted','human director cut in'].includes(why));
+  if(s.programDone){const pending=s.programDone;s.programDone=null;pending.reject(Error(why));}
   s.turn++;
   if (s.abort) s.abort.abort();
   const wasSpeaking = s.speaking;
@@ -818,6 +867,38 @@ function endParticipant(s, why) {
   toControls({ type: 'participants', list: list() }); state(s);
 }
 
+function programContext(id, context) {
+  const s=sessions.get(id);
+  return `${systemPrompt(s)}\nYou are performing Mother program: ${context.program.title}.\nOverall score: ${context.program.description}\nYour role: ${context.role.name}. ${context.role.brief}\nScene: ${context.scene?.name || 'end'}. Current cue: ${context.cue?.text || ''}. Delivery: ${context.cue?.delivery || ''}\nOnly direct this participant. Never invent another participant's readiness. Respect the script's coordination cues. Stage instructions are private; speak only the words intended for the earpiece.`;
+}
+async function programSpeech(id,cue,context) {
+  const s=sessions.get(id);if(!s)throw Error('Phone unavailable.');
+  stopAi(s,'program cue',true); const turn=++s.turn;
+  let text=cue.text;
+  if(cue.adapt){s.thinking=true;state(s);text=await ai.think([{role:'system',content:programContext(id,context)},...s.history.slice(-20),{role:'user',content:`Deliver this passage, preserving its actions and essential meaning. You may adapt wording. Return only spoken text: ${cue.text}`}]);}
+  if(turn!==s.turn || s.waiting || !s.ws || s.edHold)throw Error('Cue interrupted.');
+  text=String(text).trim().slice(0,6000); if(!text || /^\[?silence\]?$/i.test(text))throw Error('Mother returned no spoken passage. Repeat or advance this cue.');
+  s.thinking=false;s.history.push({role:'assistant',content:text});
+  const u=++U;transcript(s,'ai',text,{u,...voiceInfo(s.id)});
+  return new Promise((resolve,reject)=>{s.programDone={resolve,reject};say(s,text,turn,u);});
+}
+programRunner=new ProgramRunner({
+  ready:id=>{const s=sessions.get(id);return !!s?.ws && s.ws.readyState===1 && !s.waiting && !!s.audioReady && !s.hidden && !s.headsetDropped && s.headset!==false && !s.edHold;},
+  visit:id=>sessions.get(id)?.visitToken,
+  cancel:id=>{const s=sessions.get(id);if(s)stopAi(s,'program paused',true);},
+  perform:programSpeech,
+  converse:(id,text,context)=>ai.think([{role:'system',content:programContext(id,context)+`\nThis is a bounded conversation (${context.exchanges+1} of ${context.cue.turns}). Respond briefly within the cue's subject. On the final exchange, finish naturally so the script can continue. Return spoken words only.`},...sessions.get(id).history.slice(-20)]),
+  decide:async(id,text,context)=>{
+    const raw=await ai.think([{role:'system',content:programContext(id,context)+'\nAfter an interruption choose when to return. Return ONLY JSON: {"action":"resume"|"wait"|"respond","text":"optional spoken response","reason":"short desk explanation"}. Resume repeats the current cue from its beginning. Respond asks or answers briefly then waits for the participant. Wait silently awaits their reply. After two exchanges prefer resume. Do not direct any other role.'},...sessions.get(id).history.slice(-20),{role:'user',content:`${context.director?'Controller intervention':'Participant reply'}: ${text}`}]);
+    const decision=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,''));
+    if(!['resume','wait','respond'].includes(decision.action) || (decision.action==='respond' && !String(decision.text || '').trim()))throw Error('Mother could not decide how to return. Choose Repeat cue or Continue cue at the desk.');
+    return {action:decision.action,text:String(decision.text || '').slice(0,2000),reason:String(decision.reason || '').slice(0,300)};
+  },
+  event:(type,data)=>logEvent(type,data),change:run=>toControls({type:'program',run})
+});
+programRunner.configure(session.program || null);
+setInterval(()=>programRunner.tick(),50);
+
 // plays queued AI audio to the phone in real time (a little ahead, so the phone never runs dry)
 const FRAME = RATE * 0.02 * 2;
 setInterval(() => {
@@ -842,6 +923,7 @@ setInterval(() => {
       s.speaking = false; s.playT0 = 0; s.vad.strict = false; s.lastActivity = now; state(s);
       if (s.playStarted) logEvent('play_end', { id: s.id, u: s.playU });
       s.playStarted = false;
+      if(s.programDone){const pending=s.programDone;s.programDone=null;pending.resolve();}
       if (s.again && s.mode === 'auto' && !s.edHold) setTimeout(() => aiTurn(s), 300);
     }
   }
@@ -851,7 +933,7 @@ setInterval(() => {
 setInterval(() => {
   const now = Date.now();
   for (const s of sessions.values()) {
-    if (!s.ws || s.hidden || s.headsetDropped || s.waiting || s.mode !== 'auto' || s.speaking || s.thinking || s.edHold || s.vad.speaking) continue;
+    if (programRunner?.manages(s.id) || !s.ws || s.hidden || s.headsetDropped || s.waiting || s.mode !== 'auto' || s.speaking || s.thinking || s.edHold || s.vad.speaking) continue;
     if (now - s.lastActivity > IDLE_SECS * 1000) {
       s.lastActivity = now;
       s.history.push({ role: 'user', content: `[No reply from the participant for ${IDLE_SECS} seconds. Continue directing.]` });
@@ -882,10 +964,10 @@ function talkStart(target, as, owner) {
   if (!Number.isInteger(target) || target < 0 || target > MAX_PHONES) return;
   if (talk && talk.owner !== owner) return;   // another desk connection owns this talk
   if (talk) talkStop(owner);
-  talk = { owner, target, targets: new Set(), visits: new Map(), pcm: [], as: as === 'voice' ? 'voice' : 'own', t0: Date.now() };
+  talk = { owner, target, targets: new Set(), visits: new Map(), programTokens:new Map(), pcm: [], as: as === 'voice' ? 'voice' : 'own', t0: Date.now() };
   for (const s of sessions.values()) {
     if (!s.ws || (target !== 0 && target !== s.id)) continue;
-    talk.targets.add(s.id); talk.visits.set(s.id, s.visitToken); stopAi(s, 'human director cut in'); s.edHold = true; state(s);
+    talk.targets.add(s.id); talk.visits.set(s.id, s.visitToken); stopAi(s, 'human director cut in'); talk.programTokens.set(s.id,programRunner.token(s.id)); s.edHold = true; state(s);
   }
 }
 async function talkStop(owner) {
@@ -899,9 +981,20 @@ async function talkStop(owner) {
   for (const id of t.targets) {
     const s = sessions.get(id);
     if (!s || s.waiting || s.visitToken !== t.visits.get(id)) continue;
-    if (t.as === 'voice') { speakAs(s, text, 'voiced'); continue; }
+    if(programRunner.manages(id) && programRunner.token(id)!==t.programTokens.get(id))continue;
+    if (t.as === 'voice') {
+      if(programRunner.manages(id) && programRunner.status==='running'){
+        const role=programRunner.roles.find(r=>r.phone===id);
+        const token=programRunner.token(id);
+        programSpeech(id,{type:'speak',text,adapt:false},{...programRunner.current(role),program:programRunner.selection.snapshot})
+          .then(()=>{if(programRunner.token(id)===token)return programRunner.reply(id,text,true);})
+          .catch(e=>{if(programRunner.token(id)===token)programRunner.hold(id,e.message);});
+      } else speakAs(s, text, 'voiced');
+      continue;
+    }
     transcript(s, 'director', text, { start: at(t.t0), end: at(t.t1) });
     s.history.push({ role: 'user', content: `[The human director spoke to the participant directly: "${text}"]` });
+    if(programRunner.manages(id))programRunner.reply(id,text,true);
   }
 }
 
@@ -926,6 +1019,7 @@ wss.on('connection', (ws, req) => {
   if (role === 'control' && key === CONTROL_KEY) {
     controls.add(ws);
     send(ws, { type: 'phonesChanged', maxPhones: MAX_PHONES });
+    send(ws,{type:'program',run:programRunner.view()});
     send(ws, { type: 'participants', list: list() });
     send(ws, { type: 'people', list: people });
     send(ws, { type: 'registry', list: recentRegs() });
@@ -955,6 +1049,7 @@ wss.on('connection', (ws, req) => {
       if (m.type === 'endSession' && !STANDBY) { toControls({ type: 'sessionEnding' }); shutdown(true); }
       if (m.type === 'startSession' && STANDBY) { toControls({ type: 'sessionStarting' }); shutdown('record'); }
       if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() }); }
+      if(m.type==='nudge' && s && programRunner.manages(s.id)){try{programRunner.next(s.id);}catch(e){send(ws,{type:'error',id:0,text:e.message});}return;}
       if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
       if (m.type === 'end' && s) endParticipant(s, 'ended by director');
       if (m.type === 'voice') {   // id 0 = every phone. Any of voice / emotion / pitch / speed.

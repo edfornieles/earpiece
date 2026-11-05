@@ -31,7 +31,7 @@
   bar.innerHTML = '<span class="brand">Mother</span>';
   for (const [href, label] of pages) {
     const group = ({'/control':'Workspace', '/phones':'Equipment', '/library':'Archive', '/people':'People'})[href];
-    if (group) { const heading = document.createElement('span'); heading.className = 'nav-group'; heading.textContent = group; bar.appendChild(heading); }
+    if (group) { const heading = document.createElement('span'); heading.className = 'nav-group'; heading.dataset.group = group.toLowerCase(); heading.textContent = group; bar.appendChild(heading); }
     bar.appendChild(link(href, label));
   }
   bar.insertAdjacentHTML('beforeend', '<span class="sp"></span><span class="st" id="navstate">…</span>');

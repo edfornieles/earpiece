@@ -31,3 +31,15 @@ body.live-desk #peoplebox{border-top:1px solid var(--line);padding-top:24px;marg
 @media(max-width:1250px){body.live-desk>main{grid-template-columns:1fr}body.live-desk aside{display:grid;grid-template-columns:1fr 1fr;gap:20px}body.live-desk aside .panel{margin:0}.desk-workspace{grid-template-columns:minmax(200px,.8fr) minmax(280px,1.2fr)}}
 @media(max-width:760px){body.mother-shell{margin-left:0;padding-top:0}#sitenav{position:relative;width:auto;display:flex;flex-direction:row;flex-wrap:wrap;padding:14px;gap:4px;border-right:0;border-bottom:1px solid var(--line)}#sitenav .brand{width:100%;padding:0 8px 12px;font-size:22px}#sitenav .nav-group,#sitenav .sp{display:none}#sitenav a{padding:7px 8px;font-size:12px}#sitenav .st{border:0;padding:7px 8px}body.live-desk>header{padding:22px 18px;flex-wrap:wrap}body.live-desk>main{padding:16px 18px}.desk-workspace{grid-template-columns:1fr}#roster{max-height:240px;border-right:0;border-bottom:1px solid var(--line)}body.live-desk aside{grid-template-columns:1fr}body.live-desk header nav{flex-wrap:wrap}}
 body.live-desk header .titlebox{display:flex;flex-direction:column;align-items:flex-start;gap:3px}body.live-desk header h1{white-space:nowrap}body.live-desk #startsession{background:var(--hot);color:var(--bg);border-color:var(--hot)}
+
+/* Distinct, restrained accents make the sidebar groups easier to scan. */
+#sitenav .nav-group[data-group=workspace]{color:#99b8e9}
+#sitenav .nav-group[data-group=people]{color:#a0c5ac}
+#sitenav .nav-group[data-group=equipment]{color:#d4b087}
+#sitenav .nav-group[data-group=archive]{color:#bca7d7}
+@media(prefers-color-scheme:light){
+ #sitenav .nav-group[data-group=workspace]{color:#476a9e}
+ #sitenav .nav-group[data-group=people]{color:#416c55}
+ #sitenav .nav-group[data-group=equipment]{color:#88602e}
+ #sitenav .nav-group[data-group=archive]{color:#755395}
+}

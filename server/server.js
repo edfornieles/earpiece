@@ -41,6 +41,13 @@ keys.control = process.env.CONTROL_KEY || keys.control || crypto.randomBytes(4).
 if (!process.env.PHONE_KEY) fs.writeFileSync(KEYS_FILE, JSON.stringify({ phone: keys.phone, control: keys.control }));
 const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control;
 
+// Voice choices persist between runs.
+const SETTINGS_FILE = path.join(__dirname, '.settings.json');
+let settings = { voices: {} };
+try { settings = { voices: {}, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) }; } catch {}
+const saveSettings = () => fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+const voiceOf = (id) => settings.voices[id] || ai.VOICES[0].name;
+
 // ---------- session folder ----------
 const T0 = Date.now();
 const stamp = new Date(T0 - new Date(T0).getTimezoneOffset() * 60000).toISOString().replace(/[:T]/g, '-').slice(0, 19);
@@ -130,6 +137,17 @@ const server = http.createServer(async (req, res) => {
       for (let i = 1; i <= MAX_PHONES; i++) devices.push({ device: i, url: phoneUrl(i), qr: phoneBase ? await QRCode.toString(phoneUrl(i), { type: 'svg', margin: 1 }) : null });
       return json(res, { phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()) });
     }
+    if (p === '/api/voices') return json(res, { voices: ai.VOICES.map((v) => v.name), byPhone: settings.voices, default: ai.VOICES[0].name });
+    if (p === '/api/preview') {   // hear a voice in the control room before choosing it
+      const fd = new FormData();
+      fd.set('text', u.searchParams.get('text') || 'Walk slowly to the far wall. Tell me what you see.');
+      fd.set('voice_url', ai.voiceUrl(u.searchParams.get('voice')));
+      try {
+        const r = await fetch(ai.TTS_URL() + '/tts', { method: 'POST', body: fd });
+        res.writeHead(r.status, { 'content-type': 'audio/wav', 'cache-control': 'no-store' });
+        const buf = Buffer.from(await r.arrayBuffer()); return res.end(buf);
+      } catch (e) { return json(res, { error: e.message }, 502); }
+    }
     if (p === '/api/sessions') {
       const list = fs.existsSync(REC_ROOT) ? fs.readdirSync(REC_ROOT).filter((d) => fs.existsSync(path.join(REC_ROOT, d, 'session.json'))).sort().reverse() : [];
       return json(res, list.map((d) => {
@@ -199,7 +217,7 @@ function transcript(s, who, text) {
   toControls({ type: 'transcript', id: s.id, who, text, t: clock() });
 }
 function state(s) {
-  toControls({ type: 'state', id: s.id, mode: s.mode, speaking: s.speaking, thinking: s.thinking, listening: s.vad.speaking, held: s.edHold, hidden: !!s.hidden, headset: s.headset, headsetDropped: !!s.headsetDropped, headsetName: s.headsetName, waiting: s.waiting, name: s.name });
+  toControls({ type: 'state', id: s.id, mode: s.mode, speaking: s.speaking, thinking: s.thinking, listening: s.vad.speaking, held: s.edHold, hidden: !!s.hidden, voice: voiceOf(s.id), headset: s.headset, headsetDropped: !!s.headsetDropped, headsetName: s.headsetName, waiting: s.waiting, name: s.name });
 }
 function report(s, err) {
   console.error(`  #${s.id} ${err.message}`);
@@ -260,7 +278,7 @@ function say(s, text, turn) {
   s.speaking = true; s.ttsDone = false; s.vad.strict = true;
   s.abort = new AbortController();
   state(s);
-  ai.speak(text, (pcm) => { if (turn === s.turn) s.pending = Buffer.concat([s.pending, pcm]); }, s.abort.signal)
+  ai.speak(text, (pcm) => { if (turn === s.turn) s.pending = Buffer.concat([s.pending, pcm]); }, s.abort.signal, ai.voiceUrl(voiceOf(s.id)))
     .catch((e) => { if (e.name !== 'AbortError') report(s, e); })
     .finally(() => { if (turn === s.turn) s.ttsDone = true; });
 }
@@ -402,6 +420,12 @@ wss.on('connection', (ws, req) => {
       if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() }); }
       if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
       if (m.type === 'end' && s) endParticipant(s, 'ended by director');
+      if (m.type === 'voice' && ai.VOICES.some((v) => v.name === m.voice)) {   // id 0 = every phone
+        const ids = m.id ? [m.id] : Array.from({ length: MAX_PHONES }, (_, i) => i + 1);
+        for (const id of ids) settings.voices[id] = m.voice;
+        saveSettings(); logEvent('voice', { id: m.id || 'all', voice: m.voice });
+        for (const t of sessions.values()) state(t);
+      }
       if (m.type === 'speak' && m.text) {   // typed by the director, spoken word for word in the AI's voice
         const text = String(m.text).trim().slice(0, 600);
         const targets = m.id ? [sessions.get(m.id)] : [...sessions.values()];

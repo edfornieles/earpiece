@@ -142,7 +142,7 @@ async function think(messages) {
 }
 
 // Streams the Watercooler voice; calls onPcm(int16 buffer at 24 kHz) as audio arrives.
-async function speak(text, onPcm, signal) {
+async function speak(text, onPcm, signal, voiceUrl) {
   const dec = new WavStreamDecoder();
   if (MOCK) {                                   // 1.5 s of soft tone, delivered in pieces
     const sr = 24000, n = sr * 1.5, f = new Float32Array(n);
@@ -153,7 +153,7 @@ async function speak(text, onPcm, signal) {
   }
   const fd = new FormData();
   fd.set('text', text);
-  fd.set('voice_url', VOICE());
+  fd.set('voice_url', voiceUrl || VOICE());
   const r = await fetch(`${TTS_URL()}/tts`, { method: 'POST', body: fd, signal });
   if (!r.ok) throw new Error(`voice ${r.status}: ${(await r.text()).slice(0, 200)}`);
   for await (const chunk of r.body) {
@@ -163,4 +163,29 @@ async function speak(text, onPcm, signal) {
   }
 }
 
-module.exports = { Vad, transcribe, think, speak, WavStreamDecoder, wavBytes, floatToInt16Buf, RATE, MOCK };
+// Voices Pocket-TTS can speak in. The first is the default.
+const VOICES = [
+  ['Watercooler', 'hf://kyutai/tts-voices/vctk/p329_023.wav'],
+  ['Narrator', 'hf://kyutai/tts-voices/unmute-prod-website/ex04_narration_longform_00001.wav'],
+  ['Alba', 'hf://kyutai/tts-voices/alba-mackenna/casual.wav'],
+  ['Marius', 'hf://kyutai/tts-voices/voice-donations/Selfie.wav'],
+  ['Javert', 'hf://kyutai/tts-voices/voice-donations/Butter.wav'],
+  ['Jean', 'hf://kyutai/tts-voices/ears/p010/freeform_speech_01_enhanced.wav'],
+  ['Cosette', 'hf://kyutai/tts-voices/expresso/ex04-ex02_confused_001_channel1_499s.wav'],
+  ['Anna', 'hf://kyutai/tts-voices/vctk/p228_023_enhanced.wav'],
+  ['Vera', 'hf://kyutai/tts-voices/vctk/p229_023_enhanced.wav'],
+  ['Fantine', 'hf://kyutai/tts-voices/vctk/p244_023_enhanced.wav'],
+  ['Charles', 'hf://kyutai/tts-voices/vctk/p254_023_enhanced.wav'],
+  ['Paul', 'hf://kyutai/tts-voices/vctk/p259_023_enhanced.wav'],
+  ['George', 'hf://kyutai/tts-voices/vctk/p315_023_enhanced.wav'],
+  ['Mary', 'hf://kyutai/tts-voices/vctk/p333_023_enhanced.wav'],
+  ['Michael', 'hf://kyutai/tts-voices/vctk/p360_023_enhanced.wav'],
+  ['Eve', 'hf://kyutai/tts-voices/vctk/p361_023_enhanced.wav'],
+  ['Bill', 'hf://kyutai/tts-voices/voice-zero/bill_boerst.wav'],
+  ['Peter', 'hf://kyutai/tts-voices/voice-zero/peter_yearsley.wav'],
+  ['Stuart', 'hf://kyutai/tts-voices/voice-zero/stuart_bell.wav'],
+  ['Caro', 'hf://kyutai/tts-voices/voice-zero/caro_davy.wav']
+].map(([name, url]) => ({ name, url }));
+const voiceUrl = (name) => (VOICES.find((v) => v.name === name) || VOICES[0]).url;
+
+module.exports = { VOICES, voiceUrl, TTS_URL, Vad, transcribe, think, speak, WavStreamDecoder, wavBytes, floatToInt16Buf, RATE, MOCK };

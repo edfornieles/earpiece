@@ -39,7 +39,7 @@
   button.aion { background:var(--ai); border-color:var(--ai); color:#0b0b0b; }
   button.muted { color:var(--dim); text-decoration:line-through; }
   button.quiet { color:var(--dim); }
-  input, textarea { font:inherit; background:#101010; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 10px; width:100%; }
+  input, textarea, select { font:inherit; background:#101010; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 10px; width:100%; }
   textarea { resize:vertical; font-size:13px; line-height:1.5; }
   .log { height:200px; overflow-y:auto; background:#101010; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; display:flex; flex-direction:column; gap:6px; }
   .log div b { font-weight:500; margin-right:6px; font-size:11px; letter-spacing:.04em; text-transform:uppercase; }
@@ -81,6 +81,12 @@
       <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>4</kbd> = one phone · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
     </div>
     <div class="panel">
+      <h3>Voice</h3>
+      <div class="row"><select id="voiceall" style="flex:1"></select><button id="preview">▶ Preview</button></div>
+      <div class="hint">Sets the voice on every phone (each card can override). Preview plays here, not on the phones.</div>
+      <audio id="previewAudio"></audio>
+    </div>
+    <div class="panel">
       <h3>Phones</h3>
       <div class="tabs" id="tabs"></div>
       <div id="qr"><span class="hint">waiting for tunnel…</span></div>
@@ -107,7 +113,7 @@
 const KEY = new URLSearchParams(location.search).get('k');
 const $ = (id) => document.getElementById(id);
 const MAX = 4;
-let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null;
+let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [];
 const people = new Map();
 $('lib').href = '/library?k=' + KEY;
 
@@ -167,7 +173,8 @@ function renderGrid(list) {
         <button class="grow aimode"></button>
         <button class="nudge">Next direction</button>
       </div>
-      <input class="speak" placeholder="Type a line → spoken word-for-word in the voice (Enter)">
+      <input class="speak" placeholder="Type a line → they hear it in the voice (Enter)">
+      <div class="row" style="align-items:center"><span class="hint">Voice</span><select class="voice" style="flex:1"></select></div>
       <input class="instruct" placeholder="Private note to the AI (it rephrases), then Enter">
       <div class="log"></div>
       <button class="quiet endp">End participant → ready for next</button>`;
@@ -177,6 +184,10 @@ function renderGrid(list) {
     el.querySelector('.aimode').onclick = () => ws.send(JSON.stringify({ type: 'mode', id, mode: p.mode === 'auto' ? 'off' : 'auto' }));
     el.querySelector('.nudge').onclick = () => ws.send(JSON.stringify({ type: 'nudge', id }));
     el.querySelector('.endp').onclick = () => { if (confirm(`End ${p.name || 'this participant'} on Phone ${id}? The phone goes back to the consent screen.`)) ws.send(JSON.stringify({ type: 'end', id })); };
+    const vs = el.querySelector('.voice');
+    vs.innerHTML = voices.map((v) => `<option>${esc(v)}</option>`).join('');
+    vs.value = p.voice || voices[0] || '';
+    vs.onchange = () => ws.send(JSON.stringify({ type: 'voice', id, voice: vs.value }));
     const spk = el.querySelector('.speak');
     spk.onkeydown = (e) => { if (e.key === 'Enter' && spk.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id, text: spk.value.trim() })); spk.value = ''; } e.stopPropagation(); };
     spk.onkeyup = (e) => e.stopPropagation();
@@ -191,6 +202,7 @@ function renderGrid(list) {
 
 function paintState(p) {
   if (!p.el) return;
+  const vsel = p.el.querySelector('.voice'); if (vsel && p.voice && document.activeElement !== vsel) vsel.value = p.voice;
   p.el.querySelector('.who').textContent = p.waiting ? 'Waiting for next participant' : (p.name || 'Participant');
   p.el.querySelector('.endp').style.display = p.waiting ? 'none' : '';
   const b = p.el.querySelector('.aimode');
@@ -248,7 +260,7 @@ function connect() {
     }
     const m = JSON.parse(e.data);
     if (m.type === 'participants') renderGrid(m.list);
-    if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, st: m }); paintState(p); }
+    if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, voice: m.voice, st: m }); paintState(p); }
     if (m.type === 'transcript') appendLine(person(m.id), m);
     if (m.type === 'error') appendLine(person(m.id), { who: 'error', text: m.text });
     if (m.type === 'cameras') renderCams(m.list);
@@ -274,6 +286,14 @@ async function loadInfo() {
   if (!$('tabs').children.length) info.devices.forEach((d) => { const b = document.createElement('button'); b.textContent = 'Phone ' + d.device; b.onclick = () => showDevice(d.device); $('tabs').appendChild(b); });
   if (info.devices[0]?.qr) showDevice(1); else setTimeout(loadInfo, 1500);
 }
+fetch('/api/voices?k=' + KEY).then((r) => r.json()).then((v) => {
+  voices = v.voices;
+  $('voiceall').innerHTML = voices.map((n) => `<option>${esc(n)}</option>`).join('');
+  $('voiceall').value = v.byPhone[1] || v.default;
+  for (const p of people.values()) if (p.el) { const vs = p.el.querySelector('.voice'); vs.innerHTML = voices.map((n) => `<option>${esc(n)}</option>`).join(''); vs.value = p.voice || voices[0]; }
+});
+$('voiceall').onchange = () => ws.send(JSON.stringify({ type: 'voice', id: 0, voice: $('voiceall').value }));
+$('preview').onclick = () => { const a = $('previewAudio'); a.src = `/api/preview?k=${KEY}&voice=${encodeURIComponent($('voiceall').value)}&r=${Date.now()}`; a.play(); };
 $('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim() })); e.target.value = ''; } e.stopPropagation(); };
 $('speakall').onkeyup = (e) => e.stopPropagation();
 $('savebrief').onclick = () => ws.send(JSON.stringify({ type: 'saveBrief', text: $('brief').value }));

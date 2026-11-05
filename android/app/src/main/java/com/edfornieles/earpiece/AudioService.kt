@@ -20,7 +20,10 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.net.wifi.WifiManager
+import android.os.BatteryManager
 import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -50,9 +53,9 @@ class AudioService : Service() {
 
     companion object {
         const val WIRE_RATE = 24000
-        const val ACTION_BEGIN = "begin"
         const val ACTION_STOP = "stop"
-        const val EXTRA_NAME = "name"
+        const val ACTION_TEST = "test"           // a chime in the headset, to check the right earbuds are connected
+        const val ACTION_DEVICE = "device"       // send model / battery / headset info again (e.g. after choosing the headset)
 
         // State the screen reads. Updated from background threads; the activity polls it.
         @Volatile var connected = false
@@ -65,6 +68,11 @@ class AudioService : Service() {
         @Volatile var resetCount = 0          // bumps when the control room ends a participant
         @Volatile var headset = false         // a Bluetooth / wired headset is connected
         @Volatile var headsetName = ""
+        @Volatile var person = ""             // who is on this phone now ("" = nobody)
+        @Volatile var next = ""               // who's assigned to it next
+        @Volatile var standby = false         // the control room isn't recording a session
+        @Volatile var identifyAt = 0L         // the control room asked this phone to show itself
+        @Volatile var renumbered = 0L
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -106,19 +114,51 @@ class AudioService : Service() {
         watchHeadset()
         running = true
         connect()
+        main.postDelayed(object : Runnable { override fun run() { if (!stopping) { if (connected) sendDevice(); main.postDelayed(this, 60000) } } }, 60000)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_BEGIN -> {
-                val name = intent.getStringExtra(EXTRA_NAME) ?: ""
-                waiting = false
-                micOn = true
-                sendJson(JSONObject().put("type", "begin").put("name", name))
-            }
+            ACTION_TEST -> chime()
+            ACTION_DEVICE -> sendDevice()
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
         }
         return START_STICKY
+    }
+
+    // ---------------- this phone: model, battery, its headset ----------------
+
+    private fun sendDevice() {
+        val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val version = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
+        sendJson(JSONObject().put("type", "device")
+            .put("model", (Build.MANUFACTURER.replaceFirstChar { it.uppercase() } + " " + Build.MODEL).trim())
+            .put("battery", bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
+            .put("charging", Build.VERSION.SDK_INT >= 23 && bm.isCharging)
+            .put("version", version)
+            .put("expected", Config.expectedHeadset(this)))
+    }
+
+    /** Two soft notes through whatever is playing the voice (the earbuds, if connected). */
+    private fun chime() {
+        for ((f, ms) in listOf(880.0 to 180, 1320.0 to 260)) {
+            val n = WIRE_RATE * ms / 1000
+            val s = ShortArray(n) { i ->
+                val env = kotlin.math.min(1.0, kotlin.math.min(i / 240.0, (n - i) / 2400.0))
+                (kotlin.math.sin(2 * Math.PI * f * i / WIRE_RATE) * 9000 * env).toInt().toShort()
+            }
+            playQueue.add(s)
+        }
+    }
+
+    private fun identify() {
+        identifyAt = System.currentTimeMillis()
+        chime(); main.postDelayed({ chime() }, 900)
+        try {
+            val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 300, 200, 300, 200, 300), -1))
+            else @Suppress("DEPRECATION") v.vibrate(longArrayOf(0, 300, 200, 300, 200, 300), -1)
+        } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
@@ -141,12 +181,13 @@ class AudioService : Service() {
         if (stopping) return
         val cfg = Config.load(this) ?: run { status = "not set up"; return }
         val url = cfg.base.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") +
-            "/ws?role=phone&k=${cfg.key}&device=${cfg.device}"
+            "/ws?role=phone&k=${cfg.key}&device=${cfg.device}&did=${Config.deviceId(this)}"
         status = "connecting…"
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 retry = 0; connected = true; status = "connected"
                 sendJson(JSONObject().put("type", "headset").put("connected", headset).put("name", headsetName))
+                sendDevice()
                 if (!waiting) sendJson(JSONObject().put("type", "hello"))
             }
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -154,12 +195,22 @@ class AudioService : Service() {
                 when (m.optString("type")) {
                     "welcome" -> {
                         slot = m.optInt("id")
+                        // the server may give a different number (e.g. this one was taken): remember it
+                        if (slot > 0 && Config.load(this@AudioService)?.device != slot) Config.setDevice(this@AudioService, slot)
+                        readWho(m)
                         // the server remembers whether a participant was mid-session when we dropped
                         val serverWaiting = m.optBoolean("waiting", true)
                         if (!serverWaiting && waiting) { waiting = false; micOn = true }
                         if (serverWaiting && !waiting) { waiting = true; micOn = false; resetCount++ }
                     }
                     "flush" -> flush()
+                    "who" -> {
+                        readWho(m)
+                        if (person.isNotEmpty() && waiting) { waiting = false; micOn = true }
+                        if (person.isEmpty() && !waiting) { waiting = true; micOn = false; flush(); resetCount++ }
+                    }
+                    "identify" -> main.post { identify() }
+                    "setSlot" -> { val n = m.optInt("slot"); if (n > 0) { Config.setDevice(this@AudioService, n); slot = n; renumbered = System.currentTimeMillis() } }
                     "reset" -> { flush(); waiting = true; micOn = false; resetCount++ }
                     "full" -> status = "all phone slots are in use"
                     "error" -> { status = m.optString("text"); linkProblem = true }
@@ -198,6 +249,13 @@ class AudioService : Service() {
     }
 
     private fun sendJson(o: JSONObject) { ws?.send(o.toString()) }
+
+    private fun readWho(m: JSONObject) {
+        fun label(o: JSONObject?) = if (o == null) "" else ((if (o.has("number") && !o.isNull("number")) "#${o.optInt("number")} " else "") + o.optString("name"))
+        person = label(m.optJSONObject("person"))
+        next = label(m.optJSONObject("next"))
+        standby = m.optBoolean("standby", false)
+    }
 
     // ---------------- audio ----------------
 

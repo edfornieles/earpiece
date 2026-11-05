@@ -77,6 +77,7 @@
       <h3>Your mic</h3>
       <div class="meter"><i id="mymeter"></i></div>
       <button id="all">Hold to talk to everyone</button>
+      <input id="speakall" placeholder="Type a line → every phone hears it in the voice (Enter)">
       <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>4</kbd> = one phone · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
     </div>
     <div class="panel">
@@ -166,7 +167,8 @@ function renderGrid(list) {
         <button class="grow aimode"></button>
         <button class="nudge">Next direction</button>
       </div>
-      <input class="instruct" placeholder="Private note to the AI, then Enter">
+      <input class="speak" placeholder="Type a line → spoken word-for-word in the voice (Enter)">
+      <input class="instruct" placeholder="Private note to the AI (it rephrases), then Enter">
       <div class="log"></div>
       <button class="quiet endp">End participant → ready for next</button>`;
     p.el = el; p.meter = el.querySelector('.meter i'); p.log = el.querySelector('.log'); p.status = el.querySelector('.status');
@@ -175,6 +177,9 @@ function renderGrid(list) {
     el.querySelector('.aimode').onclick = () => ws.send(JSON.stringify({ type: 'mode', id, mode: p.mode === 'auto' ? 'off' : 'auto' }));
     el.querySelector('.nudge').onclick = () => ws.send(JSON.stringify({ type: 'nudge', id }));
     el.querySelector('.endp').onclick = () => { if (confirm(`End ${p.name || 'this participant'} on Phone ${id}? The phone goes back to the consent screen.`)) ws.send(JSON.stringify({ type: 'end', id })); };
+    const spk = el.querySelector('.speak');
+    spk.onkeydown = (e) => { if (e.key === 'Enter' && spk.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id, text: spk.value.trim() })); spk.value = ''; } e.stopPropagation(); };
+    spk.onkeyup = (e) => e.stopPropagation();
     const ins = el.querySelector('.instruct');
     ins.onkeydown = (e) => { if (e.key === 'Enter' && ins.value.trim()) { ws.send(JSON.stringify({ type: 'instruct', id, text: ins.value.trim() })); ins.value = ''; } e.stopPropagation(); };
     ins.onkeyup = (e) => e.stopPropagation();
@@ -210,7 +215,7 @@ function appendLine(p, l, replay) {
   const d = document.createElement('div');
   if (l.who === 'error') { d.className = 'err'; d.textContent = '⚠ ' + l.text; }
   else if (l.who === 'note') { d.className = 'note'; d.textContent = l.text; }
-  else { d.className = l.who; d.innerHTML = `<b>${l.who === 'ai' ? 'AI' : l.who === 'director' ? 'You' : esc(p.name || 'Them')}</b>${esc(l.text)}`; }
+  else { d.className = l.who === 'typed' ? 'ai' : l.who; d.innerHTML = `<b>${l.who === 'ai' ? 'AI' : l.who === 'typed' ? 'Voice (typed)' : l.who === 'director' ? 'You' : esc(p.name || 'Them')}</b>${esc(l.text)}`; }
   const atBottom = p.log.scrollHeight - p.log.scrollTop - p.log.clientHeight < 40;
   p.log.appendChild(d);
   if (atBottom || replay) p.log.scrollTop = p.log.scrollHeight;
@@ -269,6 +274,8 @@ async function loadInfo() {
   if (!$('tabs').children.length) info.devices.forEach((d) => { const b = document.createElement('button'); b.textContent = 'Phone ' + d.device; b.onclick = () => showDevice(d.device); $('tabs').appendChild(b); });
   if (info.devices[0]?.qr) showDevice(1); else setTimeout(loadInfo, 1500);
 }
+$('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim() })); e.target.value = ''; } e.stopPropagation(); };
+$('speakall').onkeyup = (e) => e.stopPropagation();
 $('savebrief').onclick = () => ws.send(JSON.stringify({ type: 'saveBrief', text: $('brief').value }));
 
 $('go').onclick = async () => {

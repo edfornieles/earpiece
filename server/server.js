@@ -402,6 +402,19 @@ wss.on('connection', (ws, req) => {
       if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() }); }
       if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
       if (m.type === 'end' && s) endParticipant(s, 'ended by director');
+      if (m.type === 'speak' && m.text) {   // typed by the director, spoken word for word in the AI's voice
+        const text = String(m.text).trim().slice(0, 600);
+        const targets = m.id ? [sessions.get(m.id)] : [...sessions.values()];
+        for (const t of targets) {
+          if (!t || !t.ws) continue;
+          stopAi(t, 'director typed a line');
+          const turn = ++t.turn;
+          t.history.push({ role: 'assistant', content: text + ' [these words were typed by the human director and spoken in your voice]' });
+          transcript(t, 'typed', text);
+          t.lastActivity = Date.now();
+          say(t, text, turn);
+        }
+      }
       if (m.type === 'mark') { logEvent('mark', { text: String(m.text || 'Mark').slice(0, 200) }); toControls({ type: 'marked', t: clock(), text: m.text || 'Mark' }); }
       if (m.type === 'instruct' && s && m.text && !s.waiting) {
         logEvent('instruct', { id: s.id, text: m.text });

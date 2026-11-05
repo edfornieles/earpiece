@@ -48,9 +48,9 @@ function exportSession(dir, videoClips = []) {
     if (e.type === 'participant_start') { names[e.id] = e.name || `Participant ${e.id}`; markers.push({ t, label: `Phone ${e.id}: ${names[e.id]} starts` }); }
     if (e.type === 'participant_end') markers.push({ t, label: `Phone ${e.id}: ${e.name || ''} ends` });
     if (e.type === 'say') {
-      const who = e.who === 'ai' ? 'AI' : e.who === 'director' ? 'DIRECTOR' : (names[e.id] || `PHONE ${e.id}`).toUpperCase();
+      const who = e.who === 'ai' ? 'AI' : e.who === 'typed' ? 'VOICE (typed)' : e.who === 'director' ? 'DIRECTOR' : (names[e.id] || `PHONE ${e.id}`).toUpperCase();
       lines.push({ slot: e.id, t, who, text: e.text });
-      if (e.who === 'director') markers.push({ t, label: `You → ${e.id}: ${e.text}` });
+      if (e.who === 'director' || e.who === 'typed') markers.push({ t, label: `${e.who === 'typed' ? 'Typed' : 'You'} → ${e.id}: ${e.text}` });
     }
     if (e.type === 'instruct') markers.push({ t, label: `Note to AI (${e.id}): ${e.text}` });
     if (e.type === 'ai_cut') markers.push({ t, label: `AI cut off (${e.id}): ${e.why}` });

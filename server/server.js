@@ -133,7 +133,7 @@ saveSession();
 
 // ---------- http ----------
 const PUB = path.join(__dirname, 'public');
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.mp4': 'video/mp4', '.png': 'image/png', '.wav': 'audio/wav', '.srt': 'text/plain', '.csv': 'text/csv', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.fcpxml': 'application/xml', '.webmanifest': 'application/manifest+json', '.md': 'text/plain; charset=utf-8', '.jsonl': 'text/plain; charset=utf-8', '.jpg': 'image/jpeg' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.mp4': 'video/mp4', '.png': 'image/png', '.wav': 'audio/wav', '.srt': 'text/plain', '.csv': 'text/csv', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.fcpxml': 'application/xml', '.webmanifest': 'application/manifest+json', '.md': 'text/plain; charset=utf-8', '.jsonl': 'text/plain; charset=utf-8', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.pdf': 'application/pdf', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.webm': 'video/webm', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg', '.gif': 'image/gif', '.heic': 'image/heic' };
 let phoneBase = null;
 const phoneUrl = (device) => phoneBase && `${phoneBase}/p?k=${PHONE_KEY}${device ? '&device=' + device : ''}`;
 const json = (res, obj, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -216,6 +216,24 @@ const server = http.createServer(async (req, res) => {
       return json(res, { session: s, transcript, files, catalogue, people: path.basename(dir) === stamp ? people : readPeople(dir) });
     }
     if (p === '/api/open') { if (process.platform === 'darwin') spawn('open', [dir]); return json(res, { ok: true }); }
+    if (p === '/api/tree') {   // every file in the session folder, for the files page
+      const out = [];
+      (function walk(d) {
+        for (const f of fs.readdirSync(d).sort()) {
+          if (f.startsWith('.')) continue;
+          const full = path.join(d, f), st = fs.statSync(full);
+          if (st.isDirectory()) walk(full); else out.push({ path: path.relative(dir, full), size: st.size, mtime: st.mtimeMs });
+        }
+      })(dir);
+      let s = {}; try { s = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')); } catch {}
+      return json(res, { name: path.basename(dir), title: s.title || '', start: s.start_iso, end: s.end_iso || null, live: path.basename(dir) === stamp, folder: dir, files: out, people: path.basename(dir) === stamp ? people : readPeople(dir) });
+    }
+    if (p === '/api/reveal') {   // Show in Finder
+      const f = path.join(dir, path.normalize(String(u.searchParams.get('f') || '')).replace(/^(\.\.[\/\\])+/, ''));
+      if (!f.startsWith(dir + path.sep) || !fs.existsSync(f)) return json(res, { error: 'no such file' }, 404);
+      if (process.platform === 'darwin') spawn('open', ['-R', f]);
+      return json(res, { ok: true });
+    }
     if (p === '/api/export') {
       if (path.basename(dir) === stamp) return json(res, { error: 'This session is still recording — it exports when you stop the server.' }, 409);
       return json(res, exportSession(dir));
@@ -281,9 +299,13 @@ const server = http.createServer(async (req, res) => {
     const [, , s, ...rest] = p.split('/');
     const dir = sessionDirOf(decodeURIComponent(s));
     const file = dir && path.join(dir, path.normalize(decodeURIComponent(rest.join('/'))).replace(/^(\.\.[\/\\])+/, ''));
-    if (!file || !file.startsWith(dir) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
+    if (!file || !file.startsWith(dir + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
     const size = fs.statSync(file).size, range = req.headers.range?.match(/bytes=(\d*)-(\d*)/);
-    const type = TYPES[path.extname(file)] || 'application/octet-stream';
+    const type = TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
+    if (u.searchParams.get('dl')) {
+      res.writeHead(200, { 'content-type': type, 'content-length': size, 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}` });
+      return fs.createReadStream(file).pipe(res);
+    }
     if (range) {
       const start = Number(range[1] || 0), end = range[2] ? Number(range[2]) : size - 1;
       res.writeHead(206, { 'content-type': type, 'content-range': `bytes ${start}-${end}/${size}`, 'accept-ranges': 'bytes', 'content-length': end - start + 1 });
@@ -297,6 +319,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/control') p = '/control.html';
   if (p === '/library') p = '/library.html';
   if (p === '/monitor') p = '/monitor.html';
+  if (p === '/files') p = '/files.html';
   const file = path.join(PUB, path.normalize(p).replace(/^(\.\.[\/\\])+/, ''));
   if (!file.startsWith(PUB) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
   res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });

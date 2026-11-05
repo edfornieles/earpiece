@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Session files</title>
+<style>
+  :root { --bg:#0e0e0e; --card:#171717; --line:#2a2a2a; --fg:#e8e6e1; --dim:#8a8780; --hot:#d9482b; --ok:#5fa36a; --ai:#7a8fd6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system, system-ui, sans-serif; }
+  header { position:sticky; top:0; z-index:3; background:var(--bg); padding:12px 22px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; font-weight:500; margin:0; }
+  header nav { margin-left:auto; display:flex; gap:14px; } header nav a { color:var(--dim); text-decoration:none; font-size:13px; }
+  select, input, button { font:inherit; background:#151515; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  button { cursor:pointer; background:#222; } button:hover { border-color:#444; }
+  #pick { max-width:380px; } #q { width:220px; }
+  main { padding:18px 22px 60px; max-width:1300px; }
+  .summary { display:flex; gap:18px; flex-wrap:wrap; color:var(--dim); font-size:13px; margin-bottom:6px; }
+  .summary b { color:var(--fg); font-weight:500; }
+  h2 { font-size:20px; font-weight:500; margin:6px 0 4px; }
+  .live { color:var(--hot); font-size:12px; margin-left:8px; }
+  .group { margin-top:22px; }
+  .gh { display:flex; align-items:baseline; gap:10px; cursor:pointer; user-select:none; padding:6px 0; border-bottom:1px solid var(--line); }
+  .gh h3 { margin:0; font-size:13px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; }
+  .gh .d { color:var(--dim); font-size:12px; flex:1; }
+  .gh .n { color:var(--dim); font-size:12px; white-space:nowrap; }
+  .gh .tw { color:var(--dim); width:12px; }
+  .group.shut .body { display:none; }
+  .row { display:grid; grid-template-columns: 26px 1fr 90px 120px auto; gap:10px; align-items:center; padding:6px 4px; border-bottom:1px solid #1c1c1c; }
+  .row:hover { background:#141414; }
+  .row .ic { text-align:center; opacity:.8; }
+  .row .nm { word-break:break-all; } .row .nm small { color:var(--dim); margin-left:6px; }
+  .row .sz, .row .tm { color:var(--dim); font-size:12px; text-align:right; }
+  .row .act { display:flex; gap:6px; justify-content:flex-end; } .row .act button { padding:4px 9px; font-size:12px; }
+  .row audio { grid-column: 2 / -1; width:100%; height:32px; }
+  .sub { color:var(--dim); font-size:12px; margin:12px 0 4px 4px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(170px,1fr)); gap:8px; padding:8px 0; }
+  .grid figure { margin:0; background:#000; border-radius:6px; overflow:hidden; cursor:zoom-in; position:relative; }
+  .grid img { width:100%; display:block; aspect-ratio:16/9; object-fit:cover; background:#111; }
+  .grid figcaption { position:absolute; left:6px; bottom:4px; font-size:11px; background:rgba(0,0,0,.6); padding:1px 6px; border-radius:4px; }
+  .grid.sheets { grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); }
+  .grid.sheets img { aspect-ratio:auto; object-fit:contain; object-position:top; max-height:300px; }
+  .md { align-self:flex-start; width:100%; max-width:900px; margin:0 auto; font-size:14px; line-height:1.6; }
+  .md h1, .md h2, .md h3 { font-weight:500; margin:1.2em 0 .4em; } .md h1 { font-size:22px; } .md h2 { font-size:17px; } .md h3 { font-size:15px; }
+  .md code { background:#1d1d1d; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+  .md blockquote { border-left:3px solid var(--hot); margin:0; padding:4px 12px; color:#f0b9ad; }
+  .md table { border-collapse:collapse; font-size:13px; } .md td, .md th { border:1px solid var(--line); padding:4px 8px; text-align:left; vertical-align:top; }
+  .empty { color:var(--dim); padding:30px 0; }
+  #modal { position:fixed; inset:0; background:#0b0b0b; display:none; flex-direction:column; z-index:9; }
+  #modal .bar { display:flex; gap:10px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:#0b0b0b; }
+  #modal .bar span { flex:1; word-break:break-all; color:var(--dim); font-size:13px; }
+  #modal .content { flex:1; overflow:auto; display:flex; align-items:center; justify-content:center; padding:16px; }
+  #modal img, #modal video { max-width:100%; max-height:100%; }
+  #modal iframe { width:100%; height:100%; border:0; background:#fff; border-radius:6px; }
+  #modal pre { align-self:flex-start; width:100%; margin:0; white-space:pre-wrap; word-break:break-word; font:12.5px/1.55 ui-monospace, Menlo, monospace; color:#ddd; }
+  #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#222; border:1px solid var(--line); padding:8px 14px; border-radius:8px; display:none; z-index:10; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Session files</h1>
+  <select id="pick"></select>
+  <input id="q" placeholder="Filter by name…">
+  <button id="finder">Open folder in Finder</button>
+  <nav><a id="lib">Library</a><a id="ctl">Control room</a></nav>
+</header>
+<main id="main"><div class="empty">Loading…</div></main>
+<div id="modal"><div class="bar"><span id="mtitle"></span><button id="mdl">Download</button><button id="mfinder">Show in Finder</button><button id="mclose">Close (Esc)</button></div><div class="content" id="mcontent"></div></div>
+<div id="toast"></div>
+<script>
+const KEY = new URLSearchParams(location.search).get('k');
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+const api = (p) => fetch(`/api/${p}${p.includes('?') ? '&' : '?'}k=${KEY}`).then((r) => r.json());
+const size = (b) => b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b > 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
+const when = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const ext = (p) => (p.match(/\.([^./]+)$/) || [])[1]?.toLowerCase() || '';
+function toast(t) { $('toast').textContent = t; $('toast').style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => ($('toast').style.display = 'none'), 1800); }
+$('lib').href = '/library?k=' + KEY; $('ctl').href = '/control?k=' + KEY;
+
+let S = null, cur = new URLSearchParams(location.search).get('s'), shut = new Set(['Stills']), sig = '';
+const url = (p, dl) => `/files/${encodeURIComponent(S.name)}/${p.split('/').map(encodeURIComponent).join('/')}?k=${KEY}${dl ? '&dl=1' : ''}`;
+
+// what each part of a session folder is, in the order an editor would want it
+const GROUPS = [
+  ['Documents', 'release forms and anything attached to the session or a person', (p) => p.startsWith('documents/')],
+  ['Ready to edit', 'timelines to import into your editor (whole session, and one per participant), markers, subtitles', (p) => p.startsWith('exports/')],
+  ['Edit notes & script', 'the catalogue: start with EDIT_NOTES.md', (p) => /^catalogue\/[^/]+\.(md|json|jsonl)$/.test(p) && !/status\.json$/.test(p)],
+  ['Conversation audio', 'per phone: what the participant said (mic), what they heard, the AI voice alone; and your mic', (p) => /^audio\/(phone\d+-|director)/.test(p)],
+  ['Conversation mixes', 'stereo: participant left, what they heard right', (p) => p.startsWith('catalogue/mixes/')],
+  ['Room microphones', 'one file per room mic', (p) => p.startsWith('audio/room-')],
+  ['Cameras', 'full-quality recordings, one file per 10 minutes', (p) => p.startsWith('video/')],
+  ['Camera proxies', 'light 720p copies for scrubbing', (p) => p.startsWith('catalogue/proxies/')],
+  ['Contact sheets', 'each row is one minute, a still every 10 s', (p) => p.startsWith('catalogue/sheets/')],
+  ['Stills', 'one every 10 s per camera, named by session time', (p) => p.startsWith('catalogue/thumbs/')],
+  ['Session records', 'what happened, when — the raw logs everything else is built from', (p) => /^(session\.json|events\.jsonl|transcript\.txt|people\.json|brief\.txt)$/.test(p)],
+  ['Other', '', () => true],
+];
+const icon = (p) => {
+  const e = ext(p);
+  if (['wav', 'm4a', 'mp3'].includes(e)) return '🔊';
+  if (['mp4', 'mov', 'mkv', 'webm'].includes(e)) return '🎞';
+  if (['jpg', 'jpeg', 'png', 'gif', 'heic'].includes(e)) return '🖼';
+  if (e === 'pdf') return '📄';
+  if (e === 'fcpxml') return '🎬';
+  if (['md', 'txt', 'json', 'jsonl', 'csv', 'srt'].includes(e)) return '📝';
+  return '📎';
+};
+const viewable = (p) => ['mp4', 'mov', 'webm', 'jpg', 'jpeg', 'png', 'gif', 'pdf', 'md', 'txt', 'json', 'jsonl', 'csv', 'srt', 'fcpxml'].includes(ext(p));
+
+async function loadList() {
+  const list = await api('sessions');
+  $('pick').innerHTML = list.map((s) => `<option value="${esc(s.name)}">${esc((s.title ? s.title + ' — ' : '') + new Date(s.start).toLocaleString())}${s.live ? ' (recording)' : ''}</option>`).join('');
+  if (!cur || !list.find((s) => s.name === cur)) cur = list[0]?.name;
+  if (!cur) { $('main').innerHTML = '<div class="empty">No sessions yet.</div>'; return; }
+  $('pick').value = cur;
+  load();
+}
+$('pick').onchange = () => { cur = $('pick').value; history.replaceState(null, '', `?k=${KEY}&s=${encodeURIComponent(cur)}`); sig = ''; load(); };
+$('q').oninput = () => render();
+$('finder').onclick = () => api('open?s=' + encodeURIComponent(cur)).then(() => toast('Opened in Finder'));
+
+async function load() {
+  S = await api('tree?s=' + encodeURIComponent(cur));
+  const nsig = S.files.length + ':' + S.files.reduce((a, f) => a + f.size, 0);
+  if (nsig !== sig) { sig = nsig; render(); }
+  clearTimeout(load.t); if (S.live) load.t = setTimeout(load, 8000);   // a recording session keeps growing
+}
+
+function render() {
+  const q = $('q').value.trim().toLowerCase();
+  const pname = {}; for (const x of S.people || []) pname[x.pid] = x.name || 'unnamed';
+  const label = (p) => {   // documents/<Name>_<pid>/file → "file  · Name"
+    const m = p.match(/^documents\/[^/]*_(p[0-9a-f]{6})\/(.+)$/);
+    if (m) return `${esc(m[2])}<small>${esc(pname[m[1]] || 'person')}</small>`;
+    return esc(p.replace(/^(documents|exports|catalogue\/(mixes|proxies|sheets)|catalogue|audio|video)\//, ''));
+  };
+  const files = S.files.filter((f) => !q || f.path.toLowerCase().includes(q));
+  const total = S.files.reduce((a, f) => a + f.size, 0);
+  const used = new Set();
+  let html = `<h2>${esc(S.title || S.name)}${S.live ? '<span class="live">● recording</span>' : ''}</h2>
+    <div class="summary"><span><b>${S.files.length}</b> files</span><span><b>${size(total)}</b></span><span>${esc(new Date(S.start).toLocaleString())}${S.end ? ' → ' + esc(new Date(S.end).toLocaleTimeString()) : ''}</span><span>${esc(S.folder)}</span></div>`;
+  for (const [name, desc, test] of GROUPS) {
+    const fs = files.filter((f) => !used.has(f.path) && test(f.path));
+    fs.forEach((f) => used.add(f.path));
+    if (!fs.length) continue;
+    const gsize = fs.reduce((a, f) => a + f.size, 0);
+    html += `<div class="group ${shut.has(name) && !q ? 'shut' : ''}" data-g="${esc(name)}"><div class="gh"><span class="tw">${shut.has(name) && !q ? '▸' : '▾'}</span><h3>${esc(name)}</h3><span class="d">${esc(desc)}</span><span class="n">${fs.length} · ${size(gsize)}</span></div><div class="body">`;
+    if (name === 'Stills' || name === 'Contact sheets') {
+      const byCam = {};
+      for (const f of fs) { const cam = f.path.split('/')[2]; (byCam[cam] = byCam[cam] || []).push(f); }
+      for (const [cam, list] of Object.entries(byCam)) {
+        html += `<div class="sub">${esc(cam)} · ${list.length}</div><div class="grid${name === 'Contact sheets' ? ' sheets' : ''}">` + list.map((f) => `<figure data-p="${esc(f.path)}"><img loading="lazy" src="${url(f.path)}" alt=""><figcaption>${esc(f.path.split('/').pop().replace(/\.jpg$/, ''))}</figcaption></figure>`).join('') + '</div>';
+      }
+    } else {
+      html += fs.map((f) => `<div class="row" data-p="${esc(f.path)}"><span class="ic">${icon(f.path)}</span><span class="nm">${label(f.path)}</span><span class="sz">${size(f.size)}</span><span class="tm">${when(f.mtime)}</span>
+        <span class="act">${['wav', 'm4a', 'mp3'].includes(ext(f.path)) ? '<button data-a="play">▶ Play</button>' : viewable(f.path) ? '<button data-a="view">View</button>' : ''}<button data-a="dl">Download</button><button data-a="finder">Finder</button></span></div>`).join('');
+    }
+    html += '</div></div>';
+  }
+  if (!files.length) html += `<div class="empty">${q ? 'Nothing matches.' : 'This session has no files yet.'}</div>`;
+  $('main').innerHTML = html;
+}
+
+$('main').addEventListener('click', (e) => {
+  const gh = e.target.closest('.gh');
+  if (gh) { const g = gh.parentElement.dataset.g; shut.has(g) ? shut.delete(g) : shut.add(g); render(); return; }
+  const fig = e.target.closest('figure');
+  if (fig) return view(fig.dataset.p);
+  const b = e.target.closest('button'); if (!b) return;
+  const p = b.closest('.row').dataset.p;
+  if (b.dataset.a === 'dl') location.href = url(p, true);
+  if (b.dataset.a === 'finder') reveal(p);
+  if (b.dataset.a === 'view') view(p);
+  if (b.dataset.a === 'play') {
+    const row = b.closest('.row'); let a = row.querySelector('audio');
+    if (a) { a.remove(); b.textContent = '▶ Play'; return; }
+    a = document.createElement('audio'); a.controls = true; a.src = url(p); row.appendChild(a); a.play(); b.textContent = '✕';
+  }
+});
+const reveal = (p) => api(`reveal?s=${encodeURIComponent(cur)}&f=${encodeURIComponent(p)}`).then((r) => toast(r.error ? r.error : 'Shown in Finder'));
+
+let viewing = null;
+async function view(p) {
+  viewing = p;
+  const e = ext(p), box = $('mcontent');
+  $('mtitle').textContent = p;
+  if (['mp4', 'mov', 'webm'].includes(e)) box.innerHTML = `<video controls autoplay src="${url(p)}"></video>`;
+  else if (['jpg', 'jpeg', 'png', 'gif'].includes(e)) box.innerHTML = `<img src="${url(p)}">`;
+  else if (e === 'pdf') box.innerHTML = `<iframe src="${url(p)}"></iframe>`;
+  else {
+    box.innerHTML = '<pre>Loading…</pre>';
+    const r = await fetch(url(p)); let t = await r.text();
+    if (t.length > 2e6) t = t.slice(0, 2e6) + '\n\n… (cut — download for the whole file)';
+    if (e === 'json') { try { t = JSON.stringify(JSON.parse(t), null, 2); } catch {} }
+    box.innerHTML = e === 'md' ? `<div class="md">${markdown(t)}</div>` : `<pre>${esc(t)}</pre>`;
+  }
+  $('modal').style.display = 'flex';
+}
+// just enough Markdown for the edit notes: headings, lists, quotes, tables, bold, italics, code
+function markdown(src) {
+  const inline = (x) => esc(x).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^\w])_([^_]+)_(?=[^\w]|$)/g, '$1<i>$2</i>');
+  const out = []; let list = false, table = null;
+  const flush = () => { if (list) { out.push('</ul>'); list = false; } if (table) { out.push('<table>' + table.join('') + '</table>'); table = null; } };
+  for (const line of src.split('\n')) {
+    if (/^\|/.test(line)) { if (/^\|[-| ]+\|$/.test(line)) continue; if (list) { out.push('</ul>'); list = false; } (table = table || []).push('<tr>' + line.slice(1, -1).split('|').map((c) => `<td>${inline(c.trim())}</td>`).join('') + '</tr>'); continue; }
+    if (table) flush();
+    let m;
+    if ((m = line.match(/^(#{1,3}) (.*)/))) { flush(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); }
+    else if ((m = line.match(/^- (.*)/))) { if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${inline(m[1])}</li>`); }
+    else if ((m = line.match(/^> ?(.*)/))) { flush(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); }
+    else if (line.trim()) { flush(); out.push(`<p>${inline(line)}</p>`); }
+    else flush();
+  }
+  flush();
+  return out.join('\n');
+}
+const close = () => { $('modal').style.display = 'none'; $('mcontent').innerHTML = ''; viewing = null; };
+$('mclose').onclick = close;
+$('mdl').onclick = () => viewing && (location.href = url(viewing, true));
+$('mfinder').onclick = () => viewing && reveal(viewing);
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') close();
+  if (viewing && /^catalogue\/(thumbs|sheets)\//.test(viewing) && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {   // step through stills
+    const dir = viewing.split('/').slice(0, 3).join('/');
+    const list = S.files.map((f) => f.path).filter((x) => x.startsWith(dir + '/'));
+    const i = list.indexOf(viewing) + (e.key === 'ArrowRight' ? 1 : -1);
+    if (list[i]) view(list[i]);
+  }
+});
+loadList();
+</script>
+</body>
+</html>

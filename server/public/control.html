@@ -91,6 +91,7 @@
   <nav>
     <button id="mark" title="Drop a marker on the timeline (M)">Mark <kbd>M</kbd></button>
     <button id="endsession" title="Close this session's recordings and exports, start a new one">End session</button>
+    <a id="files" target="_blank">Files ↗</a>
     <a id="lib" target="_blank">Library ↗</a>
     <span class="rec">REC</span>
   </nav>
@@ -171,7 +172,7 @@ const $ = (id) => document.getElementById(id);
 const MAX = 4;
 let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [], micAs = 'own';
 const people = new Map();
-$('lib').href = '/library?k=' + KEY;
+$('lib').href = '/library?k=' + KEY; $('files').href = '/files?k=' + KEY;
 
 function toast(t) { $('toast').textContent = t; $('toast').style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => ($('toast').style.display = 'none'), 1800); }
 function person(id) {

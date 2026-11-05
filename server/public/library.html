@@ -93,6 +93,7 @@ async function open(name) {
     <div class="hint">${esc(new Date(s.start_iso).toLocaleString())}${s.end_iso ? ' → ' + esc(new Date(s.end_iso).toLocaleTimeString()) : ''} · ${esc(name)}</div>
     <div class="row">
       <input id="title" placeholder="Title for this session" value="${esc(s.title || '')}"><button id="savetitle">Save title</button>
+      <button id="allfiles">All files →</button>
       <button id="openf">Open folder in Finder</button>
       <button id="reexp" ${live ? 'disabled title="exports when the session ends"' : ''}>Rebuild exports</button>
     </div>
@@ -137,6 +138,7 @@ async function open(name) {
     drop(el, x.pid);
     $('folk').appendChild(el);
   }
+  $('allfiles').onclick = () => (location.href = `/files?k=${KEY}&s=${encodeURIComponent(name)}`);
   $('openf').onclick = () => api('open?s=' + encodeURIComponent(name));
   $('reexp').onclick = async () => { const r = await api('export?s=' + encodeURIComponent(name)); if (r.error) alert(r.error); open(name); };
   $('savetitle').onclick = async () => { await api('title?s=' + encodeURIComponent(name), { method: 'POST', body: JSON.stringify({ title: $('title').value }) }); sessions = await api('sessions'); render(); };

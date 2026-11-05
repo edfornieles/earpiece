@@ -20,6 +20,8 @@ function loadConfig(dir) {
 
 const safe = (s) => s.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'camera';
 
+// live picture for the control room and camera screens (the recording is untouched)
+const PREVIEW_FPS = Number(process.env.PREVIEW_FPS || 12), PREVIEW_W = Number(process.env.PREVIEW_WIDTH || 960);
 const isLocal = (url) => url === 'test' || /^mac(:|$)/.test(url);
 function localInput(url) {
   if (url === 'test') return { input: ['-re', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000'], audio: '1:a:0', enc: ['-c:v', 'libx264', '-preset', 'ultrafast', '-g', '50'] };
@@ -65,7 +67,7 @@ class Camera {
     if (isLocal(this.main)) {   // one capture → recording + live preview
       const L = localInput(this.main);
       args = ['-hide_banner', '-loglevel', 'error', '-nostats', ...L.input,
-        '-filter_complex', '[0:v]split=2[r][p];[p]fps=8,scale=640:-2[pv]',
+        '-filter_complex', `[0:v]split=2[r][p];[p]fps=${PREVIEW_FPS},scale='min(${PREVIEW_W},iw)':-2[pv]`,
         '-map', '[r]', ...(L.audio ? ['-map', L.audio, '-c:a', 'aac', '-b:a', '96k'] : []), ...L.enc, ...seg,
         '-map', '[pv]', '-q:v', '7', '-f', 'mjpeg', 'pipe:1'];
     } else {
@@ -105,7 +107,7 @@ class Camera {
   startPreview() {
     if (this.stopped) return;
     const args = ['-hide_banner', '-loglevel', 'error', ...inputArgs(this.preview, true),
-      '-an', '-vf', 'fps=8,scale=640:-2', '-q:v', '7', '-f', 'mjpeg', 'pipe:1'];
+      '-an', '-vf', `fps=${PREVIEW_FPS},scale='min(${PREVIEW_W},iw)':-2`, '-q:v', '6', '-f', 'mjpeg', 'pipe:1'];
     const p = spawn('ffmpeg', args);
     this.prev = p;
     this.readFrames(p.stdout, p);
@@ -128,7 +130,7 @@ class Camera {
     });
   }
   sendFrame(res) {
-    if (!this.frame) return;
+    if (!this.frame || res.writableLength > 600000) return;   // a slow screen skips frames instead of falling behind
     res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${this.frame.length}\r\n\r\n`);
     res.write(this.frame); res.write('\r\n');
   }

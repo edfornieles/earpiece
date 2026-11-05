@@ -54,6 +54,10 @@ async function main() {
   const session = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
   const events = (() => { try { return fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } })();
   const T0 = session.start_epoch_ms || Date.parse(session.start_iso);
+  // names and release status only — contact details in people.json stay out of the catalogue
+  const folk = (() => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'people.json'), 'utf8')); } catch { return []; } })();
+  const byPid = Object.fromEntries(folk.map((x) => [x.pid, x]));
+  for (const v of session.participants || []) { const x = byPid[v.pid]; if (x) { if (x.name) v.name = x.name; v.release = !!x.release; v.documents = (x.files || []).length; } }
   const wall = (sec) => new Date(T0 + sec * 1000).toISOString();
 
   // ---------- manifest ----------
@@ -77,7 +81,7 @@ async function main() {
   for (const r of session.room_audio || []) files.push({ file: r.file, kind: 'room_mic', name: r.name, description: `room microphone "${r.name}"`, offset: r.offset, start_wall: wall(r.offset), ...probe(path.join(dir, r.file)) });
   for (const v of session.video || []) files.push({ file: v.file, kind: 'camera', camera: v.name, cam: v.cam, description: `camera "${v.name}"`, offset: v.offset, start_wall: wall(v.offset), ...probe(path.join(dir, v.file)) });
   const manifest = {
-    session: session.name, title: session.title || '', start: session.start_iso, end: session.end_iso || null, timezone: session.timezone,
+    session: session.name, title: session.title || '', notes: session.notes || '', start: session.start_iso, end: session.end_iso || null, timezone: session.timezone,
     clock: 'All times are seconds from the start of the session ("session clock"). A file with offset 12.5 began 12.5 s in; to find session time T inside it, seek to T - offset.',
     participants: session.participants || [], files,
     exports: { timeline: 'exports/timeline.fcpxml', markers: 'exports/markers.csv', subtitles: (session.exports?.subtitles || []).map((s) => 'exports/' + s) }
@@ -95,7 +99,7 @@ async function main() {
   const names = {};
   const utts = [];
   for (const e of events) {
-    if (e.type === 'participant_start') names[e.id] = e.name || `Participant ${e.id}`;
+    if (e.type === 'participant_start') names[e.id] = (e.pid && byPid[e.pid]?.name) || e.name || `Participant ${e.id}`;
     if (e.type !== 'say') continue;
     const p = e.u != null ? play[e.u] || {} : {};
     const speaker = e.who === 'participant' ? (names[e.id] || `Participant ${e.id}`) : e.who === 'ai' ? 'AI' : e.who === 'director' ? 'Director (own voice)' : e.who === 'typed' ? 'AI voice (typed by director)' : 'AI voice (spoken by director)';
@@ -209,17 +213,21 @@ function notes(session, m, utts, events) {
   const dur = Math.max(0, ...m.files.map((f) => f.offset + (f.duration || 0)));
   L.push(`# ${session.title || 'Earpiece session'} — ${session.name}`, '');
   L.push(`Started ${new Date(session.start_iso).toString()}${session.end_iso ? `, ended ${new Date(session.end_iso).toTimeString().slice(0, 8)}` : ''} · about ${dur < 90 ? Math.round(dur) + ' s' : Math.round(dur / 60) + ' min'} recorded.`, '');
+  if (session.notes) L.push('## Session notes', '', session.notes.trim(), '');
+  if ((session.documents || []).length) L.push('Documents attached to the session: ' + session.documents.map((d) => '`' + d.file + '`').join(', '), '');
   L.push('## How this session is organised', '');
   L.push('Every recording shares one clock: seconds from the start of the session. Timecodes below (HH:MM:SS:FF at 25 fps) are on that clock, as are the markers and the timeline in `exports/`. A file with offset 12.5 began 12.5 s into the session.', '');
-  L.push('- **Fastest start:** import `exports/timeline.fcpxml` into DaVinci Resolve or Final Cut — every file is already placed, with markers.');
+  L.push('- **Fastest start:** import `exports/timeline.fcpxml` into DaVinci Resolve or Final Cut — every file is already placed, with markers. `exports/people/` has one timeline per participant, trimmed to their visit.');
   L.push('- **Script:** `catalogue/utterances.jsonl` — one line per thing said, with start/end, word timings where available, the file it lives in, and which cameras and room mics were rolling.');
   L.push('- **Listening:** `catalogue/mixes/phoneN-conversation.wav` — participant left, what they heard right.');
   L.push('- **Looking:** `catalogue/sheets/` contact sheets (each row is one minute, 10 s per still) and `catalogue/thumbs/` stills named by session time; `catalogue/proxies/` light 720p copies.', '');
   L.push('## Participants', '');
+  const noRelease = (session.participants || []).filter((p) => p.release === false || p.release === undefined);
+  if (noRelease.length) L.push(`> ⚠ No signed release on file for: ${[...new Set(noRelease.map((p) => p.name || 'unnamed (phone ' + p.phone + ')'))].join(', ')}. Check before using their footage or voice.`, '');
   if (!(session.participants || []).length) L.push('_No participants were started in this session._');
   for (const p of session.participants || []) {
     const said = utts.filter((u) => u.phone === p.phone && u.start >= p.start && (p.end == null || u.start <= p.end + 1));
-    L.push(`- **${p.name || 'Unnamed'}** on phone ${p.phone}: ${tc(p.start)} → ${p.end != null ? tc(p.end) : 'end'} (${Math.round(((p.end ?? dur) - p.start) / 60 * 10) / 10} min) · ${said.filter((u) => u.who === 'participant').length} things said by them, ${said.filter((u) => u.who !== 'participant').length} directions`);
+    L.push(`- **${p.name || 'Unnamed'}**${p.release ? ' (release ✓)' : ' (no release on file)'} on phone ${p.phone}: ${tc(p.start)} → ${p.end != null ? tc(p.end) : 'end'} (${Math.round(((p.end ?? dur) - p.start) / 60 * 10) / 10} min) · ${said.filter((u) => u.who === 'participant').length} things said by them, ${said.filter((u) => u.who !== 'participant').length} directions`);
   }
   L.push('', '## Files', '', '| file | what | starts at | length |', '|---|---|---|---|');
   for (const f of m.files) L.push(`| \`${f.file}\` | ${f.description} | ${tc(f.offset)} | ${Math.round(f.duration)} s |`);

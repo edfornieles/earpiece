@@ -62,12 +62,32 @@
   #gate button { font-size:17px; padding:16px 28px; background:var(--fg); color:#000; }
   .hint { color:var(--dim); font-size:12px; }
   #brief { min-height:200px; }
+  header .titlebox { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
+  #stitle { background:transparent; border:1px solid transparent; font-size:16px; padding:6px 8px; max-width:520px; }
+  #stitle:hover, #stitle:focus { border-color:var(--line); background:#101010; }
+  .docs { display:flex; flex-direction:column; gap:4px; font-size:12px; }
+  .docs a { color:var(--fg); text-decoration:none; word-break:break-all; } .docs a:hover { text-decoration:underline; }
+  .drop.over { outline:2px dashed var(--ai); outline-offset:4px; }
+  #peoplebox { margin-top:18px; }
+  #peoplebox > h3 { margin:0 0 10px; font-size:12px; color:var(--dim); font-weight:500; text-transform:uppercase; letter-spacing:.06em; display:flex; justify-content:space-between; align-items:center; }
+  #folk { display:grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap:12px; }
+  .person { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .person .top { display:flex; gap:8px; align-items:center; }
+  .person .top input { font-weight:500; }
+  .person textarea { min-height:52px; }
+  .person .meta { font-size:12px; color:var(--dim); }
+  .person .row button, .person .row select { padding:6px 9px; font-size:13px; white-space:nowrap; }
+  .rel { display:flex; align-items:center; gap:6px; font-size:13px; white-space:nowrap; } .rel input { width:auto; }
+  .badge { font-size:11px; padding:2px 7px; border-radius:10px; border:1px solid var(--line); color:var(--dim); font-weight:400; margin-left:6px; }
+  .badge.no { color:var(--hot); border-color:var(--hot); } .badge.yes { color:var(--ok); border-color:var(--ok); }
+  #screenqr svg { width:150px; height:auto; background:#fff; border-radius:8px; }
   #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#222; border:1px solid var(--line); padding:8px 14px; border-radius:8px; display:none; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Control room <span id="mock" class="hint"></span></h1>
+  <div class="titlebox"><h1>Control room <span id="mock" class="hint"></span></h1>
+    <input id="stitle" placeholder="Name this session…" title="Session name — saved with the recordings"></div>
   <nav>
     <button id="mark" title="Drop a marker on the timeline (M)">Mark <kbd>M</kbd></button>
     <button id="endsession" title="Close this session's recordings and exports, start a new one">End session</button>
@@ -80,6 +100,11 @@
     <div id="cams"></div>
     <div id="room"></div>
     <div id="grid"></div>
+    <div id="peoplebox">
+      <h3><span>People this session</span><button id="addperson">+ Add person</button></h3>
+      <div id="folk"></div>
+      <div class="hint" style="margin-top:8px">Everyone who starts on a phone appears here. Add people ahead of time to fill in details and start them on a phone from here. Drop a file on a person to attach it (release form, ID photo, notes). Contact details stay in this session's folder — they aren't given to the AI or put in the edit notes.</div>
+    </div>
   </section>
   <aside>
     <div class="panel">
@@ -117,9 +142,21 @@
       <textarea id="brief" spellcheck="false"></textarea>
       <button id="savebrief">Save brief</button>
     </div>
-    <div class="panel">
+    <div class="panel drop" id="sessionpanel">
       <h3>Session</h3>
+      <textarea id="snotes" placeholder="Notes about this session (where, who's working, what you're trying)…" style="min-height:70px"></textarea>
+      <div class="docs" id="sdocs"></div>
+      <div class="row"><button id="attach" class="grow">Attach documents…</button><input type="file" id="sfile" multiple hidden></div>
       <div id="session" class="hint"></div>
+    </div>
+    <div class="panel">
+      <h3>Camera screens</h3>
+      <div class="hint">On this Mac's monitors: open a window, drag it to a screen, click it for full screen.</div>
+      <div class="row" id="camwins" style="flex-wrap:wrap"></div>
+      <div class="tabs" id="screentabs"></div>
+      <div id="screenqr"><span class="hint">…</span></div>
+      <div id="screenlink" style="word-break:break-all;color:var(--dim);font-size:11px"></div>
+      <div class="hint">On a tablet or another computer on this wifi: scan or type the link, then tap for full screen. These links can watch but not control.</div>
     </div>
   </aside>
 </main>
@@ -183,9 +220,11 @@ function renderRoom(r) {
 $('zoom').onclick = () => { $('zoom').style.display = 'none'; $('zoom').querySelector('img').src = ''; };
 
 // ---- phones ----
+let lastList = [];
 function renderGrid(list) {
+  lastList = list;
   for (const p of people.values()) p.connected = false;
-  for (const { id, name, mode, waiting } of list) { const p = person(id); Object.assign(p, { name, mode, waiting, connected: true }); }
+  for (const { id, name, pid, mode, waiting } of list) { const p = person(id); Object.assign(p, { name, pid, mode, waiting, connected: true }); }
   const grid = $('grid'); grid.innerHTML = '';
   for (let id = 1; id <= MAX; id++) {
     const p = people.get(id);
@@ -193,7 +232,7 @@ function renderGrid(list) {
     if (!p || !p.connected) { el.className = 'card empty'; el.textContent = `Phone ${id} — not connected`; grid.appendChild(el); p && (p.el = null); continue; }
     el.className = 'card';
     el.innerHTML = `
-      <h2><span class="who"></span> <small>Phone ${id}</small></h2>
+      <h2><span><span class="who"></span><span class="badge relb"></span></span> <small>Phone ${id}</small></h2>
       <div class="status"></div>
       <div class="meter"><i></i></div>
       <div class="row">
@@ -236,6 +275,9 @@ function paintState(p) {
   if (!p.el) return;
   syncVoice(p.el, p.voice, p.style);
   p.el.querySelector('.who').textContent = p.waiting ? 'Waiting for next participant' : (p.name || 'Participant');
+  const f = !p.waiting && p.pid && folk.find((x) => x.pid === p.pid), rb = p.el.querySelector('.relb');
+  rb.style.display = f ? '' : 'none';
+  if (f) { rb.textContent = f.release ? 'release ✓' : 'no release yet'; rb.className = 'badge relb ' + (f.release ? 'yes' : 'no'); }
   p.el.querySelector('.endp').style.display = p.waiting ? 'none' : '';
   const b = p.el.querySelector('.aimode');
   b.textContent = p.mode === 'auto' ? 'AI directing — on' : 'AI off';
@@ -299,7 +341,10 @@ function connect() {
       return;
     }
     const m = JSON.parse(e.data);
-    if (m.type === 'participants') renderGrid(m.list);
+    if (m.type === 'participants') { renderGrid(m.list); renderFolk(); }
+    if (m.type === 'people') { folk = m.list; renderFolk(); renderGrid(lastList); }
+    if (m.type === 'session') renderSession(m);
+    if (m.type === 'personSaved' && m.ref === 'new') setTimeout(() => document.querySelector(`.person[data-pid="${m.pid}"] .pname`)?.focus(), 50);
     if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, voice: m.voice, style: m.style, st: m }); paintState(p); }
     if (m.type === 'transcript') appendLine(person(m.id), m);
     if (m.type === 'error') appendLine(person(m.id), { who: 'error', text: m.text });
@@ -322,13 +367,116 @@ function showDevice(n) {
 }
 async function loadInfo() {
   info = await (await fetch('/api/info?k=' + KEY)).json();
-  $('session').innerHTML = `${esc(info.name)}<br>${esc(info.session)}`;
+  $('session').innerHTML = `Folder: ${esc(info.session)}`;
+  renderScreens();
   if (info.mock) $('mock').textContent = '· MOCK AI';
   renderCams(info.cameras);
   renderRoom(info.roomMics);
   if (!$('tabs').children.length) info.devices.forEach((d) => { const b = document.createElement('button'); b.textContent = 'Phone ' + d.device; b.onclick = () => showDevice(d.device); $('tabs').appendChild(b); });
   if (info.devices[0]?.qr) showDevice(1); else setTimeout(loadInfo, 1500);
 }
+// ---- session name, notes, documents ----
+let sessionName = '';
+const fileUrl = (f) => `/files/${encodeURIComponent(info?.name || '')}/${f.split('/').map(encodeURIComponent).join('/')}?k=${KEY}`;
+function renderSession(m) {
+  if (document.activeElement !== $('stitle')) $('stitle').value = m.title || '';
+  if (document.activeElement !== $('snotes')) $('snotes').value = m.notes || '';
+  document.title = (m.title ? m.title + ' — ' : '') + 'Control room';
+  $('sdocs').innerHTML = (m.documents || []).map((d) => `<a href="${fileUrl(d.file)}" target="_blank">📄 ${esc(d.name)}</a>`).join('');
+}
+const saveMeta = () => ws && ws.send(JSON.stringify({ type: 'sessionMeta', title: $('stitle').value.trim(), notes: $('snotes').value }));
+$('stitle').onkeydown = (e) => { if (e.key === 'Enter') { e.target.blur(); } e.stopPropagation(); };
+$('stitle').onchange = saveMeta; $('snotes').onchange = saveMeta;
+async function upload(files, pid) {
+  for (const f of files) {
+    toast(`Attaching ${f.name}…`);
+    const r = await fetch(`/api/upload?k=${KEY}&s=${encodeURIComponent(info.name)}&name=${encodeURIComponent(f.name)}${pid ? '&pid=' + pid : ''}`, { method: 'POST', body: f });
+    const j = await r.json(); toast(j.error ? '⚠ ' + j.error : `Attached ${f.name}`);
+  }
+}
+$('attach').onclick = () => $('sfile').click();
+$('sfile').onchange = (e) => { upload([...e.target.files]); e.target.value = ''; };
+function dropZone(el, pid) {
+  el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('over'); });
+  el.addEventListener('dragleave', () => el.classList.remove('over'));
+  el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); if (e.dataTransfer.files.length) upload([...e.dataTransfer.files], pid); });
+}
+dropZone($('sessionpanel'));
+
+// ---- people ----
+let folk = [];
+const fmtT = (t) => t == null ? '' : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+function renderFolk() {
+  const box = $('folk');
+  const focused = document.activeElement && box.contains(document.activeElement) ? document.activeElement : null;
+  const keep = focused && { pid: focused.closest('.person')?.dataset.pid, cls: focused.className };
+  box.querySelectorAll('.person').forEach((el) => { if (!folk.find((x) => x.pid === el.dataset.pid)) el.remove(); });
+  for (const x of folk) {
+    let el = box.querySelector(`.person[data-pid="${x.pid}"]`);
+    if (!el) {
+      el = document.createElement('div'); el.className = 'person drop'; el.dataset.pid = x.pid;
+      el.innerHTML = `
+        <div class="top"><input class="pname" placeholder="Name"><label class="rel"><input type="checkbox" class="prel"> Release signed</label></div>
+        <input class="pcontact" placeholder="Email / phone">
+        <textarea class="pnotes" placeholder="Notes (age group, access needs, how they found it…)"></textarea>
+        <div class="docs pfiles"></div>
+        <div class="row"><button class="pattach">Attach…</button><input type="file" class="pfile" multiple hidden>
+          <select class="pphone" style="width:auto"></select><button class="pstart grow">Start on phone</button><button class="quiet pdel" title="Remove (only before they've started)">✕</button></div>
+        <div class="meta"></div>`;
+      const save = () => ws.send(JSON.stringify({ type: 'personSave', pid: x.pid, name: el.querySelector('.pname').value.trim(), contact: el.querySelector('.pcontact').value.trim(), notes: el.querySelector('.pnotes').value, release: el.querySelector('.prel').checked }));
+      for (const c of ['.pname', '.pcontact', '.pnotes', '.prel']) { el.querySelector(c).onchange = save; el.querySelector(c).onkeydown = (e) => { if (e.key === 'Enter' && c !== '.pnotes') e.target.blur(); e.stopPropagation(); }; }
+      el.querySelector('.pattach').onclick = () => el.querySelector('.pfile').click();
+      el.querySelector('.pfile').onchange = (e) => { upload([...e.target.files], x.pid); e.target.value = ''; };
+      el.querySelector('.pstart').onclick = () => {
+        const ph = Number(el.querySelector('.pphone').value);
+        if (!ph) return toast('No phone is connected and free');
+        const cur = people.get(ph);
+        if (cur && !cur.waiting && !confirm(`Phone ${ph} has ${cur.name || 'someone'} on it. End them and start ${el.querySelector('.pname').value || 'this person'}?`)) return;
+        ws.send(JSON.stringify({ type: 'personStart', pid: x.pid, phone: ph }));
+      };
+      el.querySelector('.pdel').onclick = () => { if (confirm('Remove this person?')) ws.send(JSON.stringify({ type: 'personDelete', pid: x.pid })); };
+      dropZone(el, x.pid);
+      box.appendChild(el);
+    }
+    const set = (c, v, prop = 'value') => { const i = el.querySelector(c); if (i !== document.activeElement) i[prop] = v; };
+    set('.pname', x.name); set('.pcontact', x.contact); set('.pnotes', x.notes); set('.prel', !!x.release, 'checked');
+    el.querySelector('.pfiles').innerHTML = x.files.map((d) => `<a href="${fileUrl(d.file)}" target="_blank">📄 ${esc(d.name)}</a>`).join('');
+    const onPhone = [...people.values()].find((p) => p.connected && !p.waiting && p.pid === x.pid);
+    el.querySelector('.meta').innerHTML = onPhone ? `<span style="color:var(--ok)">● on phone ${onPhone.id} now</span>` : x.visits.length ? x.visits.map((v) => `phone ${v.phone}, ${fmtT(v.start)}–${fmtT(v.end)}`).join(' · ') : 'not started yet';
+    const sel = el.querySelector('.pphone'), free = [...people.values()].filter((p) => p.connected).sort((a, b) => a.id - b.id);
+    const want = free.map((p) => `<option value="${p.id}">Phone ${p.id}${p.waiting ? '' : ' (busy)'}</option>`).join('') || '<option value="">no phone</option>';
+    if (sel.innerHTML !== want) { const v = sel.value; sel.innerHTML = want; const firstFree = free.find((p) => p.waiting); sel.value = free.some((p) => String(p.id) === v) ? v : (firstFree ? firstFree.id : (free[0]?.id || '')); }
+    el.querySelector('.pstart').style.display = onPhone ? 'none' : '';
+    el.querySelector('.pdel').style.display = x.visits.length || x.files.length ? 'none' : '';
+  }
+  if (keep) box.querySelector(`.person[data-pid="${keep.pid}"] [class="${keep.cls}"]`)?.focus();
+}
+$('addperson').onclick = () => ws.send(JSON.stringify({ type: 'personSave', ref: 'new', name: '' }));
+
+// ---- camera screens ----
+function renderScreens() {
+  renderCamWins();
+  const sc = info.screens || {};
+  const tabs = $('screentabs');
+  if (!tabs.children.length || tabs.dataset.n !== String((sc.items || []).length)) {
+    tabs.dataset.n = (sc.items || []).length; tabs.innerHTML = '';
+    (sc.items || []).forEach((it, i) => { const b = document.createElement('button'); b.textContent = it.id ? it.name : 'All'; b.onclick = () => showScreen(i); tabs.appendChild(b); });
+    if ((sc.items || []).length) showScreen(0); else $('screenqr').innerHTML = '<span class="hint">This Mac isn’t on a network, so other screens can’t connect.</span>';
+  }
+}
+function showScreen(i) {
+  const it = info.screens.items[i];
+  [...$('screentabs').children].forEach((b, j) => b.classList.toggle('sel', i === j));
+  $('screenqr').innerHTML = it.qr; $('screenlink').textContent = it.url;
+}
+const openScreen = (cam, n) => window.open(`${info.screens.local}${cam ? '&cam=' + cam : ''}`, 'screen_' + (cam || 'all'), `width=960,height=560,left=${60 + n * 40},top=${60 + n * 40}`);
+function renderCamWins() {
+  const box = $('camwins'), cs = [{ id: '', name: 'All cameras' }, ...(info.cameras || [])];
+  if (box.dataset.n === String(cs.length)) return;
+  box.dataset.n = cs.length; box.innerHTML = '';
+  cs.forEach((c, n) => { const b = document.createElement('button'); b.textContent = c.name + ' ↗'; b.onclick = () => openScreen(c.id, n); box.appendChild(b); });
+}
+
 // ---- voices ----
 function fillVoice(root) {
   const vs = root.querySelector('.voice');

@@ -39,8 +39,9 @@ let keys = {};
 try { keys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8')); } catch {}
 keys.phone = process.env.PHONE_KEY || keys.phone || crypto.randomBytes(4).toString('hex');
 keys.control = process.env.CONTROL_KEY || keys.control || crypto.randomBytes(4).toString('hex');
-if (!process.env.PHONE_KEY) fs.writeFileSync(KEYS_FILE, JSON.stringify({ phone: keys.phone, control: keys.control }));
-const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control;
+keys.monitor = process.env.MONITOR_KEY || keys.monitor || crypto.randomBytes(4).toString('hex');   // camera screens: watch only
+if (!process.env.PHONE_KEY) fs.writeFileSync(KEYS_FILE, JSON.stringify({ phone: keys.phone, control: keys.control, monitor: keys.monitor }));
+const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control, MONITOR_KEY = keys.monitor;
 
 // Voice choices persist between runs.
 const SETTINGS_FILE = path.join(__dirname, '.settings.json');
@@ -59,6 +60,29 @@ fs.mkdirSync(AUDIO_DIR, { recursive: true });
 const clock = () => ((Date.now() - T0) / 1000).toFixed(2);
 const session = { name: stamp, title: '', start_iso: new Date(T0).toISOString(), start_epoch_ms: T0, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, participants: [], cameras: [] };
 const saveSession = () => fs.writeFileSync(path.join(SESSION_DIR, 'session.json'), JSON.stringify(session, null, 2));
+
+// ---------- people: everyone who takes part, with their details and documents (release forms etc.) ----------
+// Kept in people.json in the session folder. Contact details stay there: the catalogue only uses names
+// and whether a release is on file.
+const readPeople = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'people.json'), 'utf8')); } catch { return []; } };
+const writePeople = (dir, list) => fs.writeFileSync(path.join(dir, 'people.json'), JSON.stringify(list, null, 2));
+let people = [];
+const newPid = () => 'p' + crypto.randomBytes(3).toString('hex');
+const savePeople = () => { writePeople(SESSION_DIR, people); toControls({ type: 'people', list: people }); };
+const personBy = (pid) => people.find((x) => x.pid === pid);
+function upsertPerson(d) {
+  let x = d.pid && personBy(d.pid);
+  if (!x) { x = { pid: newPid(), name: '', contact: '', notes: '', release: false, files: [], visits: [], added: new Date().toISOString() }; people.push(x); }
+  for (const k of ['name', 'contact', 'notes']) if (typeof d[k] === 'string') x[k] = d[k].slice(0, k === 'notes' ? 4000 : 200);
+  if (typeof d.release === 'boolean') x.release = d.release;
+  if (typeof d.name === 'string') {   // keep names in the session record in step
+    for (const v of session.participants) if (v.pid === x.pid) v.name = x.name;
+    saveSession();
+  }
+  savePeople();
+  return x;
+}
+const safeName = (s) => String(s || '').normalize('NFKD').replace(/[^\w.\- ]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'file';
 saveSession();
 const events = fs.createWriteStream(path.join(SESSION_DIR, 'events.jsonl'), { flags: 'a' });
 const transcriptFile = fs.createWriteStream(path.join(SESSION_DIR, 'transcript.txt'), { flags: 'a' });
@@ -113,12 +137,19 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 let phoneBase = null;
 const phoneUrl = (device) => phoneBase && `${phoneBase}/p?k=${PHONE_KEY}${device ? '&device=' + device : ''}`;
 const json = (res, obj, code = 200) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
+// this Mac's address on the local network, for camera screens on tablets / other computers
+function lanAddress() {
+  const all = Object.entries(require('os').networkInterfaces()).flatMap(([n, l]) => (l || []).map((a) => ({ n, ...a })));
+  const v4 = all.filter((a) => a.family === 'IPv4' && !a.internal && !/^169\.254\./.test(a.address));
+  return (v4.find((a) => a.n === 'en0') || v4.find((a) => /^(192\.168|10\.|172\.)/.test(a.address)) || v4[0])?.address || null;
+}
 const sessionDirOf = (name) => { const d = path.join(REC_ROOT, path.basename(String(name || ''))); return fs.existsSync(d) ? d : null; };
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   let p = u.pathname;
   const ctl = u.searchParams.get('k') === CONTROL_KEY;
+  const mon = ctl || u.searchParams.get('k') === MONITOR_KEY;
 
   if (p === '/manifest.webmanifest') {   // makes the phone page installable as a full-screen app
     const dev = u.searchParams.get('device');
@@ -137,7 +168,7 @@ const server = http.createServer(async (req, res) => {
     return fs.createReadStream(apk).pipe(res);
   }
   if (p.startsWith('/cam/')) {
-    if (!ctl) { res.writeHead(403); return res.end(); }
+    if (!mon) { res.writeHead(403); return res.end(); }
     const cam = cameras.find((c) => c.id === p.slice(5).replace('.mjpg', ''));
     if (!cam) { res.writeHead(404); return res.end(); }
     return cam.serve(res);
@@ -147,7 +178,13 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/info') {
       const devices = [];
       for (let i = 1; i <= MAX_PHONES; i++) devices.push({ device: i, url: phoneUrl(i), qr: phoneBase ? await QRCode.toString(phoneUrl(i), { type: 'svg', margin: 1 }) : null });
-      return json(res, { phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()), roomMics: roomMics ? roomMics.status() : null });
+      const ip = lanAddress(), base = ip && `http://${ip}:${PORT}/monitor?k=${MONITOR_KEY}`;
+      const screens = { local: `/monitor?k=${MONITOR_KEY}`, lan: base, items: [] };
+      if (base) for (const c of [{ id: '', name: 'All cameras' }, ...cameras.map((c) => ({ id: c.id, name: c.name }))]) {
+        const url = base + (c.id ? '&cam=' + c.id : '');
+        screens.items.push({ id: c.id, name: c.name, url, qr: await QRCode.toString(url, { type: 'svg', margin: 1 }) });
+      }
+      return json(res, { phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()), roomMics: roomMics ? roomMics.status() : null, screens });
     }
     if (p === '/api/voices') return json(res, { voices: ai.VOICES.map((v) => ({ name: v.name, emotions: ai.emotionsOf(v.name) })), byPhone: settings.voices, styles: settings.styles, default: ai.VOICES[0].name });
     if (p === '/api/preview') {   // hear a voice (with emotion, pitch, speed) in the control room before choosing it
@@ -176,12 +213,56 @@ const server = http.createServer(async (req, res) => {
       (function walk(d) { for (const f of fs.readdirSync(d)) { if (f.startsWith('.')) continue; const full = path.join(d, f), r = path.relative(dir, full); const bulk = r.match(/^catalogue\/(thumbs|sheets|proxies)\//); if (fs.statSync(full).isDirectory()) walk(full); else if (bulk) counts[bulk[1]] = (counts[bulk[1]] || 0) + 1; else files.push({ path: r, size: fs.statSync(full).size }); } })(dir);
       let catalogue = null; try { catalogue = JSON.parse(fs.readFileSync(path.join(dir, 'catalogue', 'status.json'), 'utf8')); } catch {}
       if (catalogue) catalogue.counts = counts;
-      return json(res, { session: s, transcript, files, catalogue });
+      return json(res, { session: s, transcript, files, catalogue, people: path.basename(dir) === stamp ? people : readPeople(dir) });
     }
     if (p === '/api/open') { if (process.platform === 'darwin') spawn('open', [dir]); return json(res, { ok: true }); }
     if (p === '/api/export') {
       if (path.basename(dir) === stamp) return json(res, { error: 'This session is still recording — it exports when you stop the server.' }, 409);
       return json(res, exportSession(dir));
+    }
+    if (p === '/api/upload' && req.method === 'POST') {   // documents: for the session, or for one person (release forms…)
+      const live = path.basename(dir) === stamp;
+      const list = live ? people : readPeople(dir);
+      const pid = u.searchParams.get('pid'), who = pid && list.find((x) => x.pid === pid);
+      if (pid && !who) return json(res, { error: 'no such person' }, 404);
+      const sub = who ? path.join('documents', `${safeName(who.name || 'person').replace(/ /g, '_')}_${who.pid}`) : 'documents';
+      fs.mkdirSync(path.join(dir, sub), { recursive: true });
+      const orig = safeName(u.searchParams.get('name'));
+      let name = orig, n = 1;
+      while (fs.existsSync(path.join(dir, sub, name))) name = orig.replace(/(\.[^.]*)?$/, (e) => `-${++n}${e || ''}`);
+      const file = path.join(dir, sub, name);
+      let size = 0, tooBig = false;
+      await new Promise((ok) => {
+        const out = fs.createWriteStream(file);
+        req.on('data', (c) => { size += c.length; if (size > 300e6 && !tooBig) { tooBig = true; req.unpipe(out); out.destroy(); } });
+        req.pipe(out); out.on('finish', ok); out.on('close', ok); req.on('error', ok);
+      });
+      if (tooBig) { try { fs.unlinkSync(file); } catch {} return json(res, { error: 'Files can be up to 300 MB.' }, 413); }
+      const rec = { file: path.relative(dir, file), name, size, added: new Date().toISOString() };
+      if (who) { who.files.push(rec); if (live) savePeople(); else writePeople(dir, list); }
+      else {
+        const f = path.join(dir, 'session.json'), sj = live ? session : JSON.parse(fs.readFileSync(f, 'utf8'));
+        (sj.documents = sj.documents || []).push(rec);
+        if (live) { saveSession(); toControls({ type: 'session', title: session.title, notes: session.notes || '', documents: session.documents }); }
+        else fs.writeFileSync(f, JSON.stringify(sj, null, 2));
+      }
+      return json(res, { ok: true, file: rec });
+    }
+    if (p === '/api/person' && req.method === 'POST') {   // edit someone's details (works on old sessions too)
+      let body = ''; for await (const c of req) body += c;
+      const d = JSON.parse(body || '{}');
+      if (path.basename(dir) === stamp) return json(res, { ok: true, person: upsertPerson(d) });
+      const list = readPeople(dir), x = list.find((y) => y.pid === d.pid);
+      if (!x) return json(res, { error: 'no such person' }, 404);
+      for (const k of ['name', 'contact', 'notes']) if (typeof d[k] === 'string') x[k] = d[k].slice(0, k === 'notes' ? 4000 : 200);
+      if (typeof d.release === 'boolean') x.release = d.release;
+      writePeople(dir, list);
+      if (typeof d.name === 'string') {
+        const f = path.join(dir, 'session.json'), sj = JSON.parse(fs.readFileSync(f, 'utf8'));
+        for (const v of sj.participants || []) if (v.pid === x.pid) v.name = x.name;
+        fs.writeFileSync(f, JSON.stringify(sj, null, 2));
+      }
+      return json(res, { ok: true, person: x });
     }
     if (p === '/api/catalogue') {
       if (path.basename(dir) === stamp) return json(res, { error: 'This session is still recording — the catalogue is built when it ends.' }, 409);
@@ -215,6 +296,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/' || p === '/p') p = '/phone.html';
   if (p === '/control') p = '/control.html';
   if (p === '/library') p = '/library.html';
+  if (p === '/monitor') p = '/monitor.html';
   const file = path.join(PUB, path.normalize(p).replace(/^(\.\.[\/\\])+/, ''));
   if (!file.startsWith(PUB) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
   res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
@@ -224,9 +306,15 @@ const server = http.createServer(async (req, res) => {
 // ---------- phones ----------
 const sessions = new Map();   // phone slot -> Session
 const controls = new Set();
-const toControls = (obj) => { const s = JSON.stringify(obj); for (const c of controls) if (c.readyState === 1) c.send(s); };
+const monitors = new Set();   // camera screens: they see pictures, names and captions, and can't do anything
+const FOR_MONITORS = new Set(['transcript', 'cameras', 'participants', 'state', 'session', 'marked']);
+const toControls = (obj) => {
+  const s = JSON.stringify(obj);
+  for (const c of controls) if (c.readyState === 1) c.send(s);
+  if (FOR_MONITORS.has(obj.type)) for (const c of monitors) if (c.readyState === 1) c.send(s);
+};
 const send = (ws, obj) => ws && ws.readyState === 1 && ws.send(JSON.stringify(obj));
-const list = () => [...sessions.values()].filter((s) => s.ws).map((s) => ({ id: s.id, name: s.name, mode: s.mode, waiting: s.waiting }));
+const list = () => [...sessions.values()].filter((s) => s.ws).map((s) => ({ id: s.id, name: s.name, pid: s.pid || null, mode: s.mode, waiting: s.waiting }));
 
 // Every line gets timings on the session clock: start/end for things already spoken (participant, the
 // director's own voice); AI-voiced lines get a number u, and play_start / play_end (or ai_cut) events
@@ -325,11 +413,18 @@ function stopAi(s, why) {
   }
 }
 
-function beginParticipant(s, name) {
+function beginParticipant(s, name, pid) {
   if (!s.waiting) endParticipant(s, 'new participant');
-  s.waiting = false; s.name = name || ''; s.history = []; s.startedAt = Date.now(); s.lastActivity = Date.now();
-  logEvent('participant_start', { id: s.id, name: s.name });
-  session.participants.push({ phone: s.id, name: s.name, start: Number(clock()) }); saveSession();
+  // the person record: given by the control room, or matched by name to someone added but not started yet
+  let who = pid && personBy(pid);
+  if (!who && name) who = people.find((x) => x.name.toLowerCase() === name.toLowerCase() && !x.visits.length);
+  if (!who) who = upsertPerson({ name: name || '' });
+  if (!who.name && name) who.name = name;
+  who.visits.push({ phone: s.id, start: Number(clock()) }); savePeople();
+  s.pid = who.pid;
+  s.waiting = false; s.name = who.name || name || ''; s.history = []; s.startedAt = Date.now(); s.lastActivity = Date.now();
+  logEvent('participant_start', { id: s.id, name: s.name, pid: who.pid });
+  session.participants.push({ phone: s.id, name: s.name, pid: who.pid, start: Number(clock()) }); saveSession();
   toControls({ type: 'participants', list: list() }); state(s);
   toControls({ type: 'transcript', id: s.id, who: 'note', text: `— ${s.name || 'new participant'} started —`, t: clock() });
   if (s.mode === 'auto') {
@@ -340,10 +435,12 @@ function beginParticipant(s, name) {
 function endParticipant(s, why) {
   if (s.waiting) return;
   stopAi(s, why);
-  logEvent('participant_end', { id: s.id, name: s.name, why });
+  logEvent('participant_end', { id: s.id, name: s.name, pid: s.pid, why });
   const rec = [...session.participants].reverse().find((x) => x.phone === s.id && x.end == null);
   if (rec) { rec.end = Number(clock()); saveSession(); }
-  s.waiting = true; s.history = [];
+  const who = s.pid && personBy(s.pid), v = who && [...who.visits].reverse().find((x) => x.phone === s.id && x.end == null);
+  if (v) { v.end = Number(clock()); savePeople(); }
+  s.waiting = true; s.history = []; s.pid = null;
   send(s.ws, { type: 'reset' });
   toControls({ type: 'participants', list: list() }); state(s);
 }
@@ -449,6 +546,8 @@ wss.on('connection', (ws, req) => {
   if (role === 'control' && key === CONTROL_KEY) {
     controls.add(ws);
     send(ws, { type: 'participants', list: list() });
+    send(ws, { type: 'people', list: people });
+    send(ws, { type: 'session', title: session.title, notes: session.notes || '', documents: session.documents || [] });
     for (const s of sessions.values()) if (s.ws) state(s);
     ws.on('message', (data, isBinary) => {
       if (isBinary) {
@@ -497,6 +596,21 @@ wss.on('connection', (ws, req) => {
         if (s.mode !== 'auto') { s.mode = 'auto'; state(s); }
         stopAi(s, 'new instruction'); aiTurn(s);
       }
+      if (m.type === 'sessionMeta') {
+        if (typeof m.title === 'string') session.title = m.title.slice(0, 120);
+        if (typeof m.notes === 'string') session.notes = m.notes.slice(0, 20000);
+        saveSession(); logEvent('session_named', { title: session.title });
+        toControls({ type: 'session', title: session.title, notes: session.notes || '', documents: session.documents || [] });
+      }
+      if (m.type === 'personSave') { const x = upsertPerson(m); send(ws, { type: 'personSaved', pid: x.pid, ref: m.ref }); }
+      if (m.type === 'personDelete') { const x = personBy(m.pid); if (x && !x.visits.length && !x.files.length) { people = people.filter((y) => y !== x); savePeople(); } }
+      if (m.type === 'personStart') {   // start someone on a phone from here, instead of the phone's own screen
+        const x = personBy(m.pid), t = sessions.get(Number(m.phone));
+        if (x && t && t.ws) {
+          beginParticipant(t, x.name, x.pid);
+          send(t.ws, { type: 'welcome', id: t.id, waiting: false, name: t.name });   // takes the phone past its start screen
+        } else send(ws, { type: 'error', id: Number(m.phone) || 0, text: 'That phone isn\'t connected.' });
+      }
       if (m.type === 'getBrief') { let b = ''; try { b = fs.readFileSync(BRIEF_FILE, 'utf8'); } catch {} send(ws, { type: 'brief', text: b }); }
       if (m.type === 'saveBrief' && typeof m.text === 'string') {
         fs.writeFileSync(BRIEF_FILE, m.text);
@@ -508,6 +622,14 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
+  if (role === 'monitor' && (key === MONITOR_KEY || key === CONTROL_KEY)) {
+    monitors.add(ws);
+    send(ws, { type: 'cameras', list: cameras.map((c) => c.status()) });
+    send(ws, { type: 'participants', list: list() });
+    send(ws, { type: 'session', title: session.title });
+    ws.on('close', () => monitors.delete(ws));
+    return;
+  }
   if (role === 'phone' && key === PHONE_KEY) {
     const id = freeId(Number(u.searchParams.get('device') || u.searchParams.get('id')));
     if (!id) { send(ws, { type: 'full' }); return ws.close(); }

@@ -30,6 +30,12 @@
   pre { white-space:pre-wrap; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; font:13px/1.55 ui-monospace, Menlo, monospace; }
   .hint { color:var(--dim); font-size:12px; }
   mark { background:#5a4a12; color:inherit; }
+  .folk { display:grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap:10px; }
+  .pp { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:6px; }
+  .pp input[type=text], .pp textarea { width:100%; font:inherit; background:#101010; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; }
+  .pp textarea { min-height:44px; resize:vertical; font-size:13px; }
+  .pp a { color:var(--fg); font-size:12px; } .pp .over, .over { outline:2px dashed var(--ai); }
+  .ok { color:var(--ok); } .no { color:var(--hot); }
 </style>
 </head>
 <body>
@@ -90,7 +96,12 @@ async function open(name) {
       <button id="openf">Open folder in Finder</button>
       <button id="reexp" ${live ? 'disabled title="exports when the session ends"' : ''}>Rebuild exports</button>
     </div>
-    ${(s.participants || []).length ? `<h3>Participants</h3><div>${s.participants.map((p) => `Phone ${p.phone}: <b>${esc(p.name || 'unnamed')}</b> <span class="hint">${Math.round(p.start)}s${p.end != null ? '–' + Math.round(p.end) + 's' : ''}</span>`).join('<br>')}</div>` : ''}
+    ${s.notes ? `<h3>Session notes</h3><pre>${esc(s.notes)}</pre>` : ''}
+    <h3>People</h3>
+    ${(d.people || []).length ? '' : (s.participants || []).length ? `<div>${s.participants.map((p) => `Phone ${p.phone}: <b>${esc(p.name || 'unnamed')}</b>`).join('<br>')}</div>` : '<span class="hint">nobody</span>'}
+    <div class="folk" id="folk"></div>
+    <h3>Documents <span class="hint">(drop files here)</span></h3>
+    <div class="files" id="sessdocs">${(s.documents || []).map((x) => `<div class="file"><span>${esc(x.name)}</span><a href="${f(x.file)}" target="_blank" style="color:var(--dim)">open</a></div>`).join('') || '<span class="hint">none</span>'}</div>
     <h3>Catalogue <span class="hint" id="catstate"></span></h3>
     <div class="row"><button id="recat" ${live ? 'disabled title="built when the session ends"' : ''}>${d.catalogue ? 'Rebuild catalogue' : 'Build catalogue'}</button>
       <span class="hint">${d.catalogue?.counts ? Object.entries(d.catalogue.counts).map(([k, n]) => `${n} ${k === 'thumbs' ? 'stills' : k === 'sheets' ? 'contact sheets' : 'camera proxies'}`).join(' · ') : ''}</span></div>
@@ -104,6 +115,28 @@ async function open(name) {
   clearTimeout(window.catTimer);
   if (c && c.state === 'running') window.catTimer = setTimeout(() => current === name && open(name), 3000);
   $('recat').onclick = async () => { const r = await api('catalogue?s=' + encodeURIComponent(name)); if (r.error) alert(r.error); setTimeout(() => open(name), 500); };
+  const upload = async (files, pid) => { for (const file of files) await fetch(`/api/upload?k=${KEY}&s=${encodeURIComponent(name)}&name=${encodeURIComponent(file.name)}${pid ? '&pid=' + pid : ''}`, { method: 'POST', body: file }); open(name); };
+  const drop = (el, pid) => {
+    el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('over'); });
+    el.addEventListener('dragleave', () => el.classList.remove('over'));
+    el.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); el.classList.remove('over'); upload([...e.dataTransfer.files], pid); });
+  };
+  drop($('sessdocs'));
+  for (const x of d.people || []) {
+    const el = document.createElement('div'); el.className = 'pp';
+    const t = (v) => v == null ? '…' : `${Math.floor(v / 60)}:${String(Math.floor(v % 60)).padStart(2, '0')}`;
+    el.innerHTML = `<input type="text" class="n" placeholder="Name"><input type="text" class="c" placeholder="Email / phone">
+      <label class="hint"><input type="checkbox" class="r"> <span class="${x.release ? 'ok' : 'no'}">${x.release ? 'Release signed' : 'No release yet'}</span></label>
+      <textarea class="o" placeholder="Notes"></textarea>
+      <div>${x.files.map((y) => `<a href="${f(y.file)}" target="_blank">📄 ${esc(y.name)}</a>`).join('<br>')}</div>
+      <span class="hint">${x.visits.map((v) => `phone ${v.phone}, ${t(v.start)}–${t(v.end)}`).join(' · ') || 'never started'} · drop files here to attach</span>`;
+    el.querySelector('.n').value = x.name; el.querySelector('.c').value = x.contact || ''; el.querySelector('.o').value = x.notes || ''; el.querySelector('.r').checked = !!x.release;
+    const save = async () => { await api('person?s=' + encodeURIComponent(name), { method: 'POST', body: JSON.stringify({ pid: x.pid, name: el.querySelector('.n').value.trim(), contact: el.querySelector('.c').value.trim(), notes: el.querySelector('.o').value, release: el.querySelector('.r').checked }) }); };
+    for (const c of ['.n', '.c', '.o']) el.querySelector(c).onchange = save;
+    el.querySelector('.r').onchange = async () => { await save(); open(name); };
+    drop(el, x.pid);
+    $('folk').appendChild(el);
+  }
   $('openf').onclick = () => api('open?s=' + encodeURIComponent(name));
   $('reexp').onclick = async () => { const r = await api('export?s=' + encodeURIComponent(name)); if (r.error) alert(r.error); open(name); };
   $('savetitle').onclick = async () => { await api('title?s=' + encodeURIComponent(name), { method: 'POST', body: JSON.stringify({ title: $('title').value }) }); sessions = await api('sessions'); render(); };

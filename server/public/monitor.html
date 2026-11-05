@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Camera screen</title>
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:#000; color:#eee; font:15px/1.35 -apple-system, system-ui, sans-serif; overflow:hidden; }
+  body.idle { cursor:none; }
+  #wall { position:absolute; inset:0; display:grid; gap:4px; background:#000; }
+  .tile { position:relative; background:#050505; overflow:hidden; min-width:0; min-height:0; }
+  .tile img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .tile .tag { position:absolute; left:10px; top:10px; background:rgba(0,0,0,.55); padding:4px 10px; border-radius:6px; font-size:13px; transition:opacity .4s; }
+  .tile .tag b { color:#e5533a; font-weight:500; margin-left:8px; }
+  .tile .off { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#777; font-size:14px; }
+  #title { position:absolute; right:12px; top:10px; background:rgba(0,0,0,.55); padding:4px 10px; border-radius:6px; font-size:13px; color:#bbb; transition:opacity .4s; }
+  #title:empty { display:none; }
+  #caps { position:absolute; left:0; right:0; bottom:0; padding:14px 18px 18px; display:flex; flex-direction:column; gap:6px; align-items:center; pointer-events:none; }
+  #caps div { background:rgba(0,0,0,.66); padding:6px 14px; border-radius:8px; max-width:92%; font-size:clamp(14px, 2.1vw, 26px); text-align:center; transition:opacity 1s; }
+  #caps b { font-weight:500; margin-right:8px; font-size:.75em; letter-spacing:.05em; text-transform:uppercase; }
+  #caps .participant b { color:#7ec98a; } #caps .ai b { color:#9aaaf0; } #caps .director b { color:#e5533a; }
+  #hint { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:rgba(0,0,0,.75); padding:14px 20px; border-radius:10px; text-align:center; color:#ccc; font-size:14px; transition:opacity .6s; pointer-events:none; }
+  #back { position:absolute; left:12px; bottom:12px; display:none; background:rgba(0,0,0,.6); color:#ddd; border:1px solid #333; border-radius:8px; padding:8px 12px; font:inherit; font-size:13px; }
+  body.idle .tag, body.idle #title { opacity:.0; }
+  body.tagsalways .tag, body.tagsalways #title { opacity:1 !important; }
+  video { position:absolute; width:1px; height:1px; opacity:0; }
+</style>
+</head>
+<body>
+<div id="wall"></div>
+<div id="title"></div>
+<div id="caps"></div>
+<div id="hint">Tap for full screen · double-tap a camera to show only it</div>
+<button id="back">← All cameras</button>
+<video id="awake" src="keepawake.mp4" muted playsinline loop></video>
+<script>
+// Camera screen. Works on this Mac (another display), a tablet or any computer on the same network.
+//   ?cam=cam1      one camera, full screen      (no cam = every camera in a grid)
+//   ?captions=0    no live captions            ?tags=always   keep camera names on screen
+const Q = new URLSearchParams(location.search);
+const KEY = Q.get('k');
+let only = Q.get('cam') || '';
+const CAPS = Q.get('captions') !== '0';
+if (Q.get('tags') === 'always') document.body.classList.add('tagsalways');
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+let cams = [], names = {};
+
+function layout() {
+  const shown = only ? cams.filter((c) => c.id === only) : cams;
+  const n = Math.max(1, shown.length), wide = innerWidth >= innerHeight;
+  const cols = n === 1 ? 1 : n === 2 ? (wide ? 2 : 1) : n <= 4 ? 2 : 3;
+  $('wall').style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  $('wall').style.gridTemplateRows = `repeat(${Math.ceil(n / cols)}, 1fr)`;
+  for (const el of $('wall').children) el.style.display = !only || el.dataset.id === only ? '' : 'none';
+  $('back').style.display = only && !Q.get('cam') ? 'block' : 'none';
+  document.title = only ? (cams.find((c) => c.id === only)?.name || 'Camera') : 'All cameras';
+}
+function render(list) {
+  cams = list;
+  for (const c of list) {
+    let el = $('wall').querySelector(`[data-id="${c.id}"]`);
+    if (!el) {
+      el = document.createElement('div'); el.className = 'tile'; el.dataset.id = c.id;
+      el.innerHTML = '<img alt=""><div class="off">connecting…</div><div class="tag"></div>';
+      const img = el.querySelector('img');
+      img.src = `/cam/${c.id}.mjpg?k=${KEY}`;
+      img.onerror = () => setTimeout(() => (img.src = `/cam/${c.id}.mjpg?k=${KEY}&r=${Date.now()}`), 2000);
+      el.ondblclick = () => { only = only ? '' : c.id; layout(); };
+      $('wall').appendChild(el);
+    }
+    el.querySelector('.tag').innerHTML = esc(c.name) + (c.recording ? '<b>● REC</b>' : '<b style="color:#888">not recording</b>');
+    const off = el.querySelector('.off');
+    off.style.display = c.live ? 'none' : 'flex';
+    if (!c.live) {
+      off.textContent = 'no picture — reconnecting…';
+      if (!el.retry || Date.now() - el.retry > 6000) { el.retry = Date.now(); el.querySelector('img').src = `/cam/${c.id}.mjpg?k=${KEY}&r=${el.retry}`; }
+    }
+  }
+  if (!list.length) $('wall').innerHTML = '<div class="tile"><div class="off">No cameras set up yet (cameras.json).</div></div>';
+  layout();
+}
+$('back').onclick = () => { only = ''; layout(); };
+addEventListener('resize', layout);
+
+// live captions: the last couple of lines said, fading out
+function caption(m) {
+  if (!CAPS || !m.text || m.who === 'note') return;
+  const who = m.who === 'participant' ? (names[m.id] || 'Phone ' + m.id) : m.who === 'ai' ? 'AI' : m.who === 'director' ? 'Director' : 'AI voice';
+  const cls = m.who === 'participant' ? 'participant' : m.who === 'director' ? 'director' : 'ai';
+  const d = document.createElement('div'); d.className = cls;
+  d.innerHTML = `<b>${esc(who)}${Object.keys(names).length > 1 || !names[m.id] ? ' · ' + m.id : ''}</b>${esc(m.text)}`;
+  $('caps').appendChild(d);
+  while ($('caps').children.length > 2) $('caps').firstChild.remove();
+  setTimeout(() => { d.style.opacity = 0; setTimeout(() => d.remove(), 1000); }, 9000);
+}
+
+function connect() {
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?role=monitor&k=${KEY}`);
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'cameras') render(m.list);
+    if (m.type === 'participants') { names = {}; for (const p of m.list) if (!p.waiting && p.name) names[p.id] = p.name; }
+    if (m.type === 'session') $('title').textContent = m.title || '';
+    if (m.type === 'transcript') caption(m);
+  };
+  ws.onclose = () => setTimeout(connect, 2000);
+}
+connect();
+
+// full screen on tap; keep the screen awake; hide the pointer and labels when nothing moves
+let lastTap = 0;
+document.addEventListener('click', async (e) => {
+  if (e.target.id === 'back') return;
+  $('hint').style.opacity = 0;
+  $('awake').play().catch(() => {});
+  try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch {}
+  const now = Date.now(); if (now - lastTap < 350) return; lastTap = now;   // let double-taps through
+  setTimeout(() => {
+    if (Date.now() - lastTap < 340) return;
+    const el = document.documentElement;
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) (el.requestFullscreen || el.webkitRequestFullscreen || (() => {})).call(el);
+  }, 360);
+});
+setTimeout(() => ($('hint').style.opacity = 0), 6000);
+let idle;
+const wake = () => { document.body.classList.remove('idle'); clearTimeout(idle); idle = setTimeout(() => document.body.classList.add('idle'), 4000); };
+['mousemove', 'touchstart', 'keydown'].forEach((t) => addEventListener(t, wake)); wake();
+addEventListener('keydown', (e) => {   // on a computer: 0 = all, 1–9 = that camera, F = full screen
+  if (e.key === '0') { only = Q.get('cam') || ''; layout(); }
+  if (/^[1-9]$/.test(e.key) && cams[e.key - 1]) { only = cams[e.key - 1].id; layout(); }
+  if (e.key === 'f') document.documentElement.requestFullscreen?.();
+});
+</script>
+</body>
+</html>

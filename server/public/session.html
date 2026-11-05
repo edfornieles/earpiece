@@ -1,0 +1,52 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Session — Mother</title><link rel="stylesheet" href="setup.css"></head><body>
+<header class="pagehead"><div><div class="eyebrow" id="mode">Preparation</div><h1>Session</h1><p>Set the direction of the performance, add context, and keep the supporting documents together.</p></div><a class="button" data-route="/control" target="earpiece_control">Open control room ↗</a></header>
+<main><div id="notice" class="notice" role="status"></div><div id="changed" class="notice" hidden>The session changed while you were editing. Your draft is still here; reload the current session before saving. <button id="reload">Reload current session</button></div>
+<div class="session-grid"><section class="panel"><h2>AI brief</h2><p class="hint">Who the AI is, how it directs, and what it should pay attention to. This brief is shared by every phone and carries into future sessions.</p><label for="brief">Instructions for the AI director</label><textarea id="brief" class="brief" spellcheck="false" placeholder="Describe the AI director’s role and approach…"></textarea><div class="row actions"><button class="primary" id="savebrief" disabled>Save brief</button><span id="briefstate" class="save-state" aria-live="polite">Loading…</span></div><p class="hint divider">Saved changes apply to future AI directions. They do not interrupt a direction already in progress.</p></section>
+<section class="stack"><div class="panel"><h2>Session details</h2><p class="hint" id="context">Loading the current session…</p><label for="title">Session name</label><input id="title" maxlength="120" placeholder="Give this session a name"><label class="actions" for="notes">Notes</label><textarea id="notes" rows="7" maxlength="20000" placeholder="Where, who’s working, what you’re trying…"></textarea><div class="row actions"><button class="primary" id="savemeta" disabled>Save details</button><span id="metastate" class="save-state" aria-live="polite"></span></div></div>
+<div class="panel drop" id="documents"><h2>Documents</h2><p class="hint">Attach plans, references, and production notes to this session. You can also drop files here.</p><div id="docs" class="docs"></div><button id="attach" disabled>Attach documents…</button><input id="files" type="file" multiple hidden><p id="uploadstate" class="hint actions" aria-live="polite"></p><p class="hint divider">Participant consent forms and photos stay with their registration and person card in the control room.</p></div></section></div></main><div id="toast" role="status"></div><script src="setup.js"></script><script>
+const { $, esc, api, toast, url } = Setup;
+let current = null, metaDirty = false, briefDirty = false, stale = false, busy = false;
+function buttons() { $('savemeta').disabled = !current || stale || busy || !metaDirty; $('savebrief').disabled = !current || stale || busy || !briefDirty; $('attach').disabled = !current || stale || busy; }
+function render(data) {
+  current = data; $('mode').textContent = data.standby ? 'Preparing the next session' : 'Recording now';
+  $('context').textContent = data.standby ? 'Prepared details and documents move into the next recording when you start it from the control room.' : 'These details belong to the session currently recording.';
+  if (!metaDirty) { $('title').value = data.title; $('notes').value = data.notes; }
+  if (!briefDirty) { $('brief').value = data.brief; $('briefstate').textContent = 'Saved brief'; }
+  $('docs').innerHTML = data.documents.length ? data.documents.map(d => `<a href="${url('/files/' + encodeURIComponent(data.name) + '/' + d.file.split('/').map(encodeURIComponent).join('/'))}" target="_blank" rel="noopener">${esc(d.name)}</a>`).join('') : '<p class="hint">No documents attached yet.</p>';
+  buttons();
+}
+async function load(force = false) {
+  try { const data = await api('setup'); $('notice').textContent = '';
+    if (!force && current && current.instance !== data.instance && (metaDirty || briefDirty || busy)) { stale = true; $('changed').hidden = false; buttons(); return; }
+    if (force) { metaDirty = false; briefDirty = false; }
+    stale = false; $('changed').hidden = true; render(data);
+  } catch(e) { $('notice').textContent = e.message; }
+}
+for (const id of ['title','notes']) $(id).oninput = () => { metaDirty = true; $('metastate').textContent = 'Unsaved changes'; buttons(); };
+$('brief').oninput = () => { briefDirty = true; $('briefstate').textContent = 'Unsaved changes'; buttons(); };
+async function save(kind) {
+  busy = true; buttons(); const state = $(kind === 'brief' ? 'briefstate' : 'metastate'); state.textContent = 'Saving…';
+  const sent = kind === 'brief' ? { instance:current.instance, text:$('brief').value } : { instance:current.instance, title:$('title').value.trim(), notes:$('notes').value };
+  try { await api(kind === 'brief' ? 'brief' : 'session-meta', sent);
+    // Keep changes typed while the save request was in flight.
+    if (kind === 'brief') briefDirty = $('brief').value !== sent.text;
+    else metaDirty = $('title').value.trim() !== sent.title || $('notes').value !== sent.notes;
+    state.textContent = (kind === 'brief' ? briefDirty : metaDirty) ? 'Unsaved changes' : 'Saved';
+  } catch(e) { state.textContent = 'Could not save'; toast(e.message); } finally { busy = false; buttons(); }
+}
+$('savebrief').onclick = () => save('brief'); $('savemeta').onclick = () => save('meta');
+$('reload').onclick = () => { if (confirm('Discard the draft on this page and load the current session?')) load(true); };
+async function upload(files) {
+  if (!current || stale || busy) return; busy = true; buttons();
+  try { for (const file of files) {
+    $('uploadstate').textContent = `Attaching ${file.name}…`;
+    const response = await fetch(url('/api/upload?s=' + encodeURIComponent(current.name) + '&name=' + encodeURIComponent(file.name)), { method:'POST', body:file });
+    const r = await response.json(); if (!response.ok || r.error) throw new Error(r.error || 'Could not attach this file.');
+  } $('uploadstate').textContent = 'Documents attached';
+  } catch(e) { $('uploadstate').textContent = e.message; } finally { busy = false; buttons(); await load(); }
+}
+$('attach').onclick = () => $('files').click(); $('files').onchange = e => { upload([...e.target.files]); e.target.value = ''; };
+const drop = $('documents'); drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); }; drop.ondragleave = () => drop.classList.remove('over'); drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); upload([...e.dataTransfer.files]); };
+window.addEventListener('beforeunload', e => { if (metaDirty || briefDirty) { e.preventDefault(); e.returnValue = ''; } });
+load(); setInterval(() => { if (!busy) load(); }, 5000);
+</script><script src="nav.js"></script></body></html>

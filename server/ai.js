@@ -16,6 +16,9 @@ const VOICE = () => process.env.POCKET_TTS_VOICE || 'hf://kyutai/tts-voices/vctk
 class Vad {
   constructor({ onStart, onUtterance }) {
     this.onStart = onStart; this.onUtterance = onUtterance;
+    this.reset();
+  }
+  reset() {
     this.floor = 0.01; this.speaking = false; this.run = 0; this.silence = 0;
     this.pre = []; this.buf = []; this.len = 0; this.strict = false;
   }

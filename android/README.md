@@ -1,24 +1,27 @@
-# Earpiece — Android app
+# Mother — Android app
 
-The dedicated-phone side of the Earpiece command system. Same protocol as the web phone page (`/p`), but native, so it:
+The dedicated audio endpoint for Mother. Phones stay at the control desk; participants wear only their earpieces. The app shows its number, server connection, headset, battery, and current participant. There is no participant consent or “Before you begin” screen. Visits start and end at the control desk.
 
-- keeps the mic and earphones running with the screen off (foreground service, wake lock, wifi lock)
-- reconnects on its own after network drops, and resumes the participant
-- remembers its slot and server, so there's no link or QR code to scan
-- shows a fresh consent screen for each participant (the control room's **End participant** sends it back)
-- pins itself, so participants can't leave it; it can also be set as the phone's home screen
+The foreground audio service is intended to keep running with the screen off and reconnect after network drops. Registration and consent belong to the separate registration workflow.
 
-## Install
+## Build and install
 
-Every push builds the app on GitHub (Actions → latest run → `earpiece-apk`). Install over USB:
+GitHub Actions builds the app when Android source changes. Download `earpiece-apk` from the successful workflow run. The APK filename and Android package identifier remain compatible with the deployment tools.
+
+CI restores the signing PKCS12 and password from protected repository secrets (`MOTHER_KEYSTORE_BASE64` and `MOTHER_SIGNING_PASSWORD`). Never commit signing keys. The private recovery copy is maintained outside the checkout.
+
+For a same-signature update:
 
 ```
-adb install -r earpiece.apk
+adb install -r -g earpiece.apk
+```
+
+Historical 1.0.4 installations have a different signing certificate. A one-time migration must back up the installed APK and complete app preferences, replace the app, and restore the preferences. A normal update must never automatically uninstall the app after an installation failure.
+
+To configure a phone from the desk:
+
+```
 adb shell am start -n com.edfornieles.earpiece/.MainActivity --es url "https://earpiece.edfornieles.com/p?k=KEY&device=1"
 ```
 
-`-r` installs over an existing copy (builds are signed with the same key, so updates install cleanly).
-
-## Setup on the phone
-
-The setup script in the main project does all of this. To change the server or slot by hand, hold "Phone N" in the top-right corner for 3 seconds. That screen also has **Unpin and exit**.
+Hold the large phone number for 1.5 seconds to open operator settings. Pair the correct earpiece and verify both playback and its microphone before starting a participant. Screen pinning is optional for desk equipment.

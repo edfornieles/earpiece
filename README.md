@@ -1,4 +1,4 @@
-# Earpiece
+# Mother
 
 A live direction system for participatory work: participants wear an earpiece; a director — human, AI, or both — speaks to them from a control room, while everything is recorded and catalogued for editing.
 

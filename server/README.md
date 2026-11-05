@@ -1,4 +1,4 @@
-# Earpiece
+# Mother
 
 A command system for the gallery. Dedicated phones with earphones connect to a control room on this Mac. An AI director (OpenAI listening and thinking, the Watercooler voice speaking) directs each participant, and you can cut in at any time. Cameras are shown live and recorded. Every session becomes one folder, ready to edit.
 
@@ -21,16 +21,18 @@ Before a session, quit **Stremio**. Its background server uses up the Mac's netw
 
 ## Phones
 
-Each phone has a fixed slot (Phone 1–4) and its own permanent link. QR codes for each slot are on the control page.
+Open **Phones** in the top navigation. Each phone has a permanent numbered slot and connection link. Choose a slot to scan its QR code, or click **Add phone** to create another slot. You can use more than four phones; new slots appear in the control room immediately and are saved across server restarts. The Phones page shows whether each phone is connected and has enabled audio.
 
 First-time setup for a dedicated Android phone, plugged in over USB:
 ```
 brew install android-platform-tools     # once
 ./phone-setup.sh 1                      # 1 = the slot for this phone
 ```
-This keeps the screen on while charging, turns on Do Not Disturb, allows app pinning, and opens the page. Then on the phone: Chrome menu → **Add to Home screen**, open it from the icon, and pin it.
+This keeps the screen on while charging, turns on Do Not Disturb, and installs and opens the bundled Android app. If no APK is available it opens the browser version instead. For browser setup, use the QR code on **Phones**, tap **Enable audio**, allow microphone access, and optionally add the page to the home screen.
 
-For each participant: they tick consent, tap Begin, and the AI starts. When they're done, click **End participant → ready for next** on their card. The phone goes back to the consent screen for the next person.
+Keep the phones in the control centre; participants wear only their earpieces. Enable audio on each phone during setup (the browser may need a tap to allow microphone access and playback). From the desk, use **Start on phone** in Arrivals or start someone from their person card. When they're done, click **End participant → ready for next**. The desk starts and ends each visit; the microphone feed is muted between visits and resumes automatically for the next visit on an already prepared phone.
+
+Participant microphone audio goes only to the control desk and that phone's recording, never to another participant. The director can talk to one selected phone, or explicitly to everyone; each AI voice goes only to its assigned phone. Losing the desk connection or moving away from its browser window releases push-to-talk.
 
 Use wired earphones with a mic on the phones. Bluetooth earbuds can jump to another device mid-session.
 
@@ -90,7 +92,9 @@ One-time setup: `npm run setup-faces` (needs Python 3: `brew install python` if 
 - **Hold to talk** (or hold `1`–`4`): speak to one phone. `space` speaks to everyone. This cuts the AI off; the AI knows what you said and carries on after you stop.
 - **AI directing — on / off**, **Next direction**, **Private note to the AI** (it puts your note in its own words).
 - **Mark** (`M`): drops a labelled marker on the edit timeline, e.g. "door opens".
-- **AI brief**: who the AI is and how it directs. Saved to `brief.txt`, with a copy in each session.
+- **Session page**: the AI brief, session name, notes and attached documents. The brief is saved to `brief.txt`, with a copy of each saved edit in the current session.
+- **Screens page**: open camera monitor windows and copy or scan display links for other devices.
+- Number keys **1–9** talk to phones 1–9; use the on-screen card for higher numbered phones.
 
 ## What a session folder contains
 
@@ -140,5 +144,5 @@ OPENAI_TEXT_MODEL=gpt-4o-mini              the AI's mind; try gpt-4.1 for better
 AI_IDLE_SECS=20                            silence before the AI moves on
 AI_MODE=auto                               or off = AI starts silent
 PUBLIC_URL=https://earpiece.edfornieles.com
-MAX_PHONES=4
+MAX_PHONES=4                              initial phone slots; add more from Phones
 ```

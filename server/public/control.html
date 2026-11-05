@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Control room</title>
+<title>Control room — Mother</title>
 <style>
   :root { --bg:#0e0e0e; --card:#171717; --line:#2a2a2a; --fg:#e8e6e1; --dim:#8a8780; --hot:#d9482b; --ok:#5fa36a; --ai:#7a8fd6; }
   * { box-sizing:border-box; }
@@ -52,8 +52,6 @@
   aside { display:flex; flex-direction:column; gap:14px; }
   .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:10px; }
   .panel h3 { margin:0; font-size:12px; color:var(--dim); font-weight:500; text-transform:uppercase; letter-spacing:.06em; display:flex; justify-content:space-between; }
-  #qr svg { width:150px; height:auto; background:#fff; border-radius:8px; }
-  #link { word-break:break-all; color:var(--dim); font-size:11px; }
   details.shape label, #globalvoice label { display:flex; align-items:center; gap:8px; } details.shape input[type=range], #globalvoice input[type=range] { flex:1; width:auto; padding:0; }
   .row select { width:auto; min-width:0; } .row select.voice { flex:1 1 55%; } .row select.emotion { flex:1 1 45%; }
   .tabs { display:flex; gap:6px; } .tabs button { padding:5px 9px; font-size:12px; } .tabs button.sel { background:var(--fg); color:#000; }
@@ -61,7 +59,6 @@
   #gate { position:fixed; inset:0; background:rgba(0,0,0,.85); display:flex; align-items:center; justify-content:center; z-index:9; }
   #gate button { font-size:17px; padding:16px 28px; background:var(--fg); color:#000; }
   .hint { color:var(--dim); font-size:12px; }
-  #brief { min-height:200px; }
   header .titlebox { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
   #stitle { background:transparent; border:1px solid transparent; font-size:16px; padding:6px 8px; max-width:520px; }
   #stitle:hover, #stitle:focus { border-color:var(--line); background:#101010; }
@@ -87,7 +84,6 @@
   .arr .t { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
   .arr .t b { font-weight:500; } .arr .t b span { color:#e3c45a; margin-right:6px; }
   .arr .row button, .arr .row select { padding:6px 9px; font-size:13px; white-space:nowrap; }
-  #screenqr svg { width:150px; height:auto; background:#fff; border-radius:8px; }
   #startsession { background:var(--hot); border-color:var(--hot); font-weight:600; }
   .rec.standby { color:var(--dim); } .rec.standby::before { content:'○'; }
   #standbybar { display:none; background:#1b1a14; border:1px solid #4a4220; border-radius:12px; padding:12px 16px; margin-bottom:16px; color:#e8dcb0; font-size:13px; }
@@ -118,6 +114,9 @@
   .pwho small { color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .notreg { font-size:12px; color:#e3a35a; }
   #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#222; border:1px solid var(--line); padding:8px 14px; border-radius:8px; display:none; }
+  .setup-links a { display:flex; flex-direction:column; gap:3px; color:var(--fg); text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .setup-links a:hover { background:#222; } .setup-links span { color:var(--dim); font-size:12px; }
+  @media(max-width:900px) { main { grid-template-columns:1fr; padding:14px; } header { flex-wrap:wrap; padding:12px 14px; } header nav { flex-wrap:wrap; } #cams, #grid, #folk, #arrivals { grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr)); } }
 </style>
 </head>
 <body>
@@ -156,7 +155,7 @@
       <div class="hint" id="micmodehint">They hear you directly, live.</div>
       <button id="all">Hold to talk to everyone</button>
       <input id="speakall" placeholder="Type a line → every phone hears it in the voice (Enter)">
-      <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>4</kbd> = one phone · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
+      <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>9</kbd> = phones 1–9 · use each card for higher slots · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
     </div>
     <div class="panel">
       <h3>Voice</h3>
@@ -169,33 +168,11 @@
       <div class="hint">Changes here apply to every phone; each card can then differ. Emotion is only available on the expressive voices. Preview plays through your Mac, not the phones.</div>
       <audio id="previewAudio"></audio>
     </div>
-    <div class="panel">
-      <h3>Phones</h3>
-      <div class="tabs" id="tabs"></div>
-      <div id="qr"><span class="hint">waiting for tunnel…</span></div>
-      <div id="link"></div>
-      <div class="hint">Open this on the phone, then Chrome menu → Add to Home screen.</div>
-    </div>
-    <div class="panel">
-      <h3>AI brief <span id="briefstate"></span></h3>
-      <textarea id="brief" spellcheck="false"></textarea>
-      <button id="savebrief">Save brief</button>
-    </div>
-    <div class="panel drop" id="sessionpanel">
-      <h3>Session</h3>
-      <textarea id="snotes" placeholder="Notes about this session (where, who's working, what you're trying)…" style="min-height:70px"></textarea>
-      <div class="docs" id="sdocs"></div>
-      <div class="row"><button id="attach" class="grow">Attach documents…</button><input type="file" id="sfile" multiple hidden></div>
-      <div id="session" class="hint"></div>
-    </div>
-    <div class="panel">
-      <h3>Camera screens</h3>
-      <div class="hint">On this Mac's monitors: open a window, drag it to a screen, click it for full screen.</div>
-      <div class="row" id="camwins" style="flex-wrap:wrap"></div>
-      <div class="tabs" id="screentabs"></div>
-      <div id="screenqr"><span class="hint">…</span></div>
-      <div id="screenlink" style="word-break:break-all;color:var(--dim);font-size:11px"></div>
-      <div class="hint">On a tablet or another computer on this wifi: scan or type the link, then tap for full screen. These links can watch but not control.</div>
+    <div class="panel setup-links">
+      <h3>Prepare &amp; connect</h3>
+      <a data-page="/phones">Phones <span>Connect devices &amp; add slots ↗</span></a>
+      <a data-page="/session">Session <span>AI brief, notes &amp; documents ↗</span></a>
+      <a data-page="/screens">Screens <span>Set up camera monitors ↗</span></a>
     </div>
   </aside>
 </main>
@@ -207,10 +184,11 @@
 <script>
 const KEY = new URLSearchParams(location.search).get('k');
 const $ = (id) => document.getElementById(id);
-const MAX = 4;
+let MAX = 0;
 let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [], micAs = 'own';
 const people = new Map();
 $('peoplelink').href = '/people?k=' + KEY;
+for (const a of document.querySelectorAll('[data-page]')) { a.href = a.dataset.page + '?k=' + KEY; a.target = 'earpiece_pages'; }
 
 function toast(t) { $('toast').textContent = t; $('toast').style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => ($('toast').style.display = 'none'), 1800); }
 function person(id) {
@@ -297,7 +275,7 @@ function renderGrid(list) {
     el.querySelector('.listen').onclick = (e) => { p.listening = !p.listening; p.gain.gain.value = p.listening ? 1 : 0; e.target.classList.toggle('muted', !p.listening); };
     el.querySelector('.aimode').onclick = () => ws.send(JSON.stringify({ type: 'mode', id, mode: p.mode === 'auto' ? 'off' : 'auto' }));
     el.querySelector('.nudge').onclick = () => ws.send(JSON.stringify({ type: 'nudge', id }));
-    el.querySelector('.endp').onclick = () => { if (confirm(`End ${p.name || 'this participant'} on Phone ${id}? The phone goes back to the consent screen.`)) ws.send(JSON.stringify({ type: 'end', id })); };
+    el.querySelector('.endp').onclick = () => { if (confirm(`End ${p.name || 'this participant'} on Phone ${id}? Its microphone feed is muted until the desk starts the next visit.`)) ws.send(JSON.stringify({ type: 'end', id })); };
     wireVoice(el, id, p);
     const spk = el.querySelector('.speak');
     spk.onkeydown = (e) => { if (e.key === 'Enter' && spk.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id, text: spk.value.trim() })); spk.value = ''; } e.stopPropagation(); };
@@ -326,7 +304,8 @@ function paintState(p) {
   const s = p.st; let txt = '', cls = 'status';
   if (s.hidden) { txt = '⚠ phone screen is off — they can’t hear anything'; cls += ' hot'; }
   else if (s.headsetDropped) { txt = '⚠ headset out of range — AI paused until it reconnects'; cls += ' hot'; }
-  else if (p.waiting) txt = 'phone is on the consent screen';
+  else if (!s.audioReady) { txt = 'Enable audio on this phone at the desk'; cls += ' hot'; }
+  else if (p.waiting) txt = 'Ready — waiting for the desk';
   else if (s.held) { txt = micAs === 'voice' ? 'you are talking — they’ll hear it in the AI voice when you let go' : 'you are talking'; cls += ' hot'; }
   else if (s.headset === false && !p.waiting && !s.speaking && !s.thinking) { txt = 'no headset on the phone — sound comes from the phone itself'; cls += ' hot'; }
   else if (s.speaking) { txt = 'AI speaking…'; cls += ' ai'; }
@@ -349,21 +328,29 @@ function appendLine(p, l, replay) {
 }
 
 function setTalk(target) {
+  if (target !== null && (!ws || ws.readyState !== 1)) return;
   if (talkTarget === target) return;
-  if (talkTarget !== null) ws.send(JSON.stringify({ type: 'talk', target: talkTarget, on: false, as: micAs }));
+  if (talkTarget !== null && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'talk', target: talkTarget, on: false, as: micAs }));
   talkTarget = target;
   if (target !== null) ws.send(JSON.stringify({ type: 'talk', target, on: true, as: micAs }));
   $('all').classList.toggle('on', target === 0);
 }
+function releaseTalk() {
+  latched = false; setTalk(null);
+  for (const btn of document.querySelectorAll('.talk, #all')) btn.classList.remove('on');
+}
+window.addEventListener('blur', releaseTalk);
+window.addEventListener('pagehide', releaseTalk);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') releaseTalk(); });
 function bindHold(btn, target) {
   const down = (e) => { e.preventDefault(); setTalk(target); btn.classList.add('on'); };
   const up = () => { if (!latched || target !== 0) setTalk(null); btn.classList.remove('on'); };
-  btn.addEventListener('pointerdown', down); btn.addEventListener('pointerup', up); btn.addEventListener('pointerleave', up);
+  btn.addEventListener('pointerdown', down); btn.addEventListener('pointerup', up); btn.addEventListener('pointerleave', up); btn.addEventListener('pointercancel', up);
 }
 function mark() { const t = prompt('Marker label (optional):', '') ; if (t === null) return; ws.send(JSON.stringify({ type: 'mark', text: t || 'Mark' })); }
 $('mark').onclick = mark;
 $('endsession').onclick = () => { if (confirm('End this session? Recording stops, everything is saved and exported, and you go back to standby to prepare the next one. Phones reconnect by themselves.')) ws.send(JSON.stringify({ type: 'endSession' })); };
-$('startsession').onclick = () => { if (confirm(`Start recording${$('stitle').value ? ' “' + $('stitle').value + '”' : ''} now?`)) { $('stitle').blur(); $('snotes').blur(); ws.send(JSON.stringify({ type: 'startSession' })); } };
+$('startsession').onclick = () => { if (confirm(`Start recording${$('stitle').value ? ' “' + $('stitle').value + '”' : ''} now?`)) { $('stitle').blur(); ws.send(JSON.stringify({ type: 'startSession' })); } };
 function applyMode() {
   const sb = !!info?.standby;
   document.body.classList.toggle('standby', sb);
@@ -382,9 +369,9 @@ for (const b of document.querySelectorAll('#micmode button')) b.onclick = () => 
 };
 
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws?role=control&k=${KEY}`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?role=control&k=${KEY}`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { ws.send(JSON.stringify({ type: 'getBrief' })); if (connect.seen) { loadInfo(); for (const p of people.values()) if (p.log) p.log.innerHTML = ''; } connect.seen = true; };
+  ws.onopen = () => { if (connect.seen) { loadInfo(); for (const p of people.values()) if (p.log) p.log.innerHTML = ''; } connect.seen = true; };
   ws.onmessage = (e) => {
     if (typeof e.data !== 'string') {
       const id = new Uint16Array(e.data, 0, 1)[0];
@@ -392,6 +379,7 @@ function connect() {
       return;
     }
     const m = JSON.parse(e.data);
+    if (m.type === 'phonesChanged') { MAX = m.maxPhones; renderGrid(lastList); renderFolk(); renderArrivals(); }
     if (m.type === 'participants') { renderGrid(m.list); renderFolk(); renderArrivals(); }
     if (m.type === 'people') { folk = m.list; renderFolk(); for (const p of people.values()) paintNext(p); renderArrivals(); }
     if (m.type === 'session') renderSession(m);
@@ -406,42 +394,29 @@ function connect() {
     if (m.type === 'sessionStarting') toast('Starting the session — recording in a few seconds…');
     if (m.type === 'sessionEnding') { toast('Saving this session — a new one starts in a few seconds…'); for (const p of people.values()) { p.lines = []; } }
     if (m.type === 'marked') toast(`Marker at ${m.t}s: ${m.text}`);
-    if (m.type === 'brief') {
-      if (!m.saved || document.activeElement !== $('brief')) $('brief').value = m.text;
-      $('briefstate').textContent = m.saved ? 'saved' : ''; setTimeout(() => ($('briefstate').textContent = ''), 2000);
-    }
+
   };
-  ws.onclose = () => setTimeout(connect, 1000);
+  ws.onclose = () => { releaseTalk(); setTimeout(connect, 1000); };
 }
 
-function showDevice(n) {
-  [...$('tabs').children].forEach((b, i) => b.classList.toggle('sel', i + 1 === n));
-  const d = info.devices[n - 1];
-  if (d && d.qr) { $('qr').innerHTML = d.qr; $('link').textContent = d.url; }
-}
 async function loadInfo() {
   info = await (await fetch('/api/info?k=' + KEY)).json();
-  $('session').innerHTML = `Folder: ${esc(info.session)}`;
-  renderScreens();
+  MAX = Math.max(MAX, info.maxPhones); renderGrid(lastList); renderFolk(); renderArrivals();
   applyMode();
   if (info.mock) $('mock').textContent = '· MOCK AI';
   renderCams(info.cameras);
   renderRoom(info.roomMics);
-  if (!$('tabs').children.length) info.devices.forEach((d) => { const b = document.createElement('button'); b.textContent = 'Phone ' + d.device; b.onclick = () => showDevice(d.device); $('tabs').appendChild(b); });
-  if (info.devices[0]?.qr) showDevice(1); else setTimeout(loadInfo, 1500);
+
 }
-// ---- session name, notes, documents ----
-let sessionName = '';
+// ---- session title and person documents ----
 const fileUrl = (f) => `/files/${encodeURIComponent(info?.name || '')}/${f.split('/').map(encodeURIComponent).join('/')}?k=${KEY}`;
 function renderSession(m) {
   if (document.activeElement !== $('stitle')) $('stitle').value = m.title || '';
-  if (document.activeElement !== $('snotes')) $('snotes').value = m.notes || '';
-  document.title = (m.title ? m.title + ' — ' : '') + 'Control room';
-  $('sdocs').innerHTML = (m.documents || []).map((d) => `<a href="${fileUrl(d.file)}" target="_blank">📄 ${esc(d.name)}</a>`).join('');
+  document.title = (m.title ? m.title + ' — ' : '') + 'Control room — Mother';
 }
-const saveMeta = () => ws && ws.send(JSON.stringify({ type: 'sessionMeta', title: $('stitle').value.trim(), notes: $('snotes').value }));
+const saveMeta = () => ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'sessionMeta', title: $('stitle').value.trim() }));
 $('stitle').onkeydown = (e) => { if (e.key === 'Enter') { e.target.blur(); } e.stopPropagation(); };
-$('stitle').onchange = saveMeta; $('snotes').onchange = saveMeta;
+$('stitle').onchange = saveMeta;
 async function upload(files, pid) {
   for (const f of files) {
     toast(`Attaching ${f.name}…`);
@@ -449,14 +424,11 @@ async function upload(files, pid) {
     const j = await r.json(); toast(j.error ? '⚠ ' + j.error : `Attached ${f.name}`);
   }
 }
-$('attach').onclick = () => $('sfile').click();
-$('sfile').onchange = (e) => { upload([...e.target.files]); e.target.value = ''; };
 function dropZone(el, pid) {
   el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('over'); });
   el.addEventListener('dragleave', () => el.classList.remove('over'));
   el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); if (e.dataTransfer.files.length) upload([...e.dataTransfer.files], pid); });
 }
-dropZone($('sessionpanel'));
 
 // ---- people ----
 let folk = [];
@@ -614,30 +586,6 @@ function searchBox(input, box, pick) {
 }
 searchBox($('findperson'), $('findres'), (r) => ws.send(JSON.stringify({ type: 'arrivalAdd', pid: r.pid })));
 
-// ---- camera screens ----
-function renderScreens() {
-  renderCamWins();
-  const sc = info.screens || {};
-  const tabs = $('screentabs');
-  if (!tabs.children.length || tabs.dataset.n !== String((sc.items || []).length)) {
-    tabs.dataset.n = (sc.items || []).length; tabs.innerHTML = '';
-    (sc.items || []).forEach((it, i) => { const b = document.createElement('button'); b.textContent = it.id ? it.name : 'All'; b.onclick = () => showScreen(i); tabs.appendChild(b); });
-    if ((sc.items || []).length) showScreen(0); else $('screenqr').innerHTML = '<span class="hint">This Mac isn’t on a network, so other screens can’t connect.</span>';
-  }
-}
-function showScreen(i) {
-  const it = info.screens.items[i];
-  [...$('screentabs').children].forEach((b, j) => b.classList.toggle('sel', i === j));
-  $('screenqr').innerHTML = it.qr; $('screenlink').textContent = it.url;
-}
-const openScreen = (cam, n) => window.open(`${info.screens.local}${cam ? '&cam=' + cam : ''}`, 'screen_' + (cam || 'all'), `width=960,height=560,left=${60 + n * 40},top=${60 + n * 40}`);
-function renderCamWins() {
-  const box = $('camwins'), cs = [{ id: '', name: 'All cameras' }, ...(info.cameras || [])];
-  if (box.dataset.n === String(cs.length)) return;
-  box.dataset.n = cs.length; box.innerHTML = '';
-  cs.forEach((c, n) => { const b = document.createElement('button'); b.textContent = c.name + ' ↗'; b.onclick = () => openScreen(c.id, n); box.appendChild(b); });
-}
-
 // ---- voices ----
 function fillVoice(root) {
   const vs = root.querySelector('.voice');
@@ -682,7 +630,6 @@ $('preview').onclick = () => {
 };
 $('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim() })); e.target.value = ''; } e.stopPropagation(); };
 $('speakall').onkeyup = (e) => e.stopPropagation();
-$('savebrief').onclick = () => ws.send(JSON.stringify({ type: 'saveBrief', text: $('brief').value }));
 
 $('go').onclick = async () => {
   ctx = new AudioContext();
@@ -714,14 +661,14 @@ const typing = () => ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagN
 document.addEventListener('keydown', (e) => {
   if (e.repeat || !ws || typing()) return;
   if (e.code === 'Space') { e.preventDefault(); setTalk(0); }
-  if (/^Digit[1-4]$/.test(e.code)) setTalk(Number(e.code.slice(5)));
+  if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) setTalk(Number(e.code.slice(5)));
   if (e.code === 'KeyL') { latched = !latched; setTalk(latched ? 0 : null); }
   if (e.code === 'KeyM') { e.preventDefault(); mark(); }
   if (e.code === 'Escape') $('zoom').click();
 });
 document.addEventListener('keyup', (e) => {
   if (!ws || typing()) return;
-  if (e.code === 'Space' || /^Digit[1-4]$/.test(e.code)) setTalk(latched ? 0 : null);
+  if (e.code === 'Space' || /^Digit[1-9]$/.test(e.code)) setTalk(latched ? 0 : null);
 });
 </script>
 <script src="nav.js"></script>

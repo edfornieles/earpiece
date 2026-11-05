@@ -90,7 +90,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) route()
-        else AlertDialog.Builder(this).setMessage("The earpiece needs the microphone. Allow it in Settings → Apps → Earpiece → Permissions.").setPositiveButton("OK", null).show()
+        else AlertDialog.Builder(this).setMessage("The earpiece needs the microphone. Allow it in Settings → Apps → Mother → Permissions.").setPositiveButton("OK", null).show()
     }
 
     private fun startService(action: String? = null) {

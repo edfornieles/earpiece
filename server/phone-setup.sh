@@ -1,12 +1,13 @@
 #!/bin/bash
 # Sets up an Android phone (plugged in over USB) as a dedicated earpiece phone.
-# Usage:  ./phone-setup.sh 1        (the number is the phone's slot: 1, 2, 3 or 4)
+# Usage:  ./phone-setup.sh 1        (use a slot already created on the Phones page)
 # Needs:  brew install android-platform-tools   and USB debugging switched on on the phone
 #         (Settings → About phone → tap "Build number" 7 times → Developer options → USB debugging)
 
 set -e
 cd "$(dirname "$0")"
 SLOT="${1:-1}"
+case "$SLOT" in *[!0-9]*|0|'') echo "Use a positive phone slot number from the Phones page."; exit 1;; esac
 command -v adb >/dev/null || { echo "adb not found — run: brew install android-platform-tools"; exit 1; }
 # several entries for one phone (wifi debugging lists it twice) — use the first
 [ -z "$ANDROID_SERIAL" ] && export ANDROID_SERIAL=$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')
@@ -23,16 +24,16 @@ adb shell settings put system screen_off_timeout 1800000           # 30 min time
 adb shell settings put secure lock_to_app_enabled 1 2>/dev/null || true   # allow app pinning
 adb shell cmd notification set_dnd priority 2>/dev/null || adb shell cmd notification set_dnd on 2>/dev/null || true
 if [ -f earpiece.apk ]; then
-  echo "Installing the Earpiece app…"
+  echo "Installing the Mother app…"
   adb shell am force-stop com.edfornieles.earpiece 2>/dev/null || true
   if ! adb install -r -g earpiece.apk >/dev/null 2>&1; then   # -g grants the microphone permission up front
-    echo "  (replacing the older copy)"
-    adb uninstall com.edfornieles.earpiece >/dev/null 2>&1 || true
-    adb install -g earpiece.apk >/dev/null
+    echo "Update failed. The installed app and saved settings have been left intact."
+    echo "Check the APK signing identity and phone compatibility before retrying."
+    exit 1
   fi
   adb shell am start -n com.edfornieles.earpiece/.MainActivity --es url "$URL" >/dev/null
   echo
-  echo "Done. The Earpiece app is open on the phone in slot $SLOT."
+  echo "Done. The Mother app is open on the phone in slot $SLOT."
   echo "  - Pair the participant's Bluetooth headset with this phone (or plug in wired earphones)."
   echo "  - Gallery mode (pins the app): hold 'Phone $SLOT' in the top-right corner, tick Gallery mode."
 else

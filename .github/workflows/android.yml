@@ -1,4 +1,4 @@
-name: Build Android app
+name: Build Mother Android app
 on:
   push:
     paths: ["android/**", ".github/workflows/android.yml"]
@@ -21,7 +21,13 @@ jobs:
         with:
           gradle-version: "8.7"
       - name: Build
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+        env:
+          MOTHER_KEYSTORE_BASE64: ${{ secrets.MOTHER_KEYSTORE_BASE64 }}
+          MOTHER_SIGNING_PASSWORD: ${{ secrets.MOTHER_SIGNING_PASSWORD }}
+        run: |
+          test -n "$MOTHER_KEYSTORE_BASE64" && test -n "$MOTHER_SIGNING_PASSWORD"
+          printf '%s' "$MOTHER_KEYSTORE_BASE64" | base64 --decode > app/mother-signing.p12
+          gradle :app:assembleDebug --no-daemon --stacktrace
       - name: Collect
         run: cp app/build/outputs/apk/debug/app-debug.apk ../earpiece.apk
       - uses: actions/upload-artifact@v4

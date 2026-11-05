@@ -60,7 +60,7 @@ class AudioService : Service() {
         // State the screen reads. Updated from background threads; the activity polls it.
         @Volatile var connected = false
         @Volatile var slot = 0
-        @Volatile var waiting = true          // true = consent screen, false = participant active
+        @Volatile var waiting = true          // true = waiting for the desk, false = participant active
         @Volatile var status = "starting…"
         @Volatile var playLevel = 0f
         @Volatile var micLevel = 0f
@@ -188,7 +188,7 @@ class AudioService : Service() {
                 retry = 0; connected = true; status = "connected"
                 sendJson(JSONObject().put("type", "headset").put("connected", headset).put("name", headsetName))
                 sendDevice()
-                if (!waiting) sendJson(JSONObject().put("type", "hello"))
+                if (record?.recordingState == AudioRecord.RECORDSTATE_RECORDING) sendJson(JSONObject().put("type", "hello"))
             }
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val m = try { JSONObject(text) } catch (_: Exception) { return }
@@ -252,7 +252,7 @@ class AudioService : Service() {
 
     private fun readWho(m: JSONObject) {
         fun label(o: JSONObject?) = if (o == null) "" else ((if (o.has("number") && !o.isNull("number")) "#${o.optInt("number")} " else "") + o.optString("name"))
-        person = label(m.optJSONObject("person"))
+        person = label(m.optJSONObject("person")).ifEmpty { m.optString("name", "") }
         next = label(m.optJSONObject("next"))
         standby = m.optBoolean("standby", false)
     }
@@ -419,12 +419,12 @@ class AudioService : Service() {
     private fun goForeground() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(NotificationChannel("earpiece", "Earpiece", NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(NotificationChannel("earpiece", "Mother", NotificationManager.IMPORTANCE_LOW))
         }
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n: Notification = (if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "earpiece") else @Suppress("DEPRECATION") Notification.Builder(this))
-            .setContentTitle("Earpiece")
+            .setContentTitle("Mother")
             .setContentText("Connected to the control room")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(open)

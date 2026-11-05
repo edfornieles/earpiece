@@ -8,6 +8,9 @@ build/
 .gradle/
 local.properties
 *.keystore
+*.p12
+earpiece.apk
+mother.apk
 .DS_Store
 roommics.json
 .settings.json

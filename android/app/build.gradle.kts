@@ -15,19 +15,20 @@ android {
         versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
     }
 
-    // A fixed key (app/earpiece.keystore) lets each new build install over the last one.
-    // If it isn't in the repo, the standard debug key is used instead.
-    val fixedKey = file("earpiece.keystore")
+    // CI restores this from protected secrets; the private signing material is never committed.
+    val fixedKey = file("mother-signing.p12")
+    val signingPassword = System.getenv("MOTHER_SIGNING_PASSWORD")
     signingConfigs {
-        if (fixedKey.exists()) create("earpiece") {
+        if (fixedKey.exists() && !signingPassword.isNullOrEmpty()) create("mother") {
             storeFile = fixedKey
-            storePassword = "earpiece"
-            keyAlias = "earpiece"
-            keyPassword = "earpiece"
+            storeType = "PKCS12"
+            storePassword = signingPassword
+            keyAlias = "mother"
+            keyPassword = signingPassword
         }
     }
     buildTypes {
-        getByName("debug") { if (fixedKey.exists()) signingConfig = signingConfigs.getByName("earpiece") }
+        getByName("debug") { if (fixedKey.exists() && !signingPassword.isNullOrEmpty()) signingConfig = signingConfigs.getByName("mother") }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

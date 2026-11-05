@@ -1,0 +1,26 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Screens — Mother</title><link rel="stylesheet" href="setup.css"></head><body>
+<header class="pagehead"><div><div class="eyebrow">Gallery displays</div><h1>Screens</h1><p>Choose what each monitor shows. Display links can watch cameras and captions; they cannot control the performance.</p></div></header>
+<main><div id="notice" class="notice" role="status"></div><div class="layout"><section class="panel"><h2>On this computer</h2><p class="hint">Open a camera window, drag it to the right monitor, then click the picture for full screen.</p><div id="windows" class="stack"></div></section>
+<section class="panel"><h2>On another screen</h2><p class="hint">For a tablet or another computer on the same network: choose a view, scan its code, then tap the picture for full screen.</p><div class="tabs" id="views" aria-label="Choose a camera view"></div><div class="pair"><div><div class="qr" id="qr">Loading screens…</div></div><div><h3 id="viewname">Camera view</h3><div id="link" class="link"></div><div class="row"><button id="copy" disabled>Copy display link</button><a id="open" class="button" target="earpiece_display" hidden>Open view ↗</a></div><p class="hint divider">Keep the device on the gallery’s network and leave the display page open.</p></div></div></section></div>
+<section class="panel actions"><div class="row between"><div><h2>Welcome station</h2><p class="hint">The separate arrival screen plays the introduction and shows the participant registration QR code.</p></div><a class="button" id="welcome" target="earpiece_welcome" hidden>Open welcome screen ↗</a></div></section></main><div id="toast" role="status"></div><script src="setup.js"></script><script>
+const { $, esc, api, copy } = Setup;
+let info, selected = 0, displayUrl = '';
+function showView(index) {
+  selected = index; const view = info.screens.items[index];
+  document.querySelectorAll('#views button').forEach((b,i) => b.setAttribute('aria-pressed', i === index));
+  if (!view) { $('qr').textContent = 'Connect this computer to the gallery network to generate display links.'; $('link').textContent = ''; $('copy').disabled = true; $('open').hidden = true; return; }
+  displayUrl = view.url; $('qr').innerHTML = view.qr; $('link').textContent = view.url; $('viewname').textContent = view.name; $('copy').disabled = false; $('open').href = view.url; $('open').hidden = false;
+}
+async function load() {
+  try { info = await api('info'); $('notice').textContent = '';
+    const cameras = [{id:'',name:'All cameras'}, ...info.cameras];
+    $('windows').innerHTML = cameras.map((c,i) => `<button data-index="${i}">${esc(c.name)} ↗</button>`).join('');
+    $('windows').onclick = e => { const b = e.target.closest('[data-index]'); if (!b) return; const i = Number(b.dataset.index), c = cameras[i]; window.open(info.screens.local + (c.id ? '&cam=' + encodeURIComponent(c.id) : ''), 'screen_' + (c.id || 'all'), `width=960,height=560,left=${60+i*40},top=${60+i*40}`); };
+    $('views').innerHTML = info.screens.items.map((c,i) => `<button data-index="${i}" aria-pressed="false">${esc(c.name)}</button>`).join('');
+    showView(Math.min(selected, Math.max(0, info.screens.items.length - 1)));
+    const monitorKey = new URL(info.screens.local, location.href).searchParams.get('k'); $('welcome').href = '/welcome?k=' + encodeURIComponent(monitorKey); $('welcome').hidden = false;
+  } catch(e) { $('notice').textContent = e.message; }
+}
+$('views').onclick = e => { const b = e.target.closest('[data-index]'); if (b) showView(Number(b.dataset.index)); }; $('copy').onclick = () => copy(displayUrl);
+load(); setInterval(load, 15000);
+</script><script src="nav.js"></script></body></html>

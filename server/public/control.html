@@ -95,6 +95,20 @@
   body.standby #standbybar { display:block; }
   body.standby #mark, body.standby #endsession, body.standby .pstart, body.standby .pphone, body.standby .arr select, body.standby .arr .go { display:none !important; }
   body:not(.standby) #startsession { display:none; }
+  .find { position:relative; }
+  .find input { width:280px; padding:7px 10px; font-size:13px; text-transform:none; letter-spacing:0; }
+  .person .find input { width:100%; }
+  .results { position:absolute; right:0; top:calc(100% + 4px); width:380px; max-height:420px; overflow-y:auto; background:#141414; border:1px solid #3a3a3a; border-radius:10px; z-index:20; display:none; box-shadow:0 12px 30px rgba(0,0,0,.5); text-transform:none; letter-spacing:0; }
+  .person .results { left:0; right:auto; width:100%; }
+  .results.on { display:block; }
+  .res { display:flex; gap:10px; align-items:center; padding:7px 10px; cursor:pointer; border-bottom:1px solid #1f1f1f; font-size:13px; color:var(--fg); font-weight:400; }
+  .res:hover, .res.sel { background:#232323; }
+  .res img { width:40px; height:40px; border-radius:8px; object-fit:cover; flex:none; background:#000; }
+  .res span { display:flex; flex-direction:column; min-width:0; } .res small { color:var(--dim); font-size:11px; }
+  .res.in { opacity:.45; cursor:default; }
+  .res.none { color:var(--dim); cursor:default; }
+  .consentok { font-size:12px; color:var(--ok); margin-top:-2px; }
+  .person .top .pname { flex:1; min-width:0; } .consentok a { color:var(--ok); }
   #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#222; border:1px solid var(--line); padding:8px 14px; border-radius:8px; display:none; }
 </style>
 </head>
@@ -120,9 +134,9 @@
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="_blank" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
       <div id="arrivals"></div>
-      <h3><span id="peoplehead">People this session</span><button id="addperson">+ Add person</button></h3>
+      <h3><span id="peoplehead">People this session</span><span class="find" id="findbox"><input id="findperson" placeholder="Find someone who has registered…" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><div class="results" id="findres"></div></span></h3>
       <div id="folk"></div>
-      <div class="hint" style="margin-top:8px">Everyone who starts on a phone appears here. Add people ahead of time to fill in details and start them on a phone from here. Drop a file on a person to attach it (release form, ID photo, notes). Contact details stay in this session's folder — they aren't given to the AI or put in the edit notes.</div>
+      <div class="hint" style="margin-top:8px">Search finds everyone who has registered and signed consent; picking someone brings their photo, signed consent and notes into this session. Notes you write about a registered person are kept on their registration for next time. Someone who started on a phone without registering appears here too — use the search on their card to link their registration. Drop a file on a person to attach it. Contact details aren't given to the AI or put in the edit notes.</div>
     </div>
   </section>
   <aside>
@@ -373,6 +387,7 @@ function connect() {
     if (m.type === 'people') { folk = m.list; renderFolk(); renderGrid(lastList); }
     if (m.type === 'session') renderSession(m);
     if (m.type === 'personSaved' && m.ref === 'new') setTimeout(() => document.querySelector(`.person[data-pid="${m.pid}"] .pname`)?.focus(), 50);
+    if (m.type === 'registry' || m.type === 'people') allRegs = null;   // search reloads the full list next time
     if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, voice: m.voice, style: m.style, st: m }); paintState(p); }
     if (m.type === 'transcript') appendLine(person(m.id), m);
     if (m.type === 'error') { if (m.id) appendLine(person(m.id), { who: 'error', text: m.text }); else toast('⚠ ' + m.text); }
@@ -448,8 +463,10 @@ function renderFolk() {
     if (!el) {
       el = document.createElement('div'); el.className = 'person drop'; el.dataset.pid = x.pid;
       el.innerHTML = `
-        <div class="top"><img class="ph" alt="" style="display:none"><input class="pname" placeholder="Name"><label class="rel"><input type="checkbox" class="prel"> Release signed</label></div>
-        <input class="pcontact" placeholder="Email / phone">
+        <div class="top"><img class="ph" alt="" style="display:none"><input class="pname" placeholder="Name" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><label class="rel"><input type="checkbox" class="prel"> Release signed</label></div>
+        <div class="consentok" style="display:none"></div>
+        <input class="pcontact" placeholder="Email / phone" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
+        <div class="find linkreg" style="display:none"><input placeholder="Not registered — find their registration…" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><div class="results"></div></div>
         <textarea class="pnotes" placeholder="Notes (age group, access needs, how they found it…)"></textarea>
         <div class="docs pfiles"></div>
         <div class="row"><button class="pattach">Attach…</button><input type="file" class="pfile" multiple hidden>
@@ -472,6 +489,13 @@ function renderFolk() {
     }
     const set = (c, v, prop = 'value') => { const i = el.querySelector(c); if (i !== document.activeElement) i[prop] = v; };
     set('.pname', x.name); set('.pcontact', x.contact); set('.pnotes', x.notes); set('.prel', !!x.release, 'checked');
+    el.querySelector('.rel').style.display = x.registered ? 'none' : '';
+    const ok = el.querySelector('.consentok');
+    ok.style.display = x.registered ? '' : 'none';
+    if (x.registered) ok.innerHTML = `#${x.number || ''} · ${x.consent ? `<a href="${fileUrl(x.consent)}" target="_blank">consent signed ✓</a>` : 'consent signed ✓'}${x.face ? ' · face ✓' : ''}`;
+    const lr = el.querySelector('.linkreg');
+    lr.style.display = x.registered ? 'none' : '';
+    if (!x.registered && !lr.wired) { lr.wired = true; searchBox(lr.querySelector('input'), lr.querySelector('.results'), (r) => ws.send(JSON.stringify({ type: 'linkRegistration', pid: x.pid, rid: r.pid }))); }
     const ph = el.querySelector('.ph');
     if (x.photo) { const src = fileUrl(x.photo); if (ph.dataset.src !== src) { ph.src = src; ph.dataset.src = src; ph.onclick = () => bigPhoto(src); } ph.style.display = ''; ph.title = `#${x.number || ''} registered${x.face ? ' · face matching ✓' : ''}`; } else ph.style.display = 'none';
     el.querySelector('.pfiles').innerHTML = x.files.map((d) => `<a href="${fileUrl(d.file)}" target="_blank">📄 ${esc(d.name)}</a>`).join('');
@@ -481,7 +505,8 @@ function renderFolk() {
     const want = free.map((p) => `<option value="${p.id}">Phone ${p.id}${p.waiting ? '' : ' (busy)'}</option>`).join('') || '<option value="">no phone</option>';
     if (sel.innerHTML !== want) { const v = sel.value; sel.innerHTML = want; const firstFree = free.find((p) => p.waiting); sel.value = free.some((p) => String(p.id) === v) ? v : (firstFree ? firstFree.id : (free[0]?.id || '')); }
     el.querySelector('.pstart').style.display = onPhone ? 'none' : '';
-    el.querySelector('.pdel').style.display = x.visits.length || x.files.length ? 'none' : '';
+    el.querySelector('.pdel').style.display = x.visits.length || (!x.registered && x.files.length) ? 'none' : '';
+    el.querySelector('.pdel').title = x.registered ? 'Take them off this session (their registration stays)' : 'Remove';
   }
   if (keep) box.querySelector(`.person[data-pid="${keep.pid}"] [class="${keep.cls}"]`)?.focus();
 }
@@ -510,7 +535,44 @@ function renderArrivals() {
   });
   applyMode();
 }
-$('addperson').onclick = () => ws.send(JSON.stringify({ type: 'personSave', ref: 'new', name: '' }));
+// ---- search everyone who has registered ----
+let allRegs = null;
+async function registrations() {
+  if (!allRegs) allRegs = (await (await fetch('/api/registry?k=' + KEY)).json()).list || [];
+  return allRegs;
+}
+function searchBox(input, box, pick) {
+  let sel = 0, shown = [], pending = Promise.resolve();
+  const draw = () => (pending = drawNow());
+  const drawNow = async () => {
+    const q = input.value.trim().toLowerCase().replace(/^#/, '');
+    const list = await registrations();
+    const inSession = new Set(folk.filter((x) => x.registered).map((x) => x.pid));
+    shown = list.filter((r) => !q || `${r.name} ${r.email} ${r.number} ${r.notes || ''}`.toLowerCase().includes(q)).slice(0, 30);
+    sel = Math.min(sel, Math.max(0, shown.length - 1));
+    box.innerHTML = shown.map((r, i) => `<div class="res${inSession.has(r.pid) ? ' in' : ''}${i === sel ? ' sel' : ''}" data-i="${i}"><img src="${r.photo}?k=${KEY}" loading="lazy" alt="">
+      <span><b>#${r.number} ${esc(r.name)}</b><small>${esc(r.email)} · ${new Date(r.registered).toLocaleDateString([], { day: 'numeric', month: 'short' })}${r.face ? ' · face ✓' : ''}${inSession.has(r.pid) ? ' · already here' : r.sessions.length ? ` · in ${r.sessions.length} session${r.sessions.length > 1 ? 's' : ''}` : ''}${r.notes ? ' · ' + esc(r.notes.slice(0, 50)) : ''}</small></span></div>`).join('')
+      || `<div class="res none">${list.length ? 'Nobody matches' : 'Nobody has registered yet — they register by scanning the code on the welcome screen'}</div>`;
+    box.classList.add('on');
+  };
+  const choose = (i) => {
+    const r = shown[i]; if (!r || box.querySelector(`[data-i="${i}"]`)?.classList.contains('in')) return;
+    pick(r); input.value = ''; box.classList.remove('on'); input.blur(); toast(`${r.name} added`);
+  };
+  input.addEventListener('focus', draw);
+  input.addEventListener('input', () => { sel = 0; draw(); });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, shown.length - 1); draw(); e.preventDefault(); }
+    if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); draw(); e.preventDefault(); }
+    if (e.key === 'Enter') pending.then(() => choose(sel));
+    if (e.key === 'Escape') { box.classList.remove('on'); input.blur(); }
+  });
+  input.addEventListener('keyup', (e) => e.stopPropagation());
+  box.addEventListener('mousedown', (e) => { e.preventDefault(); const d = e.target.closest('.res'); if (d && d.dataset.i) choose(Number(d.dataset.i)); });
+  input.addEventListener('blur', () => setTimeout(() => box.classList.remove('on'), 150));
+}
+searchBox($('findperson'), $('findres'), (r) => ws.send(JSON.stringify({ type: 'arrivalAdd', pid: r.pid })));
 
 // ---- camera screens ----
 function renderScreens() {

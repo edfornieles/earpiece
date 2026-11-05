@@ -98,6 +98,8 @@ function upsertPerson(d) {
     for (const v of session.participants) if (v.pid === x.pid) v.name = x.name;
     saveSession();
   }
+  // a registered person's name, email and notes live on their registration too, so they follow them to later sessions
+  if (x.registered && typeof registry !== 'undefined') registry.update(x.pid, { name: x.name, email: x.contact, notes: x.notes });
   savePeople();
   return x;
 }
@@ -121,7 +123,8 @@ function linkPerson(dir, rid, visitIdx = -1, how = 'linked by hand') {
   const copied = registry.copyInto(dir, rid, safeName);
   let x = plist.find((y) => y.pid === rid);
   if (!x) { x = { pid: rid, name: '', contact: '', notes: '', release: false, files: [], visits: [], added: new Date().toISOString() }; plist.push(x); }
-  Object.assign(x, { name: reg.name, contact: reg.email, release: true, registered: true, number: reg.number, face: reg.face, photo: copied.photo });
+  Object.assign(x, { name: reg.name, contact: reg.email, release: true, registered: true, number: reg.number, face: reg.face, photo: copied.photo, consent: copied.files.find((f) => /consent/.test(f.name))?.file || null });
+  if (reg.notes && !x.notes.includes(reg.notes)) x.notes = [reg.notes, x.notes].filter(Boolean).join('\n');
   for (const f of copied.files) if (!x.files.find((y) => y.file === f.file)) x.files.push(f);
   if (visitIdx >= 0) {
     const v = (sj.participants || [])[visitIdx]; if (!v) throw new Error('no such visit');
@@ -133,6 +136,7 @@ function linkPerson(dir, rid, visitIdx = -1, how = 'linked by hand') {
       if (old.notes && !x.notes.includes(old.notes)) x.notes = [x.notes, old.notes].filter(Boolean).join('\n');
       for (const f of old.files) if (!x.files.find((y) => y.file === f.file)) x.files.push(f);
       if (!old.visits.length && !old.registered) plist.splice(plist.indexOf(old), 1);
+      if (x.notes) registry.update(rid, { notes: x.notes });
       if (live) for (const ps of sessions.values()) if (ps.pid === old.pid) { ps.pid = rid; ps.name = reg.name; state(ps); }
     } else if (!x.visits.find((w) => w.phone === v.phone && Math.abs(w.start - v.start) < 1)) x.visits.push({ phone: v.phone, start: v.start, end: v.end });
     v.pid = rid; v.name = reg.name;
@@ -773,7 +777,17 @@ wss.on('connection', (ws, req) => {
         toControls({ type: 'session', title: session.title, notes: session.notes || '', documents: session.documents || [] });
       }
       if (m.type === 'personSave') { const x = upsertPerson(m); send(ws, { type: 'personSaved', pid: x.pid, ref: m.ref }); }
-      if (m.type === 'personDelete') { const x = personBy(m.pid); if (x && !x.visits.length && !x.files.length) { people = people.filter((y) => y !== x); savePeople(); } }
+      if (m.type === 'personDelete') {
+        const x = personBy(m.pid);
+        if (x && !x.visits.length && x.registered) {   // added by mistake: take them off, and the copies of their photo and consent
+          try {
+            unlinkPerson(SESSION_DIR, x.pid);
+            const dir = path.join(SESSION_DIR, 'documents', `${safeName(x.name || 'person').replace(/ /g, '_')}_${x.pid}`);
+            if (x.photo && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+            toControls({ type: 'people', list: people });
+          } catch (e) { send(ws, { type: 'error', id: 0, text: e.message }); }
+        } else if (x && !x.visits.length && !x.files.length) { people = people.filter((y) => y !== x); savePeople(); }
+      }
       if (m.type === 'arrivalAdd' || m.type === 'arrivalStart') {   // someone who registered at the welcome station
         try {
           const t = m.type === 'arrivalStart' && sessions.get(Number(m.phone));
@@ -781,6 +795,22 @@ wss.on('connection', (ws, req) => {
           const x = linkPerson(SESSION_DIR, m.pid, -1, STANDBY ? 'added to the next session' : t ? 'on phone ' + t.id : 'added in the control room');
           if (t && beginParticipant(t, x.name, x.pid) !== false) send(t.ws, { type: 'welcome', id: t.id, waiting: false, name: t.name });
         } catch (e) { send(ws, { type: 'error', id: Number(m.phone) || 0, text: e.message }); }
+      }
+      if (m.type === 'linkRegistration') {   // a walk-in's card in this session → their registration (merges their phone visit)
+        try {
+          const old = personBy(m.pid);
+          const vi = session.participants.findIndex((v) => v.pid === m.pid);
+          if (vi >= 0) linkPerson(SESSION_DIR, m.rid, vi, 'linked in the control room');
+          else {
+            linkPerson(SESSION_DIR, m.rid, -1, STANDBY ? 'added to the next session' : 'linked in the control room');
+            if (old && !old.visits.length && !old.registered && old.pid !== m.rid) {
+              const x = personBy(m.rid);
+              if (old.notes && !x.notes.includes(old.notes)) x.notes = [x.notes, old.notes].filter(Boolean).join('\n');
+              for (const f of old.files) if (!x.files.find((y) => y.file === f.file)) x.files.push(f);
+              people = people.filter((y) => y !== old); savePeople();
+            }
+          }
+        } catch (e) { send(ws, { type: 'error', id: 0, text: e.message }); }
       }
       if (m.type === 'personStart') {   // start someone on a phone from here, instead of the phone's own screen
         const x = personBy(m.pid), t = sessions.get(Number(m.phone));

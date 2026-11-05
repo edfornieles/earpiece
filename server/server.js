@@ -199,7 +199,7 @@ function transcript(s, who, text) {
   toControls({ type: 'transcript', id: s.id, who, text, t: clock() });
 }
 function state(s) {
-  toControls({ type: 'state', id: s.id, mode: s.mode, speaking: s.speaking, thinking: s.thinking, listening: s.vad.speaking, held: s.edHold, hidden: !!s.hidden, headset: s.headset, headsetName: s.headsetName, waiting: s.waiting, name: s.name });
+  toControls({ type: 'state', id: s.id, mode: s.mode, speaking: s.speaking, thinking: s.thinking, listening: s.vad.speaking, held: s.edHold, hidden: !!s.hidden, headset: s.headset, headsetDropped: !!s.headsetDropped, headsetName: s.headsetName, waiting: s.waiting, name: s.name });
 }
 function report(s, err) {
   console.error(`  #${s.id} ${err.message}`);
@@ -240,7 +240,7 @@ function systemPrompt(s) {
 }
 
 async function aiTurn(s) {
-  if (s.hidden || s.waiting || s.headset === false) return;
+  if (s.hidden || s.waiting || s.headsetDropped) return;
   if (s.thinking || s.speaking) { s.again = true; return; }
   const turn = ++s.turn;
   s.thinking = true; s.again = false; state(s);
@@ -328,7 +328,7 @@ setInterval(() => {
 setInterval(() => {
   const now = Date.now();
   for (const s of sessions.values()) {
-    if (!s.ws || s.hidden || s.headset === false || s.waiting || s.mode !== 'auto' || s.speaking || s.thinking || s.edHold || s.vad.speaking) continue;
+    if (!s.ws || s.hidden || s.headsetDropped || s.waiting || s.mode !== 'auto' || s.speaking || s.thinking || s.edHold || s.vad.speaking) continue;
     if (now - s.lastActivity > IDLE_SECS * 1000) {
       s.lastActivity = now;
       s.history.push({ role: 'user', content: `[No reply from the participant for ${IDLE_SECS} seconds. Continue directing.]` });
@@ -448,6 +448,7 @@ wss.on('connection', (ws, req) => {
       }
       if (m.type === 'headset') {   // native app: the participant's earpiece came or went (e.g. walked out of Bluetooth range)
         const was = s.headset; s.headset = !!m.connected; s.headsetName = String(m.name || '');
+        s.headsetDropped = was === true && !s.headset ? true : (s.headset ? false : s.headsetDropped);
         if (was !== s.headset || was === undefined) {
           logEvent(s.headset ? 'headset_connected' : 'headset_lost', { id, name: s.headsetName });
           if (!s.headset) stopAi(s, 'headset out of range');

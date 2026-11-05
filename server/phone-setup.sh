@@ -33,10 +33,8 @@ if [ -f earpiece.apk ]; then
   adb shell am start -n com.edfornieles.earpiece/.MainActivity --es url "$URL" >/dev/null
   echo
   echo "Done. The Earpiece app is open on the phone in slot $SLOT."
-  echo "  - Android will ask to pin the app: tap Got it / Start."
-  echo "  - Optional: make it the home screen (Settings → Apps → Default apps → Home app → Earpiece),"
-  echo "    so the phone always comes back to it."
-  echo "  - To change slot or exit: hold 'Phone $SLOT' in the top-right corner for 3 seconds."
+  echo "  - Pair the participant's Bluetooth headset with this phone (or plug in wired earphones)."
+  echo "  - Gallery mode (pins the app): hold 'Phone $SLOT' in the top-right corner, tick Gallery mode."
 else
   adb shell am start -a android.intent.action.VIEW -d "$URL" com.android.chrome >/dev/null
   echo

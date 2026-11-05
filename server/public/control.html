@@ -193,9 +193,10 @@ function paintState(p) {
   b.classList.toggle('aion', p.mode === 'auto');
   const s = p.st; let txt = '', cls = 'status';
   if (s.hidden) { txt = '⚠ phone screen is off — they can’t hear anything'; cls += ' hot'; }
-  else if (s.headset === false) { txt = '⚠ headset out of range / not connected'; cls += ' hot'; }
+  else if (s.headsetDropped) { txt = '⚠ headset out of range — AI paused until it reconnects'; cls += ' hot'; }
   else if (p.waiting) txt = 'phone is on the consent screen';
   else if (s.held) { txt = 'you are talking'; cls += ' hot'; }
+  else if (s.headset === false && !p.waiting && !s.speaking && !s.thinking) { txt = 'no headset on the phone — sound comes from the phone itself'; cls += ' hot'; }
   else if (s.speaking) { txt = 'AI speaking…'; cls += ' ai'; }
   else if (s.thinking) { txt = 'AI thinking…'; cls += ' ai'; }
   else if (s.listening) { txt = 'participant speaking…'; cls += ' ok'; }

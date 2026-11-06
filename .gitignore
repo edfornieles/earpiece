@@ -8,6 +8,9 @@ build/
 .gradle/
 local.properties
 *.keystore
+*.p12
+earpiece.apk
+mother.apk
 .DS_Store
 roommics.json
 .settings.json
@@ -19,3 +22,10 @@ intro.mp4
 intro.mov
 intro.m4v
 consent.md
+
+# Local performance scores (may contain private scripts).
+server/programs/
+
+# Private studio/gallery inventory
+.room.json
+.room.json.tmp

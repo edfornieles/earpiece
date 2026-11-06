@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
-        android:label="Earpiece"
+        android:label="Mother"
         android:icon="@drawable/ic_orb"
         android:roundIcon="@drawable/ic_orb"
         android:usesCleartextTraffic="true"

@@ -252,7 +252,7 @@ async function main() {
 function notes(session, m, utts, events) {
   const L = [];
   const dur = Math.max(0, ...m.files.map((f) => f.offset + (f.duration || 0)));
-  L.push(`# ${session.title || 'Earpiece session'} — ${session.name}`, '');
+  L.push(`# ${session.title || 'Mother session'} — ${session.name}`, '');
   L.push(`Started ${new Date(session.start_iso).toString()}${session.end_iso ? `, ended ${new Date(session.end_iso).toTimeString().slice(0, 8)}` : ''} · about ${dur < 90 ? Math.round(dur) + ' s' : Math.round(dur / 60) + ' min'} recorded.`, '');
   if (session.notes) L.push('## Session notes', '', session.notes.trim(), '');
   if ((session.documents || []).length) L.push('Documents attached to the session: ' + session.documents.map((d) => '`' + d.file + '`').join(', '), '');

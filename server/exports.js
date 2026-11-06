@@ -129,7 +129,7 @@ function exportSession(dir, videoClips = []) {
     ${assets.join('\n    ')}
   </resources>
   <library>
-    <event name="${esc('Earpiece ' + path.basename(dir))}">
+    <event name="${esc('Mother ' + path.basename(dir))}">
       <project name="${esc(title)}">
         <sequence format="r1" duration="${rt(len)}" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
           <spine>
@@ -145,7 +145,7 @@ function exportSession(dir, videoClips = []) {
 </fcpxml>
 `;
   }
-  const sessionTitle = session.title ? `${session.title} (${path.basename(dir)})` : `Earpiece ${path.basename(dir)}`;
+  const sessionTitle = session.title ? `${session.title} (${path.basename(dir)})` : `Mother ${path.basename(dir)}`;
   fs.writeFileSync(path.join(out, 'timeline.fcpxml'), timeline(sessionTitle, 0, total));
 
   // one timeline per participant visit: their phone's audio, your mic, room mics and every camera

@@ -42,7 +42,9 @@ function floorPlan(input){
       if(!Array.isArray(p)||p.length!==2||!p.every(Number.isFinite)||p[0]<0||p[0]>widthM||p[1]<0||p[1]>depthM)throw Error('Footprint points must be inside the room.');
       return p;
     });
-    return {name:text(o.name,100),points,estimated:!!o.estimated,notes:text(o.notes,600),references:text(o.references,250)};
+    const objectHeight=o.heightM??null;
+    if(objectHeight!==null&&(!Number.isFinite(objectHeight)||objectHeight<=0||objectHeight>heightM))throw Error("Object height must fit within the room.");
+    return {name:text(o.name,100),points,heightM:objectHeight,estimated:!!o.estimated,notes:text(o.notes,600),references:text(o.references,250)};
   });
   return {widthM,depthM,heightM,footprints:objects,origin:'upper-left corner on the plan; x right, y down, z up from floor',doors:doors.map(d=>{
     if(!d||!['top','right','bottom','left'].includes(d.wall))throw Error('Choose a plan wall for each door.');

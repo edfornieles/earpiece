@@ -37,3 +37,7 @@ Desk-only APIs protect room metadata and analysed snapshots. Monitor and phone k
 ## First studio trial
 
 The built-in Mac camera successfully produced live scene descriptions and object suggestions, including artwork on the studio wall. Two analyses took approximately 7–8 seconds each in that trial, before the configured gap between requests; this is near-live sampling, not video-rate understanding. Continuous observation and stopping were checked. A reviewed “Drawing of two figures” landmark survived a server restart and was recognised in a later frame. Its automatic region needed manual correction; the drawing and redraw workflow was verified in the browser, and the correction is preserved. No people were visible in those test frames, so real moving-person association has not been verified. The trial ended with continuous observation stopped and director sharing off.
+
+## Measured base geometry
+
+**Measured floor plan** stores the room's width, depth and ceiling height in metres separately from camera boxes. Its origin is the upper-left corner of the supplied plan, with x to the right, y down the plan and z up from the floor. Doors can have a known width and wall with an unknown exact offset. This is a static plan; it does not establish navigable routes, infer contents or calibrate the camera. Save dimension changes with **Save room setup**. The plan is included as descriptive context during room analysis and in the existing opt-in director context.

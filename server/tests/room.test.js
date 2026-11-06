@@ -37,3 +37,13 @@ test('stopping a network request discards its abort instead of publishing an err
  const {room:r}=setup(t,({signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true})));
  const work=r.observe('cam1');r.stop();assert.equal(await work,null);assert.equal(r.latest,null);assert.equal(r.error,'');assert.equal(r.busy,false);
 });
+
+test('measured geometry persists separately from observations and retains unknown door offsets',t=>{
+ const {room:r,file,hooks}=setup(t);
+ const plan={widthM:4.77,depthM:4.5,heightM:3,doors:[{name:'Double door',widthM:1.67,wall:'bottom',position:'Near right corner',offsetM:null}]};
+ assert.throws(()=>r.save({revision:0,floorPlan:{...plan,heightM:0}}),/ceiling height/);
+ assert.throws(()=>r.save({revision:0,floorPlan:{...plan,doors:[{...plan.doors[0],offsetM:4}]}}),/must fit/);
+ r.save({revision:0,floorPlan:plan});
+ const restored=new RoomObserver(file,hooks);assert.equal(restored.view().floorPlan.heightM,3);assert.deepEqual(restored.view().floorPlan.doors,plan.doors);assert.equal(restored.prompt(),'');
+ restored.save({revision:1,shareWithAgents:true});assert.match(restored.prompt(),/"widthM":4.77/);assert.match(restored.prompt(),/not calibrated/);
+});

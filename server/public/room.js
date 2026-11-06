@@ -5,12 +5,19 @@ const roleFor=phone=>selection?.snapshot.roles.find(r=>selection.assignments[r.i
 function selectedObservation(){return room?.latest?.cameraId===$('camera').value?room.latest:null;}
 function imgUrl(id){return url('/api/room-frame?observation='+encodeURIComponent(id));}
 async function load(){try{const [data,p,r]=await Promise.all([api('room'),api('phones'),api('program-run')]);room=data;phones=p.devices;selection=r.selection;render();}catch(e){$('notice').textContent=e.message;}}
+const dimensionIds=['floor-width','floor-depth','floor-height'];
+function renderFloorPlan(plan){
+ if(!plan){$('floor-plan').textContent='No measured plan saved yet.';return;}
+ const {widthM:w,depthM:d,heightM:h}=plan;
+ const scale=220/Math.max(w,d),width=w*scale,depth=d*scale;
+ $('floor-plan').innerHTML=`<svg class="floor-diagram" role="img" aria-label="Scaled floor outline" viewBox="0 0 ${width+52} ${depth+56}"><rect x="26" y="27" width="${width}" height="${depth}"/><text x="${26+width/2}" y="16" text-anchor="middle">${esc(w)} m</text><text x="${26+width/2}" y="${depth+46}" text-anchor="middle">Depth ${esc(d)} m · ceiling ${esc(h)} m</text><circle cx="26" cy="27" r="3"/></svg>${plan.doors.map(door=>`<p class="hint"><strong>${esc(door.name)} · ${esc(door.widthM)} m</strong><br>${esc(door.wall)} wall${door.position?' · '+esc(door.position):''}${door.offsetM===null?' · exact offset unmeasured':''}</p>`).join('')}`;
+}
 function render(){
  if(!drawing)$('picture').classList.remove('drawing');
  $('draw').textContent=drawing?'Cancel drawing':'+ Draw an object region';
  const selected=$('camera').value||room.cameraId||room.cameras[0]?.id||'';
  const options=room.cameras.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}${c.live?'':' — no live picture'}</option>`).join('');if($('camera').innerHTML!==options)$('camera').innerHTML=options;$('camera').value=selected;
- if(!metadataDirty){$('room-name').value=room.name;$('room-notes').value=room.notes;$('share').checked=room.shareWithAgents;}
+ if(!metadataDirty){$('room-name').value=room.name;$('room-notes').value=room.notes;$('share').checked=room.shareWithAgents;dimensionIds.forEach((id,i)=>{$(id).value=room.floorPlan?.[['widthM','depthM','heightM'][i]]??'';});}renderFloorPlan(room.floorPlan);
  $('notice').textContent=room.error;
  $('observer-state').textContent=(room.busy||busy)?'Analysing a frame…':room.enabled?'Observer on':'Observer off';
  $('observe').disabled=busy||room.busy||room.enabled||!selected;$('start').disabled=busy||room.busy||room.enabled||!selected;$('stop').disabled=!(room.enabled||room.busy||busy);
@@ -63,8 +70,8 @@ async function action(type){
 $('observe').onclick=()=>action('observe');$('start').onclick=()=>action('start');$('stop').onclick=()=>action('stop');
 $('camera').onchange=()=>{drawing=false;view='live';render();};
 $('view-live').onclick=()=>{drawing=false;view='live';render();};$('view-analysis').onclick=()=>{view='analysed';render();};
-for(const id of ['room-name','room-notes','share'])$(id).oninput=()=>{if(!metadataDirty)metadataRevision=room?.revision;metadataDirty=true;$('room-save-state').textContent='Unsaved room setup';};
-$('save-room').onclick=async()=>{if(!room)return;try{room=await api('room',{action:'save',revision:metadataDirty?metadataRevision:room.revision,name:$('room-name').value,notes:$('room-notes').value,shareWithAgents:$('share').checked});metadataDirty=false;$('room-save-state').textContent='Saved. Continuous observation is stopped.';render();}catch(e){toast(e.message);}};
+for(const id of ['room-name','room-notes','share',...dimensionIds])$(id).oninput=()=>{if(!metadataDirty)metadataRevision=room?.revision;metadataDirty=true;$('room-save-state').textContent='Unsaved room setup';};
+$('save-room').onclick=async()=>{if(!room)return;const [widthM,depthM,heightM]=dimensionIds.map(id=>$(id).value);const floorPlan=[widthM,depthM,heightM].some(Boolean)?{...room.floorPlan,widthM:Number(widthM),depthM:Number(depthM),heightM:Number(heightM)}:null;try{room=await api('room',{action:'save',floorPlan,revision:metadataDirty?metadataRevision:room.revision,name:$('room-name').value,notes:$('room-notes').value,shareWithAgents:$('share').checked});metadataDirty=false;$('room-save-state').textContent='Saved. Continuous observation is stopped.';render();}catch(e){toast(e.message);}};
 async function editObject(value){
  try{if(room.enabled||room.busy)room=await api('room',{action:'stop'});}catch(e){return toast(e.message);}
  editing={...value,id:room.landmarks.some(l=>l.id===value.id)?value.id:undefined,revision:room.revision};view='analysed';drawing=false;

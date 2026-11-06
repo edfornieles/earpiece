@@ -44,6 +44,6 @@ The built-in Mac camera successfully produced live scene descriptions and object
 
 ## Manual studio marker test
 
-Open **Room → Studio marker test**. The marker labelled **You** starts in the centre as a test position. Click the floor or focus the map and use the arrow keys to move it in 10 cm steps. **Mark out of sight** keeps its last position visible with a dashed outline; moving it again restores visibility. The double door's wall and width are documented, with an approximate annotation near the right corner until its offset is measured.
+Open **Room → Studio marker test**. The marker labelled **You** starts at a preset test position. Click the floor or focus the map and use the arrow keys to move it in 10 cm steps. **Mark out of sight** keeps its last position visible with a dashed outline; moving it again restores visibility. Measured door openings and furniture footprints appear on the plan. Dashed footprints have an estimated outline or placement. These outlines are rehearsal references; the manual marker can cross them and does not establish a clear walking route.
 
 **Download test log** exports timestamped manual placements and out-of-sight events in metres using the floor plan's coordinate system. The log is local to the page, starts empty and resets on reload or a change to the saved geometry. It is a rehearsal fixture, not a camera observation or an input to director cues.

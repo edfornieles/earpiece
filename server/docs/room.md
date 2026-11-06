@@ -41,3 +41,9 @@ The built-in Mac camera successfully produced live scene descriptions and object
 ## Measured base geometry
 
 **Measured floor plan** stores the room's width, depth and ceiling height in metres separately from camera boxes. Its origin is the upper-left corner of the supplied plan, with x to the right, y down the plan and z up from the floor. Doors can have a known width and wall with an unknown exact offset. This is a static plan; it does not establish navigable routes, infer contents or calibrate the camera. Save dimension changes with **Save room setup**. The plan is included as descriptive context during room analysis and in the existing opt-in director context.
+
+## Manual studio marker test
+
+Open **Room → Studio marker test**. The marker labelled **You** starts in the centre as a test position. Click the floor or focus the map and use the arrow keys to move it in 10 cm steps. **Mark out of sight** keeps its last position visible with a dashed outline; moving it again restores visibility. The double door's wall and width are documented, with an approximate annotation near the right corner until its offset is measured.
+
+**Download test log** exports timestamped manual placements and out-of-sight events in metres using the floor plan's coordinate system. The log is local to the page, starts empty and resets on reload or a change to the saved geometry. It is a rehearsal fixture, not a camera observation or an input to director cues.

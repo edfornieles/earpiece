@@ -6,11 +6,49 @@ function selectedObservation(){return room?.latest?.cameraId===$('camera').value
 function imgUrl(id){return url('/api/room-frame?observation='+encodeURIComponent(id));}
 async function load(){try{const [data,p,r]=await Promise.all([api('room'),api('phones'),api('program-run')]);room=data;phones=p.devices;selection=r.selection;render();}catch(e){$('notice').textContent=e.message;}}
 const dimensionIds=['floor-width','floor-depth','floor-height'];
+let testPlanKey='', testPosition=null, testEvents=[];
+function showTestMarker(){
+ const marker=$('test-marker');if(!marker||!testPosition)return;
+ const {x,y,visible}=testPosition;
+ marker.setAttribute('transform',`translate(${x} ${y})`);
+ marker.classList.toggle('last-seen',!visible);
+ $('test-position').textContent=`${visible?'Test position':'Last seen'}: x ${x.toFixed(2)} m, y ${y.toFixed(2)} m`;
+ $('test-hide').disabled=!visible;
+ $('test-export').disabled=!testEvents.length;
+ $('test-count').textContent=`${testEvents.length} logged ${testEvents.length===1?'event':'events'}`;
+}
+function logTestPosition(event){
+ testEvents.push({event,at:new Date().toISOString(),...testPosition});showTestMarker();
+}
 function renderFloorPlan(plan){
+ const key=JSON.stringify(plan||null);
+ if(key===testPlanKey)return;
+ testPlanKey=key;testEvents=[];testPosition=null;
  if(!plan){$('floor-plan').textContent='No measured plan saved yet.';return;}
  const {widthM:w,depthM:d,heightM:h}=plan;
- const scale=220/Math.max(w,d),width=w*scale,depth=d*scale;
- $('floor-plan').innerHTML=`<svg class="floor-diagram" role="img" aria-label="Scaled floor outline" viewBox="0 0 ${width+52} ${depth+56}"><rect x="26" y="27" width="${width}" height="${depth}"/><text x="${26+width/2}" y="16" text-anchor="middle">${esc(w)} m</text><text x="${26+width/2}" y="${depth+46}" text-anchor="middle">Depth ${esc(d)} m · ceiling ${esc(h)} m</text><circle cx="26" cy="27" r="3"/></svg>${plan.doors.map(door=>`<p class="hint"><strong>${esc(door.name)} · ${esc(door.widthM)} m</strong><br>${esc(door.wall)} wall${door.position?' · '+esc(door.position):''}${door.offsetM===null?' · exact offset unmeasured':''}</p>`).join('')}`;
+ const unit=Math.max(w,d)/220;
+ testPosition={x:w/2,y:d/2,visible:true};
+ const doorMarks=plan.doors.filter(door=>door.wall==='bottom'&&door.offsetM===null&&/right/i.test(door.position)).map(()=>`<text x="${w}" y="${d+14*unit}" text-anchor="end">Door near here ↗</text>`).join('');
+ $('floor-plan').innerHTML=`<svg id="test-map" class="floor-diagram test-map" tabindex="0" role="img" aria-label="Studio test plan. Click to place your marker or use arrow keys." style="--plan-font:${10*unit}px" viewBox="${-12*unit} ${-22*unit} ${w+24*unit} ${d+49*unit}"><rect class="test-floor" x="0" y="0" width="${w}" height="${d}"/><text x="${w/2}" y="${-8*unit}" text-anchor="middle">${esc(w)} m wide</text><text x="0" y="${d+25*unit}">${esc(d)} m deep · ${esc(h)} m ceiling</text><circle class="plan-origin" cx="0" cy="0" r="${3*unit}"/>${doorMarks}<g id="test-marker"><circle r="${7*unit}"/><text x="${10*unit}" y="${-6*unit}">You</text></g></svg>${plan.doors.map(door=>`<p class="hint"><strong>${esc(door.name)} · ${esc(door.widthM)} m</strong><br>${esc(door.wall)} wall${door.position?' · '+esc(door.position):''}${door.offsetM===null?' · exact offset unmeasured':''}</p>`).join('')}<p class="hint">Click the floor or use arrow keys to move your marker. A click or movement makes it visible again.</p><p id="test-position" class="hint" role="status"></p><div class="row"><button id="test-hide">Mark out of sight</button><button id="test-export">Download test log</button></div><p id="test-count" class="hint actions"></p>`;
+ const svg=$('test-map');
+ const place=(x,y)=>{testPosition={x,y,visible:true};logTestPosition('placed');};
+ svg.onclick=e=>{
+  const matrix=svg.getScreenCTM();if(!matrix)return;
+  const point=svg.createSVGPoint();point.x=e.clientX;point.y=e.clientY;
+  const {x,y}=point.matrixTransform(matrix.inverse());
+  if(x>=0&&x<=w&&y>=0&&y<=d)place(x,y);
+ };
+ svg.onkeydown=e=>{
+  const delta={ArrowLeft:[-.1,0],ArrowRight:[.1,0],ArrowUp:[0,-.1],ArrowDown:[0,.1]}[e.key];if(!delta)return;
+  e.preventDefault();place(Math.max(0,Math.min(w,testPosition.x+delta[0])),Math.max(0,Math.min(d,testPosition.y+delta[1])));
+ };
+ $('test-hide').onclick=()=>{testPosition={...testPosition,visible:false};logTestPosition('out_of_sight');};
+ $('test-export').onclick=()=>{
+  const link=document.createElement('a');
+  link.href=URL.createObjectURL(new Blob([JSON.stringify({source:'manual-test',units:'metres',floorPlan:plan,events:testEvents},null,2)],{type:'application/json'}));
+  link.download='mother-studio-marker-test.json';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+ };
+ showTestMarker();
 }
 function render(){
  if(!drawing)$('picture').classList.remove('drawing');

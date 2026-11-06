@@ -84,3 +84,74 @@ test('a camera whose picture includes the horizon calibrates, and points above i
  const q=apply(c.H,see([2.1,2.9]));assert.ok(Math.hypot(q[0]-2.1,q[1]-2.9)<1e-6);
  assert.equal(apply(c.H,[0.5,0.02]),null,'the top of the picture is wall, not floor');
 });
+
+test('wall names and floor-level items read naturally',()=>{
+ const named={...plan,wallNames:{left:'jars wall',right:'grid wall',top:'shelf wall',bottom:'door wall'},footprints:[...plan.footprints,{name:'Rug',heightM:0.01,points:[[0.5,3],[1.4,3],[1.4,4],[0.5,4]]}]};
+ assert.equal(areaFor(named,[0.2,1.0]),'by the jars wall');
+ assert.equal(areaFor(named,[4.6,1.0]),'by the grid wall');
+ assert.equal(areaFor(named,[1.0,3.5]),'on the Rug');
+ assert.equal(areaFor(plan,[0.2,3.6]),'by the left wall');
+});
+test('furniture keeps its identity, is suggested for its plan item, and only moves the plan once settled and unblocked',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mother-furn-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const cam={id:'cam1',name:'Studio',frame:null,frameAt:0,status(){return{id:'cam1',name:'Studio',live:true};}};
+ const events=[],r=new RoomObserver(path.join(dir,'.room.json'),{cameras:()=>[cam],maxPhones:()=>4,event:(t,d)=>events.push([t,d])});
+ const chair={name:'Armchair',heightM:0.85,points:[[2.0,3.6],[2.8,3.6],[2.8,4.4],[2.0,4.4]]};
+ r.save({revision:0,floorPlan:{...plan,footprints:[...plan.footprints,chair]}});
+ r.save({revision:1,calibration:{cameraId:'cam1',points:pairsFor([[0.5,0.5],[4,0.6],[4.2,4],[0.6,4.2]])}});
+ // An object box whose base sits on a floor point.
+ const objAt=(f,w=0.08)=>{const [u,v]=toImage(f);return {cls:'couch',score:0.3,box:{x:u-w/2,y:v-0.1,w,h:0.1}};};
+ const send=(objects,people=[])=>r.track({tracker:'desk',cameraId:'cam1',tracks:people,objects});
+ for(let i=0;i<4;i++)send([objAt([2.4,3.6])]);
+ assert.equal(r.tracking.view().objects.length,0,'not shown until seen steadily');
+ send([objAt([2.42,3.61])]);
+ let v=r.tracking.view();assert.equal(v.objects.length,1);const id=v.objects[0].id;
+ assert.deepEqual(v.objectSuggestions[0],{objectId:id,cls:'couch',footprint:'Armchair',distanceM:0});
+ r.bindObject({objectId:id,footprint:'Armchair'});
+ // Moved 1.2 m along the wall. Not applied until it has settled for a few seconds.
+ const realNow=Date.now;let clock=realNow();Date.now=()=>clock;t.after(()=>{Date.now=realNow;});
+ const step=(f,people=[])=>{clock+=700;send([objAt(f)],people);};
+ // The detector calls it a chair now and then: still the same armchair.
+ send([{...objAt([2.42,3.6]),cls:'chair'}]);assert.equal(r.tracking.view().objects.length,1);
+ // Carried 1.2 m along the wall with a person in front of it: followed, but the plan does not move while blocked.
+ const blocker=f=>{const b=objAt(f).box;return {id:'T1',box:{x:b.x-0.02,y:b.y-0.3,w:b.w+0.04,h:0.4},feetVisible:true};};
+ for(const x of [2.2,2.0,1.8,1.6,1.4,1.2,1.2,1.2,1.2,1.2,1.2,1.2])step([x,3.6],[blocker([x,3.6])]);
+ assert.equal(r.config.floorPlan.footprints.find(f=>f.name==='Armchair').points[0][0],2.0);
+ assert.equal(r.tracking.view().objects.length,1,'still one armchair, not a new object');
+ // The person steps away; once it has settled for a few seconds the outline follows.
+ step([1.2,3.6]);assert.equal(r.config.floorPlan.footprints.find(f=>f.name==='Armchair').points[0][0],2.0,'not on the first clean sighting');
+ for(let i=0;i<8;i++)step([1.2,3.6]);
+ const moved=r.config.floorPlan.footprints.find(f=>f.name==='Armchair');
+ assert.ok(Math.abs(moved.points[0][0]-0.8)<0.15,JSON.stringify(moved.points));assert.equal(moved.estimated,true);assert.match(moved.notes,/Moved by the camera/);
+ assert.equal(events.find(e=>e[0]==='room_object_moved')[1].footprint,'Armchair');
+ const m=r.tracking.view().movement.at(-1);assert.equal(m.object,true);assert.equal(m.who,'Armchair');
+ assert.equal(new RoomObserver(path.join(dir,'.room.json'),{cameras:()=>[cam]}).config.floorPlan.footprints.find(f=>f.name==='Armchair').points[0][0],moved.points[0][0]);
+ r.save({revision:r.config.revision,shareWithAgents:true});
+ assert.match(r.prompt(),/"furnitureMoves":\[\{"item":"Armchair"/);
+ // Moved while out of view: a chair turning up elsewhere is the missing armchair, not a stranger.
+ clock+=4000;send([]);for(let i=0;i<8;i++)step([3.5,4.0]);
+ assert.equal(r.tracking.view().objects.length,1);
+ assert.ok(Math.abs(r.config.floorPlan.footprints.find(f=>f.name==='Armchair').points[0][0]-3.1)<0.15);
+});
+
+test('Yuri the dog is followed by name, logged by area, never matched to a phone, and shared with directors',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mother-dog-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const cam={id:'cam1',name:'Studio',frame:null,frameAt:0,status(){return{id:'cam1',name:'Studio',live:true};}};
+ const r=new RoomObserver(path.join(dir,'.room.json'),{cameras:()=>[cam],maxPhones:()=>4});
+ r.save({revision:0,floorPlan:{...plan,footprints:[...plan.footprints,{name:'Rug',heightM:0.01,points:[[0.3,2.8],[1.5,2.8],[1.5,4.0],[0.3,4.0]]}]}});
+ r.save({revision:1,calibration:{cameraId:'cam1',points:pairsFor([[0.5,0.5],[4,0.6],[4.2,4],[0.6,4.2]])}});
+ assert.throws(()=>r.save({revision:2,animals:[{kind:'horse',name:'Ed'}]}),/dog or cat/);
+ r.save({revision:2,animals:[{kind:'dog',name:'Yuri'}]});
+ const dogAt=(f,score=0.8)=>{const [u,v]=toImage(f);return {cls:'dog',score,box:{x:u-0.03,y:v-0.05,w:0.06,h:0.05}};};
+ const realNow=Date.now;let clock=realNow();Date.now=()=>clock;t.after(()=>{Date.now=realNow;});
+ const send=(animals)=>{clock+=500;return r.track({tracker:'desk',cameraId:'cam1',tracks:[],objects:[],animals});};
+ let v=send([dogAt([1.0,3.4]),dogAt([3.5,1.0],0.2)]);
+ assert.equal(v.animals.length,1);assert.equal(v.animals[0].name,'Yuri');assert.equal(v.animals[0].area,'on the Rug');assert.equal(v.tracks.length,0);
+ send([dogAt([0.15,1.5])]);send([dogAt([0.15,1.5])]);
+ v=send([]);v=send([]);v=send([]);v=send([]);v=send([]);v=send([]);
+ const lines=v.movement.filter(m=>m.animal).map(m=>`${m.who}: ${m.from}→${m.to}`);
+ assert.deepEqual(lines,['Yuri: null→on the Rug','Yuri: on the Rug→beside the Rug','Yuri: beside the Rug→by the left wall','Yuri: by the left wall→out of sight']);
+ assert.throws(()=>r.bindTrack({trackId:'dog',phone:1}),/no longer tracked/);
+ r.save({revision:r.config.revision,shareWithAgents:true});
+ assert.match(r.prompt(),/"animals":\[\{"name":"Yuri","kind":"dog","visible":false/);
+});

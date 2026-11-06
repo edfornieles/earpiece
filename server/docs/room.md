@@ -64,3 +64,24 @@ Open **Room → Studio marker test**. The marker labelled **You** starts at a pr
 ### Studio notes
 
 The bench laptop's camera sits on the bench, so the bench hides most of the floor and many feet. For floor tracking, mount a camera high in a corner looking down across the room (the ceiling arm, or an iPhone as a Continuity Camera), then calibrate it. The first trial used a still studio photo as a stand-in camera: detection ran on the browser's GPU at about 140 ms per frame, calibration and plan overlay worked, and confirmations were exercised with simulated tracks. Tracking a real person walking in the studio has not been tested yet.
+
+## Furniture tracking
+
+While tracking runs, the detector also follows furniture it recognises: chairs, sofas, tables, benches, bags, suitcases, plants and screens. Rugs, artworks and rolls of paper are not recognised; mark them on the plan by hand.
+
+- **Steady sightings only.** An object appears under **Furniture** after about five clean sightings. Furniture is smoothed much more than people, so a flickering detection does not jitter its position.
+- **Match it to the plan.** If a detected object sits on or near an outline, the desk is asked "Is this couch the Armchair?". Or choose a plan item and press **This is it**. Each plan item can be matched to one object.
+- **The plan follows moves.** When a matched object has moved more than 35 cm and stayed put, at a similar size, for about four seconds, its outline shifts by the same amount. The outline is marked estimated, its notes say when the camera moved it, and Movement shows "Armchair moved 1.2 m: beside the Rug → by the jars wall". During a recording this is logged as `room_object_moved`. Only position is followed, not rotation.
+- **People don't move furniture by standing in front of it.** While a person's box overlaps an object, the object keeps following roughly where it is (so it can be carried) but the plan is not changed until it is seen clearly again.
+- **Moved while out of view.** If a matched object disappears and one object of the same kind turns up elsewhere, it is treated as the same object. With two matching chairs missing, it cannot tell them apart and waits for the desk.
+- **Directors** (with sharing on) see matched furniture and moves in the last five minutes.
+
+Matches are kept in memory: after a server restart, confirm them again (the suggestions make this one click). Plan changes made by the camera are saved.
+
+## Wall names
+
+The floor plan can name its walls (`wallNames` with `top`, `right`, `bottom`, `left`), so areas read "by the jars wall" instead of "by the left wall". Floor-level items (height under 5 cm, such as a rug) read "on the Rug".
+
+## Animals (Yuri)
+
+The detector also recognises dogs and cats. Name them in the room setup (`animals: [{kind:'dog', name:'Yuri'}]`); each kind is one track, so any dog the camera sees is Yuri. Animals get a green dot on the plan and Movement lines ("Yuri: on the Rug → by the jars wall") and are logged as `room_animal`. They are never matched to a phone and never counted as people. With sharing on, directors see where Yuri is, so they can avoid directing someone into him.

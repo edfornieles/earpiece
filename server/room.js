@@ -47,7 +47,8 @@ function floorPlan(input){
     if(objectHeight!==null&&(!Number.isFinite(objectHeight)||objectHeight<=0||objectHeight>heightM))throw Error("Object height must fit within the room.");
     return {name:text(o.name,100),points,heightM:objectHeight,estimated:!!o.estimated,notes:text(o.notes,600),references:text(o.references,250)};
   });
-  return {widthM,depthM,heightM,footprints:objects,origin:'upper-left corner on the plan; x right, y down, z up from floor',doors:doors.map(d=>{
+  const wallNames={};for(const k of ['top','right','bottom','left']){const v=text(input.wallNames?.[k],40);if(v)wallNames[k]=v;}
+  return {widthM,depthM,heightM,footprints:objects,wallNames,origin:'upper-left corner on the plan; x right, y down, z up from floor',doors:doors.map(d=>{
     if(!d||!['top','right','bottom','left'].includes(d.wall))throw Error('Choose a plan wall for each door.');
     const limit=['top','bottom'].includes(d.wall)?widthM:depthM;
     if(!Number.isFinite(d.widthM)||d.widthM<=0||d.widthM>limit)throw Error('Door width must fit its wall.');
@@ -61,7 +62,7 @@ class RoomObserver{
     this.file=file;this.h=hooks;this.config={revision:0,name:'Studio',notes:'',shareWithAgents:false,floorPlan:null,landmarks:[],calibrations:{}};
     try{this.config={...this.config,...JSON.parse(fs.readFileSync(file,'utf8'))};}catch{}
     this.latest=null;this.history=[];this.frames=new Map();this.enabled=false;this.busy=false;this.error='';this.serial=0;this.interval=10;this.cameraId='';this.bindings=[];this.lastAttempt=0;this.nextAt=0;
-    this.tracking=new Tracking({event:(t,d)=>this.h.event?.(t,d),maxPhones:()=>this.h.maxPhones?.()||8});
+    this.tracking=new Tracking({event:(t,d)=>this.h.event?.(t,d),maxPhones:()=>this.h.maxPhones?.()||8,moveFootprint:(name,delta)=>this.moveFootprint(name,delta)});
   }
   camera(id){const cam=this.h.cameras().find(c=>c.id===id);if(!cam)throw Error('Choose an available camera.');return cam;}
   notify(){this.h.change?.(this.view());}
@@ -84,6 +85,7 @@ class RoomObserver{
     }
     if(input.calibration){const c=input.calibration;this.camera(c.cameraId);next.calibrations={...next.calibrations,[c.cameraId]:calibrate(c,next.floorPlan)};}
     if(input.removeCalibration){const {[input.removeCalibration]:gone,...rest}=next.calibrations||{};if(!gone)throw Error('That camera has no floor calibration.');next.calibrations=rest;}
+    if('animals'in input){if(!Array.isArray(input.animals)||input.animals.length>6)throw Error('Use a valid list of animals.');next.animals=input.animals.map(a=>{const kind=text(a?.kind,20);if(!['dog','cat'].includes(kind)||!text(a.name,60))throw Error('Give each animal a name and a kind (dog or cat).');return {kind,name:text(a.name,60),notes:text(a.notes,400)};});}
     if(input.remove){if(!next.landmarks.some(l=>l.id===input.remove))throw Error('That object is no longer in the inventory.');next.landmarks=next.landmarks.filter(l=>l.id!==input.remove);}
     this.stop();this.config=next;this.persist();this.notify();return this.view();
   }
@@ -125,7 +127,20 @@ class RoomObserver{
     this.bindings=this.bindings.filter(b=>b.personId!==input.personId&&b.phone!==phone);
     this.bindings.push({observationId:current.id,personId:input.personId,phone,role:text(input.role,100),confirmedAt:Date.now()});this.notify();return this.view();
   }
-  track(input){const plan=this.config.floorPlan;return this.tracking.update(input,{plan,calibration:this.config.calibrations?.[input?.cameraId]||null});}
+  track(input){const plan=this.config.floorPlan,animalNames=Object.fromEntries((this.config.animals||[]).map(a=>[a.kind,a.name]));return this.tracking.update({...input,animalNames},{plan,calibration:this.config.calibrations?.[input?.cameraId]||null});}
+  // A tracked object the desk confirmed has settled somewhere new: shift its outline on the plan.
+  // Translation only; the camera cannot see rotation reliably. Does not stop the observer.
+  moveFootprint(name,delta){
+    const plan=this.config.floorPlan,fp=plan?.footprints?.find(f=>f.name===name);if(!fp)return null;
+    const xs=fp.points.map(p=>p[0]+delta[0]),ys=fp.points.map(p=>p[1]+delta[1]);
+    const dx=Math.max(0,-Math.min(...xs))-Math.max(0,Math.max(...xs)-plan.widthM),dy=Math.max(0,-Math.min(...ys))-Math.max(0,Math.max(...ys)-plan.depthM);
+    const points=fp.points.map(p=>[Math.round((p[0]+delta[0]+dx)*100)/100,Math.round((p[1]+delta[1]+dy)*100)/100]);
+    const stamp=new Date().toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+    const moved={...fp,points,estimated:true,notes:text(`Moved by the camera ${stamp}. `+fp.notes.replace(/^Moved by the camera [^.]*\. /,''),600)};
+    this.config={...this.config,revision:this.config.revision+1,floorPlan:{...plan,footprints:plan.footprints.map(f=>f.name===name?moved:f)}};
+    this.persist();this.notify();return this.config.floorPlan;
+  }
+  bindObject(input){this.tracking.bindObject(input,this.config.floorPlan);return this.tracking.view();}
   bindTrack(input){this.tracking.bind(input);return this.tracking.view();}
   stopTracking(tracker){this.tracking.stop(tracker);return this.tracking.view();}
   prompt(){

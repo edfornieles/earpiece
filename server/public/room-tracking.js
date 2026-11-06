@@ -5,7 +5,11 @@
 (()=>{
 const {$,esc,api,toast}=Setup;
 const SCRIPTS=['https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js','https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js'];
-const DETECT_EVERY_MS=200,SEND_EVERY_MS=400,MIN_SCORE=0.45,KEEP_UNMATCHED_MS=1200,SNAP_M=0.15;
+const DETECT_EVERY_MS=200,SEND_EVERY_MS=400,MIN_SCORE=0.45,OBJECT_MIN_SCORE=0.2,KEEP_UNMATCHED_MS=2500,SNAP_M=0.15;
+// Furniture the detector knows. Anything else (rugs, artworks, rolls of paper) is marked by hand on the plan.
+const FURNITURE=new Set(['chair','couch','bench','dining table','suitcase','backpack','handbag','potted plant','tv']);
+const ANIMALS=new Set(['dog','cat']);
+let lastAnimals=[],lastObjects=[],objectChoice=new Map(),dismissedObjects=new Set();
 const tracker=Math.random().toString(36).slice(2,10);
 const chosen=new Map();
 let model=null,running=false,timer=0,lastSent=0,sending=false,nextId=1,local=[],state=null,dismissed=new Set(),stats={ms:0,fps:0,frames:0,since:0};
@@ -25,7 +29,7 @@ const centre=b=>[b.x+b.w/2,b.y+b.h/2];
 // Greedy matching: best overlap first, then nearest centre for fast movers.
 function associate(dets,now){
   const pairsList=[];
-  local.forEach((tr,i)=>dets.forEach((d,j)=>{const o=iou(tr.box,d.box),[ax,ay]=centre(tr.box),[bx,by]=centre(d.box),dist=Math.hypot(ax-bx,ay-by);if(o>0.15||dist<0.12)pairsList.push({i,j,score:o-dist});}));
+  local.forEach((tr,i)=>dets.forEach((d,j)=>{const o=iou(tr.box,d.box),[ax,ay]=centre(tr.box),[bx,by]=centre(d.box),dist=Math.hypot(ax-bx,ay-by);if(o>0.15||dist<0.18)pairsList.push({i,j,score:o-dist});}));
   pairsList.sort((a,b)=>b.score-a.score);
   const usedT=new Set(),usedD=new Set();
   for(const p of pairsList){if(usedT.has(p.i)||usedD.has(p.j))continue;usedT.add(p.i);usedD.add(p.j);const tr=local[p.i],d=dets[p.j];
@@ -39,8 +43,10 @@ async function step(){
   try{
     if(img.complete&&img.naturalWidth){
       canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;ctx.drawImage(img,0,0);
-      const found=await model.detect(canvas,20,MIN_SCORE),W=canvas.width,H=canvas.height,now=Date.now();
-      const dets=found.filter(f=>f.class==='person').map(f=>({score:f.score,box:{x:f.bbox[0]/W,y:f.bbox[1]/H,w:f.bbox[2]/W,h:f.bbox[3]/H}}));
+      const found=await model.detect(canvas,30,OBJECT_MIN_SCORE),W=canvas.width,H=canvas.height,now=Date.now();
+      lastAnimals=found.filter(f=>ANIMALS.has(f.class)).map(f=>({cls:f.class,score:f.score,box:{x:f.bbox[0]/W,y:f.bbox[1]/H,w:f.bbox[2]/W,h:f.bbox[3]/H}}));
+      lastObjects=found.filter(f=>FURNITURE.has(f.class)).map(f=>({cls:f.class,score:f.score,box:{x:f.bbox[0]/W,y:f.bbox[1]/H,w:f.bbox[2]/W,h:f.bbox[3]/H}}));
+      const dets=found.filter(f=>f.class==='person'&&f.score>=MIN_SCORE).map(f=>({score:f.score,box:{x:f.bbox[0]/W,y:f.bbox[1]/H,w:f.bbox[2]/W,h:f.bbox[3]/H}}));
       associate(dets,now);
       stats.ms=Math.round(performance.now()-started);stats.frames++;if(now-stats.since>2000){stats.fps=Math.round(stats.frames*10000/(now-stats.since))/10;stats.frames=0;stats.since=now;}
       if(now-lastSent>=SEND_EVERY_MS)send(now);
@@ -52,7 +58,7 @@ async function step(){
 async function send(now){
   if(sending)return;sending=true;lastSent=now;
   const tracks=local.filter(tr=>tr.hits>=2&&now-tr.seen<400).map(tr=>({id:tr.id,box:tr.box,score:tr.score,feetVisible:tr.box.y+tr.box.h<0.97}));
-  try{state=await api('room',{action:'track',tracker,cameraId:camera(),tracks});renderPanel();}
+  try{state=await api('room',{action:'track',tracker,cameraId:camera(),tracks,objects:lastObjects,animals:lastAnimals});renderPanel();}
   catch(e){stop(e.message);}finally{sending=false;}
 }
 async function start(){
@@ -83,7 +89,9 @@ function drawLive(){
     outline=poly(room4.flatMap((a,i)=>edge(a,room4[(i+1)%4]).slice(0,-1)),'floor-edge')+(p.footprints||[]).map(o=>poly(o.points.flatMap((a,i)=>edge(a,o.points[(i+1)%o.points.length]).slice(0,-1)),'floor-object')).join('');
   }
   const marks=calibrating?pairs.map((q,i)=>q.image?`<g class="calib"><circle cx="${q.image[0]*1000}" cy="${q.image[1]*1000}" r="9"/><text x="${q.image[0]*1000+12}" y="${q.image[1]*1000-10}">${i+1}</text></g>`:'').join(''):'';
-  svg.innerHTML=outline+boxes+marks;
+  const furn=(state?.objects||[]).filter(o=>o.visible&&o.box).map(o=>`<g class="furniture${o.binding?' bound':''}"><rect x="${o.box.x*1000}" y="${o.box.y*1000}" width="${o.box.w*1000}" height="${o.box.h*1000}"/><text x="${o.box.x*1000+6}" y="${o.box.y*1000+22}">${esc(o.binding?.footprint||o.cls+' '+o.id)}</text></g>`).join('');
+  const pets=(state?.animals||[]).filter(a=>a.visible&&a.box).map(a=>`<g class="animal"><rect x="${a.box.x*1000}" y="${a.box.y*1000}" width="${a.box.w*1000}" height="${a.box.h*1000}"/><text x="${a.box.x*1000+6}" y="${a.box.y*1000+22}">${esc(a.name)}${a.area&&a.area!=='unknown'?' · '+esc(a.area):''}</text></g>`).join('');
+  svg.innerHTML=outline+furn+pets+boxes+marks;
   drawPlan();
 }
 function project(H,[x,y]){const w=H[6]*x+H[7]*y+H[8];if(!(w>1e-9))return null;return [(H[0]*x+H[1]*y+H[2])/w,(H[3]*x+H[4]*y+H[5])/w];}
@@ -96,7 +104,9 @@ function drawPlan(){
   const p=plan(),u=p?Math.max(p.widthM,p.depthM)/220:0.02;
   const people=(state?.tracks||[]).filter(x=>x.floor&&(running||x.binding)).map(x=>`<g class="live-person${x.visible?'':' last-seen'}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})"><circle r="${7*u}"/><text x="${10*u}" y="${4*u}">${esc(x.binding?.role||x.binding?.label||x.id)}</text></g>`).join('');
   const marks=calibrating?pairs.map((q,i)=>q.floor?`<g class="calib" transform="translate(${q.floor[0]} ${q.floor[1]})"><circle r="${5*u}"/><text x="${7*u}" y="${-5*u}">${i+1}</text></g>`:'').join(''):'';
-  layer.innerHTML=people+marks;
+  const furn=(state?.objects||[]).map(o=>`<g class="live-object${o.visible?'':' last-seen'}${o.binding?' bound':''}" transform="translate(${o.floor[0]} ${o.floor[1]})"><rect x="${-5*u}" y="${-5*u}" width="${10*u}" height="${10*u}"/><text x="${8*u}" y="${4*u}">${esc(o.binding?.footprint||o.cls)}</text></g>`).join('');
+  const pets=(state?.animals||[]).filter(a=>a.floor).map(a=>`<g class="live-animal${a.visible?'':' last-seen'}" transform="translate(${a.floor[0]} ${a.floor[1]})"><circle r="${5*u}"/><text x="${8*u}" y="${4*u}">${esc(a.name)}</text></g>`).join('');
+  layer.innerHTML=furn+pets+people+marks;
 }
 
 // ---------- calibration ----------
@@ -175,8 +185,33 @@ function renderPanel(){
   const byId=new Map(tracks.map(x=>[x.id,x]));
   for(const el of $('tracks').querySelectorAll('.room-item[data-track]:not(.suggest)')){const x=byId.get(el.dataset.track);if(!x)continue;
     el.querySelector('.status').textContent=`${x.visible?'Visible':`Out of sight · last seen ${Math.round((Date.now()-x.lastSeenAt)/1000)} s ago`} · ${x.area}${x.floor?` · x ${x.floor[0].toFixed(1)} m, y ${x.floor[1].toFixed(1)} m`:''}${x.visible&&!x.feetVisible?' · feet not in view, position uncertain':''}`;}
-  $('movement').innerHTML=(state?.movement||[]).slice().reverse().map(m=>`<p><strong>${esc(t(m.at))}</strong> · ${esc(m.who)}: ${m.from?esc(m.from)+' → ':''}${esc(m.to)}</p>`).join('')||'No movement yet.';
+  renderObjects();
+  $('movement').innerHTML=(state?.movement||[]).slice().reverse().map(m=>`<p><strong>${esc(t(m.at))}</strong> · ${esc(m.who)}${m.object?` moved ${m.distanceM} m`:''}: ${m.from?esc(m.from)+' → ':''}${esc(m.to)}</p>`).join('')||'No movement yet.';
   drawPlan();
+}
+function renderObjects(){
+  const items=(room?.floorPlan?.footprints||[]).filter(f=>!(f.heightM!=null&&f.heightM<0.05)).map(f=>f.name);
+  const objs=(state?.objects||[]).slice().sort((a,b)=>(b.visible-a.visible)||a.id.localeCompare(b.id));
+  const sugg=(state?.objectSuggestions||[]).filter(x=>!dismissedObjects.has(x.objectId+'>'+x.footprint));
+  const opts=sel=>items.map(n=>`<option${n===sel?' selected':''}>${esc(n)}</option>`).join('');
+  const markup=sugg.map(x=>`<div class="room-item suggest" data-object="${esc(x.objectId)}" data-footprint="${esc(x.footprint)}"><strong>Is this ${esc(x.cls)} the ${esc(x.footprint)}?</strong><p>The camera sees a ${esc(x.cls)} ${x.distanceM?x.distanceM+' m from':'on'} the ${esc(x.footprint)} outline.</p><div class="row"><button class="yes primary">Yes, it’s the ${esc(x.footprint)}</button><button class="no">No</button></div></div>`).join('')+
+    (objs.length?objs.map(o=>`<div class="room-item" data-object="${esc(o.id)}"><strong>${esc(o.binding?o.binding.footprint:o.cls)}${o.binding?` <span class="hint">· ${esc(o.cls)} ${esc(o.id)}</span>`:` <span class="hint">· ${esc(o.id)}</span>`}</strong><p class="status"></p><div class="row"><select aria-label="Plan item for ${esc(o.id)}">${opts(objectChoice.get(o.id)??o.binding?.footprint)}</select><button class="bind">This is it</button>${o.binding?'<button class="unbind">Clear</button>':''}</div></div>`).join(''):`<p class="hint">${running?'No furniture recognised yet. The detector knows chairs, sofas, tables, benches and bags.':'Start tracking to follow furniture too.'}</p>`);
+  if($('objects').dataset.markup!==markup&&!(document.activeElement?.tagName==='SELECT'&&document.activeElement.closest('#objects'))){
+    $('objects').innerHTML=markup;$('objects').dataset.markup=markup;
+    for(const el of $('objects').querySelectorAll('[data-object]')){
+      el.querySelector('select')?.addEventListener('change',e=>objectChoice.set(el.dataset.object,e.target.value));
+      el.querySelector('.bind')?.addEventListener('click',()=>bindObject(el.dataset.object,el.querySelector('select').value));
+      el.querySelector('.unbind')?.addEventListener('click',()=>bindObject(el.dataset.object,null));
+      el.querySelector('.yes')?.addEventListener('click',()=>bindObject(el.dataset.object,el.dataset.footprint));
+      el.querySelector('.no')?.addEventListener('click',()=>{dismissedObjects.add(el.dataset.object+'>'+el.dataset.footprint);renderObjects();});
+    }
+  }
+  const byId=new Map(objs.map(o=>[o.id,o]));
+  for(const el of $('objects').querySelectorAll('.room-item[data-object]:not(.suggest)')){const o=byId.get(el.dataset.object);if(!o)continue;
+    el.querySelector('.status').textContent=`${o.visible?(o.blocked?'Seen, partly blocked by a person':'Seen now'):`Not seen for ${Math.round((Date.now()-o.lastSeenAt)/1000)} s`} · x ${o.floor[0].toFixed(1)} m, y ${o.floor[1].toFixed(1)} m${o.score!=null?` · ${Math.round(o.score*100)}% sure`:''}`;}
+}
+async function bindObject(objectId,footprint){
+  try{state=await api('room',{action:'bindObject',objectId,footprint});if(room)room.tracking=state;objectChoice.delete(objectId);renderPanel();drawLive();}catch(e){toast(e.message);}
 }
 async function bind(trackId,phone,knownRole){
   // Keep a role the desk already confirmed (from a suggestion); otherwise use the program's role for that phone.

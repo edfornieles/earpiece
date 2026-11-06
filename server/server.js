@@ -469,6 +469,7 @@ const server = http.createServer(async (req, res) => {
           else if(d.action==='bind')roomObserver.bind(d);
           else if(d.action==='track')return json(res,roomObserver.track(d));
           else if(d.action==='bindTrack')return json(res,roomObserver.bindTrack(d));
+          else if(d.action==='bindObject')return json(res,roomObserver.bindObject(d));
           else if(d.action==='stopTracking')return json(res,roomObserver.stopTracking(d.tracker));
           else throw Error('Choose a Room action.');
         }

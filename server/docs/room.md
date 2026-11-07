@@ -47,3 +47,41 @@ The built-in Mac camera successfully produced live scene descriptions and object
 Open **Room → Studio marker test**. The marker labelled **You** starts at a preset test position. Click the floor or focus the map and use the arrow keys to move it in 10 cm steps. **Mark out of sight** keeps its last position visible with a dashed outline; moving it again restores visibility. Measured door openings and furniture footprints appear on the plan. Dashed footprints have an estimated outline or placement. These outlines are rehearsal references; the manual marker can cross them and does not establish a clear walking route.
 
 **Download test log** exports timestamped manual placements and out-of-sight events in metres using the floor plan's coordinate system. The log is local to the page, starts empty and resets on reload or a change to the saved geometry. It is a rehearsal fixture, not a camera observation or an input to director cues.
+
+## Live tracking and floor calibration
+
+**Room → Live tracking** follows people in the live picture between the slower AI observations.
+
+- **Detection runs in the browser.** A person detector (TensorFlow.js COCO-SSD, loaded from jsDelivr the first time, so the Mac needs internet once) looks at the live picture about five times a second. Pictures stay on this computer; only person boxes go to the server. There is no face recognition: tracks are anonymous IDs (T1, T2…) until the desk says who someone is.
+- **One screen tracks at a time.** A second Room page shows the same people but cannot start its own tracker while the first is running.
+- **Calibrate camera to floor.** Click a spot on the floor in the live picture, then the same spot on the plan, at least four times, spread across the visible floor. Points must be on the floor itself (a rug corner, the foot of a table leg, a door edge), never a table top. Clicks near a footprint corner, room corner or door edge snap to it. A fifth point measures accuracy: the saved calibration reports its average and worst error in centimetres. **Show the plan on the live picture** draws the room edges and footprints back onto the camera view, which is the quickest way to see a bad calibration. Re-calibrate whenever the camera moves.
+- **Floor positions come from the feet.** A person's position is the bottom-centre of their box mapped through the calibration. When their feet are hidden (by the bench, or the bottom of the picture), the position is marked uncertain and the last good position is kept. Expect roughly half a metre of error.
+- **Areas** are derived from the plan: *at the Double door* (within 0.8 m), *at/beside* a footprint (inside, or within 0.6 m), *by the … wall* (within 0.5 m), otherwise *open floor*. Estimated footprints give estimated areas.
+- **Who is who.** Choose a phone on a track and press **This is them**. If a confirmed person goes out of sight and a new track appears within 1.2 m in the next 15 seconds, the desk is asked “Is T5 A?” — it is never assumed. **Clear** removes a match.
+- **Movement** lists area changes with times (“A (phone 1): beside the Work bench → at the Double door”). During a recording, changes for confirmed people go to the event log as `room_track`.
+- **Directors.** With “Let directors use…” on, directors see confirmed people only: their area, rough floor position, whether they are visible or last seen and how long ago, and recent movement. Tracking older than five seconds is withheld. Nothing advances a program cue.
+
+### Studio notes
+
+The bench laptop's camera sits on the bench, so the bench hides most of the floor and many feet. For floor tracking, mount a camera high in a corner looking down across the room (the ceiling arm, or an iPhone as a Continuity Camera), then calibrate it. The first trial used a still studio photo as a stand-in camera: detection ran on the browser's GPU at about 140 ms per frame, calibration and plan overlay worked, and confirmations were exercised with simulated tracks. Tracking a real person walking in the studio has not been tested yet.
+
+## Furniture tracking
+
+While tracking runs, the detector also follows furniture it recognises: chairs, sofas, tables, benches, bags, suitcases, plants and screens. Rugs, artworks and rolls of paper are not recognised; mark them on the plan by hand.
+
+- **Steady sightings only.** An object appears under **Furniture** after about five clean sightings. Furniture is smoothed much more than people, so a flickering detection does not jitter its position.
+- **Match it to the plan.** If a detected object sits on or near an outline, the desk is asked "Is this couch the Armchair?". Or choose a plan item and press **This is it**. Each plan item can be matched to one object.
+- **The plan follows moves.** When a matched object has moved more than 35 cm and stayed put, at a similar size, for about four seconds, its outline shifts by the same amount. The outline is marked estimated, its notes say when the camera moved it, and Movement shows "Armchair moved 1.2 m: beside the Rug → by the jars wall". During a recording this is logged as `room_object_moved`. Only position is followed, not rotation.
+- **People don't move furniture by standing in front of it.** While a person's box overlaps an object, the object keeps following roughly where it is (so it can be carried) but the plan is not changed until it is seen clearly again.
+- **Moved while out of view.** If a matched object disappears and one object of the same kind turns up elsewhere, it is treated as the same object. With two matching chairs missing, it cannot tell them apart and waits for the desk.
+- **Directors** (with sharing on) see matched furniture and moves in the last five minutes.
+
+Matches are kept in memory: after a server restart, confirm them again (the suggestions make this one click). Plan changes made by the camera are saved.
+
+## Wall names
+
+The floor plan can name its walls (`wallNames` with `top`, `right`, `bottom`, `left`), so areas read "by the jars wall" instead of "by the left wall". Floor-level items (height under 5 cm, such as a rug) read "on the Rug".
+
+## Animals (Yuri)
+
+The detector also recognises dogs and cats. Name them in the room setup (`animals: [{kind:'dog', name:'Yuri'}]`); each kind is one track, so any dog the camera sees is Yuri. Animals get a green dot on the plan and Movement lines ("Yuri: on the Rug → by the jars wall") and are logged as `room_animal`. They are never matched to a phone and never counted as people. With sharing on, directors see where Yuri is, so they can avoid directing someone into him.

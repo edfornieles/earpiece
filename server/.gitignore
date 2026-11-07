@@ -1,0 +1,9 @@
+# local links to the running copy's private data
+participants
+programs
+recordings
+room-objects
+models
+.faces-venv
+public/scans/*.glb
+.plan-before-*.json

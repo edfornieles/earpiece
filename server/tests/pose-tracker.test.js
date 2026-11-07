@@ -1,0 +1,23 @@
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const {EventEmitter}=require('events');
+const {PoseTracker}=require('../pose-tracker');
+test('server tracking sends pose frames and turns replies into tracks with body points',()=>{
+  const sent=[],tracked=[],stopped=[];
+  const proc=Object.assign(new EventEmitter(),{stdin:{write:l=>sent.push(JSON.parse(l))},stdout:new EventEmitter(),stderr:new EventEmitter(),kill(){}});
+  const cam={id:'cam2',frame:Buffer.from('preview'),frameAt:Date.now()};
+  const room={tracking:{owner:'',at:0},track:x=>{tracked.push(x);return {};},stopTracking:t=>stopped.push(t)};
+  const full={frame:Buffer.from('full'),at:Date.now()},identity={fullFps:1,fullFrames:()=>full};
+  const pt=new PoseTracker({root:'/nowhere',cameras:[cam],room,identity,spawnImpl:()=>proc});
+  pt.ready=true;pt.start('cam2');clearInterval(pt.timer);
+  assert.equal(identity.fullFps,5,'full-resolution stream speeds up while tracking');
+  proc.stdout.emit('data','{"ready":true,"device":"mps"}\n');
+  pt.tick();assert.equal(sent.length,1);assert.equal(Buffer.from(sent[0].jpeg,'base64').toString(),'full');assert.equal(sent[0].objects,true);
+  pt.tick();assert.equal(sent.length,1,'one frame at a time');
+  const kp=Array.from({length:17},()=>[1000,500,0.9]);
+  proc.stdout.emit('data',JSON.stringify({id:1,w:2000,h:1000,ms:40,people:[{track:3,conf:0.8,box:[900,200,200,700],kp}],objects:[{cls:'dog',conf:0.7,box:[0,800,200,150]},{cls:'chair',conf:0.5,box:[100,500,200,300]}]})+'\n');
+  const t=tracked[0];assert.equal(t.tracker,'server');assert.equal(t.tracks[0].id,'P3');assert.deepEqual(t.tracks[0].box,{x:0.45,y:0.2,w:0.1,h:0.7});
+  assert.equal(t.tracks[0].feetVisible,true);assert.deepEqual(t.tracks[0].kp[0],[0.5,0.5,0.9]);
+  assert.equal(t.animals[0].cls,'dog');assert.equal(t.objects[0].cls,'chair');
+  pt.tick();assert.equal(sent.length,1,'the same frame is not sent twice');
+  pt.stop();assert.deepEqual(stopped,['server']);assert.equal(identity.fullFps,1);
+});

@@ -16,6 +16,9 @@ let lastAnimals=[],lastObjects=[],objectChoice=new Map(),dismissedObjects=new Se
 const tracker=Math.random().toString(36).slice(2,10);
 const chosen=new Map();
 let model=null,running=false,timer=0,lastSent=0,sending=false,nextId=1,local=[],state=null,dismissed=new Set(),stats={ms:0,fps:0,frames:0,since:0};
+const serverOn=()=>!!(state?.pose?.on&&state.pose.cameraId===camera());
+const tracking_=()=>running||serverOn();
+let polling=0;
 let calibrating=false,pairs=[],awaiting='image',showOutline=false,home=null;
 function endCalibration(){calibrating=false;pairs=[];if(home){home.parent.insertBefore($('floor-plan'),home.next);home=null;}}
 const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d',{willReadFrequently:true});
@@ -83,12 +86,28 @@ async function send(now){
   try{state=await api('room',{action:'track',tracker,cameraId:camera(),tracks,objects:lastObjects,animals:lastAnimals});renderPanel();}
   catch(e){stop(e.message);}finally{sending=false;}
 }
+// On this computer (server pose model, full resolution) when it is set up; in this browser otherwise.
 async function start(){
+  if(running||serverOn())return;
+  if(state?.pose?.ready||room?.tracking?.pose?.ready){
+    $('track-start').disabled=true;$('tracking-state').textContent='Starting…';
+    try{state=await api('room',{action:'serverTracking',on:true,cameraId:camera()});poll();}catch(e){toast(e.message);}
+    renderPanel();return;
+  }
+  return startBrowser();
+}
+async function poll(){
+  clearTimeout(polling);
+  try{state=await api('room',{action:'trackingView'});if(room)room.tracking=state;renderPanel();drawLive();}catch{}
+  if(serverOn())polling=setTimeout(poll,350);
+}
+async function startBrowser(){
   if(running)return;$('track-start').disabled=true;$('tracking-state').textContent='Loading detector…';
   try{await loadModel();}catch(e){$('track-start').disabled=false;$('tracking-state').textContent='Tracking off';return toast(e.message);}
   local=[];nextId=1;running=true;stats={ms:0,fps:0,frames:0,since:Date.now()};renderPanel();step();
 }
 function stop(message){
+  if(serverOn()){clearTimeout(polling);api('room',{action:'serverTracking',on:false}).then(v=>{state=v;if(room)room.tracking=v;renderPanel();drawLive();}).catch(e=>toast(e.message));if(message)toast(message);return;}
   const was=running;running=false;clearTimeout(timer);local=[];drawLive();
   if(was)api('room',{action:'stopTracking',tracker}).then(v=>{state=v;renderPanel();}).catch(()=>{});
   if(message)toast(message);renderPanel();
@@ -99,7 +118,10 @@ function drawLive(){
   const svg=$('track-overlay');if(!svg)return;
   svg.toggleAttribute('hidden',$('live-picture').hidden);svg.classList.toggle('calibrating',calibrating);
   const byId=new Map((state?.tracks||[]).map(x=>[x.id,x]));
-  const boxes=running?local.filter(tr=>tr.hits>=2).map(tr=>{const s=byId.get(tr.id),label=s?.binding?.person?.name||s?.binding?.label||'Unknown person';return `<g class="${s?.binding?'bound':''}"><rect x="${tr.box.x*1000}" y="${tr.box.y*1000}" width="${tr.box.w*1000}" height="${tr.box.h*1000}"/><circle cx="${(tr.box.x+tr.box.w/2)*1000}" cy="${(tr.box.y+tr.box.h)*1000}" r="6"/><text x="${tr.box.x*1000+6}" y="${Math.max(24,tr.box.y*1000+24)}">${esc(label)}${s?.area&&s.area!=='unknown'?' · '+esc(s.area):''}</text></g>`;}).join(''):'';
+  const src=running?local.filter(tr=>tr.hits>=2):serverOn()?(state?.tracks||[]).filter(x=>x.visible&&x.box):[];
+  // Body points the position came from: ankles green, hips amber, head pink.
+  const joints=serverOn()||running?src.map(tr=>{const kp=byId.get(tr.id)?.kp;if(!kp)return '';return [[15,16,'ankle'],[11,12,'hip'],[0,0,'head']].map(([a,b,c])=>[kp[a],kp[b]].filter(q=>q&&q[2]>0.45).map(q=>`<circle class="joint ${c}" cx="${q[0]*1000}" cy="${q[1]*1000}" r="5"/>`).join('')).join('');}).join(''):'';
+  const boxes=joints+src.map(tr=>{const s=byId.get(tr.id),label=s?.binding?.person?.name||s?.binding?.label||'Unknown person';return `<g class="${s?.binding?'bound':''}"><rect x="${tr.box.x*1000}" y="${tr.box.y*1000}" width="${tr.box.w*1000}" height="${tr.box.h*1000}"/><circle cx="${(tr.box.x+tr.box.w/2)*1000}" cy="${(tr.box.y+tr.box.h)*1000}" r="6"/><text x="${tr.box.x*1000+6}" y="${Math.max(24,tr.box.y*1000+24)}">${esc(label)}${s?.area&&s.area!=='unknown'?' · '+esc(s.area):''}</text></g>`;}).join('');
   let outline='';
   const cal=calibration(),p=plan();
   if(cal&&p&&showOutline&&!calibrating){
@@ -127,7 +149,7 @@ function drawPlan(){
     const message = savedCalibration()?.needsReview
       ? 'Live floor positions are paused until this view is recalibrated. Person detection still works in the camera feed.'
       : !calibration() ? 'Calibrate this camera to show live positions on the plan.'
-      : (running || state?.running) && state?.cameraId === camera()
+      : (tracking_() || state?.running) && state?.cameraId === camera()
         ? 'Live positions are estimates. Review settled furniture moves before updating the plan.'
         : 'Start tracking to see live positions on the plan.';
     if (status.textContent !== message) status.textContent = message;
@@ -136,7 +158,7 @@ function drawPlan(){
   let layer=svg.querySelector('#live-layer');if(!layer){layer=document.createElementNS('http://www.w3.org/2000/svg','g');layer.id='live-layer';svg.append(layer);}
   const p=plan(),u=p?Math.max(p.widthM,p.depthM)/220:0.02;
   // Each person: a dot coloured by how sure the position is, and a dashed ring showing its error radius.
-  const people=(state?.tracks||[]).filter(x=>x.floor&&(running||x.binding)).map(x=>{const c=conf(x);return `<g class="live-person ${c}${!x.visible?' last-seen':''}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})">${x.radiusM?`<circle class="ring" r="${Math.min(1.5,x.radiusM)}"/>`:''}<circle class="dot" r="${4.5*u}"/><text x="${10*u}" y="${4*u}">${esc(personName(x))}${!x.visible?' · last seen':''}</text></g>`;}).join('');
+  const people=(state?.tracks||[]).filter(x=>x.floor&&(tracking_()||x.binding)).map(x=>{const c=conf(x);return `<g class="live-person ${c}${!x.visible?' last-seen':''}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})">${x.radiusM?`<circle class="ring" r="${Math.min(1.5,x.radiusM)}"/>`:''}<circle class="dot" r="${4.5*u}"/><text x="${10*u}" y="${4*u}">${esc(personName(x))}${!x.visible?' · last seen':''}</text></g>`;}).join('');
   const marks=calibrating?pairs.map((q,i)=>q.floor?`<g class="calib" transform="translate(${q.floor[0]} ${q.floor[1]})"><circle r="${5*u}"/><text x="${7*u}" y="${-5*u}">${i+1}</text></g>`:'').join(''):'';
   const furn=(state?.objects||[]).map(o=>`<g class="live-object${o.visible?'':' last-seen'}${o.binding?' bound':''}" transform="translate(${o.floor[0]} ${o.floor[1]})"><rect x="${-5*u}" y="${-5*u}" width="${10*u}" height="${10*u}"/><text x="${8*u}" y="${4*u}">${esc(o.binding?.footprint||furnitureLabel(o.cls))}</text></g>`).join('');
   const pets=(state?.animals||[]).filter(a=>a.floor).map(a=>`<g class="live-animal${a.visible?'':' last-seen'}" transform="translate(${a.floor[0]} ${a.floor[1]})"><circle r="${5*u}"/><text x="${8*u}" y="${4*u}">${esc(a.name)}</text></g>`).join('');
@@ -215,10 +237,10 @@ async function removeCalibration(){
 // ---------- panel ----------
 function renderPanel(){
   const cal=calibration();
-  const elsewhere=!running&&state?.running;
-  $('tracking-state').textContent=running?'Tracking on':elsewhere?'Tracking on another screen':'Tracking off';
-  $('tracking-state').classList.toggle('on',running);
-  $('track-start').disabled=running||calibrating||elsewhere;$('track-stop').disabled=!running;$('calibrate').disabled=calibrating;
+  const srv=serverOn(),on=running||srv,elsewhere=!on&&state?.running&&state?.pose?.on!==true,pz=state?.pose;
+  $('tracking-state').textContent=srv?(pz.error?'Tracking · '+pz.error:pz.device?`Tracking · ${pz.fps||'…'} fps · ${pz.source==='full'?'full resolution':'preview'}`:'Tracking · loading model…'):running?'Tracking in this browser':elsewhere?'Tracking on another screen':'Tracking off';
+  $('tracking-state').classList.toggle('on',on);
+  $('track-start').disabled=on||calibrating||elsewhere;$('track-stop').disabled=!on;$('calibrate').disabled=calibrating;
   $('calibration-state').innerHTML=cal?`Floor calibration: ${cal.points.length} points, saved ${esc(new Date(cal.savedAt).toLocaleString())}. ${cal.validation==='holdout'?`Check point error ${Math.round(cal.maxErrorM*100)} cm.`:'Add a separate check point to measure accuracy.'} <label class="check inline"><input type="checkbox" id="show-outline" ${showOutline?'checked':''}> Show the plan on the live picture</label> <button id="remove-calibration" class="link">Remove</button>`:savedCalibration()?.needsReview?'Floor positions paused. Recalibrate to align the floor plan with this camera view. Your previous anchors are saved.':'This camera has no floor calibration yet. Tracking will show people in the picture but cannot place them on the plan.';
   $('show-outline')?.addEventListener('change',e=>{showOutline=e.target.checked;drawLive();});
   $('remove-calibration')?.addEventListener('click',removeCalibration);
@@ -327,8 +349,8 @@ $('calibration-cancel').onclick=()=>{endCalibration();renderPanel();drawLive();}
 $('calibration-save').onclick=saveCalibration;
 $('track-overlay').addEventListener('click',onPicture);
 $('floor-plan').addEventListener('click',onPlan,true);
-$('camera').addEventListener('change',()=>{if(running)stop('Tracking stopped: camera changed.');endCalibration();renderPanel();drawLive();});
+$('camera').addEventListener('change',()=>{if(tracking_())stop('Tracking stopped: camera changed.');endCalibration();renderPanel();drawLive();});
 window.addEventListener('beforeunload',()=>{if(running)navigator.sendBeacon?.(Setup.url('/api/room'),new Blob([JSON.stringify({action:'stopTracking',tracker})],{type:'application/json'}));});
 // Keep the panel current while another screen or nobody is tracking.
-setInterval(()=>{if(!running){state=room?.tracking||state;renderPanel();}drawLive();},1000);
+setInterval(()=>{if(!running&&!serverOn()){state=room?.tracking||state;renderPanel();if(serverOn())poll();}drawLive();},1000);
 })();

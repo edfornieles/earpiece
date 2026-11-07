@@ -151,6 +151,7 @@ class Tracking{
       const area=seat?`seated on the ${seat.name}`:!floor?'unknown':conf==='unsure'&&prev?.area&&prev.area!=='unknown'?prev.area:areaFor(plan,floor);
       const certainty={feet:'estimate',seat:'seated',head:'from head',hips:'from hips','hips (seated)':'seated',held:'last seen'}[how]||(floor?'estimate':'uncertain');
       const track={id,box:{x:b.x,y:b.y,w:b.w,h:b.h},score:finite(t.score)?Math.round(t.score*100)/100:null,feetVisible:how==='feet'||feetVisible,floor:floor&&floor.map(v=>Math.round(v*100)/100),area,certainty,how:how||null,radiusM:radius!=null&&floor?Math.round(radius*100)/100:null,confidence:conf,firstSeenAt:prev?.firstSeenAt||now,lastSeenAt:now,visible:true};
+      if(kp)track.kp=kp;
       track.positionAt=floor?now:null;
       if(!floor&&calibration&&prev?.floor){
         track.floor=prev.floor;track.area=prev.area;track.certainty='last seen';track.confidence='unsure';track.radiusM=prev.radiusM;
@@ -325,7 +326,7 @@ class Tracking{
   view(now=Date.now()){
     return {running:this.viewIsFresh(now),owner:this.owner,cameraId:this.cameraId,at:this.at,
       tracks:[...this.tracks.values()].map(t=>({...t,binding:this.bindings.get(t.id)||null})),
-      movement:this.movement.slice(-20),suggestions:this.suggestions(now),faces:this.faceStatus?.(now)||null,finder:this.finderStatus?.(now)||null,
+      movement:this.movement.slice(-20),suggestions:this.suggestions(now),faces:this.faceStatus?.(now)||null,finder:this.finderStatus?.(now)||null,pose:this.poseStatus?.()||null,
       animals:[...this.animals.values()],
       objects:[...this.objects.values()].filter(o=>o.binding||o.sightings>=OBJECT_CONFIRM).map(o=>({id:o.id,cls:o.cls,floor:o.floor.map(v=>Math.round(v*100)/100),visible:!!o.visible,blocked:!!o.blocked,score:o.score,box:o.box,lastSeenAt:o.lastSeenAt,proposal:this.viewIsFresh(now)&&o.visible&&o.binding?o.proposal:null,binding:o.binding&&{footprint:o.binding.footprint}})),
       objectSuggestions:this.plan?this.objectSuggestions(this.plan):[]};

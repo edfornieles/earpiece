@@ -80,3 +80,5 @@
 .test-map .live-person.rough-position circle{fill:var(--card);stroke:#e3c28f;stroke-dasharray:2 2}
 #floor-test .test-map{max-height:430px;display:block;margin:0 auto}
 #floor-test .floor-diagram+p,#floor-test #floor-plan>p.hint{margin:4px 0}
+
+#track-overlay .joint{stroke:#111;stroke-width:1.5;vector-effect:non-scaling-stroke}#track-overlay .joint.ankle{fill:#7ab788}#track-overlay .joint.hip{fill:#e8c27a}#track-overlay .joint.head{fill:#ff8bd0}

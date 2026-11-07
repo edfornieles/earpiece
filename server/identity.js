@@ -51,11 +51,11 @@ class Identity {
   fullFrames(cam) {
     const src = cam.main && /^(rtsp|https?):\/\//.test(cam.main) ? cam.main : null;
     if (!src) { this.stopFull(); return null; }
-    if (this.full?.camId !== cam.id) {
+    if (this.full?.camId !== cam.id || this.full.fps !== (this.fullFps || 1)) {
       this.stopFull();
-      const args = ['-hide_banner', '-loglevel', 'error', ...(src.startsWith('rtsp') ? ['-rtsp_transport', 'tcp'] : []), '-i', src, '-an', '-vf', 'fps=1', '-q:v', '3', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'];
+      const args = ['-hide_banner', '-loglevel', 'error', ...(src.startsWith('rtsp') ? ['-rtsp_transport', 'tcp'] : []), '-i', src, '-an', '-vf', `fps=${this.fullFps || 1}`, '-q:v', '3', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'];
       const p = this.spawnImpl('ffmpeg', args, { stdio: ['ignore', 'pipe', 'ignore'] }); let buf = Buffer.alloc(0);
-      this.full = { camId: cam.id, proc: p, frame: null, at: 0 };
+      this.full = { camId: cam.id, proc: p, frame: null, at: 0, fps: this.fullFps || 1 };
       p.stdout.on('data', (d) => {
         buf = Buffer.concat([buf, d]); let e;
         while ((e = buf.indexOf(Buffer.from([0xff, 0xd9]))) >= 0) { const s = buf.lastIndexOf(Buffer.from([0xff, 0xd8]), e); if (s >= 0 && this.full?.proc === p) { this.full.frame = buf.subarray(s, e + 2); this.full.at = Date.now(); } buf = buf.subarray(e + 2); }

@@ -348,6 +348,10 @@ roomObserver.tracking.faceStatus = (now) => identity.status(now);
 const { ObjectFinder } = require('./objects-finder');
 const finder = new ObjectFinder({ root: __dirname, cameras, tracking: roomObserver.tracking, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
 roomObserver.tracking.finderStatus = (now) => finder.status(now);
+const { PoseTracker } = require('./pose-tracker');
+const pose = new PoseTracker({ root: __dirname, cameras, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
+roomObserver.tracking.poseStatus = () => pose.status();
+process.on('exit', () => pose.stop());
 
 // ---------- http ----------
 const PUB = path.join(__dirname, 'public');
@@ -487,7 +491,9 @@ const server = http.createServer(async (req, res) => {
             }
             return json(res,roomObserver.acceptObjectMove(d));
           }
-          else if(d.action==='stopTracking')return json(res,roomObserver.stopTracking(d.tracker));
+          else if(d.action==='trackingView')return json(res,roomObserver.tracking.view());
+          else if(d.action==='serverTracking'){if(d.on)pose.start(String(d.cameraId||''));else pose.stop();return json(res,roomObserver.tracking.view());}
+          else if(d.action==='stopTracking'){if(d.tracker==='server')pose.stop();return json(res,roomObserver.stopTracking(d.tracker));}
           else throw Error('Choose a Room action.');
         }
         return json(res,roomObserver.view());

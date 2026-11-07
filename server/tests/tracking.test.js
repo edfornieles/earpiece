@@ -38,9 +38,11 @@ test('tracks get floor positions, areas and movement; lost people stay last-seen
  let v=send([{id:'T1',box:boxAt([2.5,2.8]),feetVisible:true,score:.9}]);
  assert.deepEqual(v.tracks[0].floor,[2.5,2.8]);assert.equal(v.tracks[0].area,'beside the Work bench');assert.equal(v.tracks[0].certainty,'estimate');
  tr.bind({trackId:'T1',phone:1,role:'A'});
- send([{id:'T1',box:boxAt([3.9,4.3]),feetVisible:true}]);
- assert.deepEqual(events.at(-1),['room_track',{track:'T1',phone:1,role:'A',from:'beside the Work bench',to:'at the Double door'}]);
- send([]);v=send([],1600);const t1=v.tracks.find(x=>x.id==='T1');assert.equal(t1.visible,false);assert.deepEqual(t1.floor,[3.9,4.3]);assert.equal(v.movement.at(-1).to,'out of sight');
+ // Walk there at a natural pace; the smoothed position follows and settles.
+ for(let k=1;k<=8;k++)send([{id:'T1',box:boxAt([2.5+1.4*k/8,2.8+1.5*k/8]),feetVisible:true}]);
+ for(let k=0;k<10;k++)send([{id:'T1',box:boxAt([3.9,4.3]),feetVisible:true}]);
+ const moves=events.filter(e=>e[0]==='room_track').map(e=>e[1]);assert.equal(moves[0].from,'beside the Work bench');assert.deepEqual(moves.at(-1),{track:'T1',phone:1,role:'A',from:moves.at(-1).from,to:'at the Double door'});
+ send([]);v=send([],1600);const t1=v.tracks.find(x=>x.id==='T1');assert.equal(t1.visible,false);assert.ok(Math.hypot(t1.floor[0]-3.9,t1.floor[1]-4.3)<0.1,String(t1.floor));assert.equal(v.movement.at(-1).to,'out of sight');
  // A new track near the last-seen spot is suggested, never assumed.
  v=send([{id:'T2',box:boxAt([3.6,4.1]),feetVisible:true}]);
  assert.equal(v.suggestions[0].trackId,'T2');assert.equal(v.suggestions[0].role,'A');assert.equal(v.tracks.find(x=>x.id==='T2').binding,null);

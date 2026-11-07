@@ -1,6 +1,7 @@
 {
-  "file": "scans/studio-2026-08-14.glb",
-  "label": "Scan, 14 Aug 2026",
-  "note": "Phone scan of the studio. Aligned to the floor plan by its walls: scan x 2.77 → jars wall, x -1.88 → grid wall, z 3.80 → shelf wall, z -0.58 → door wall; floor at y -1.45. Stretched 2.6% / 2.7% to the plan's measured 4.77 × 4.5 m.",
-  "planFromScan": { "x": { "origin": 2.77, "sign": -1, "scale": 1.0258 }, "y": { "origin": 3.80, "sign": -1, "scale": 1.0274 }, "floorY": -1.45 }
+  "file": "scans/studio-2026-11-07.glb",
+  "label": "Scan, 7 Nov 2026",
+  "note": "Phone scan of the studio, turned 90° relative to the plan. Aligned by its walls: scan z -2.39 → jars wall, z 2.31 → grid wall, x 2.39 → shelf wall, x -2.03 → door wall; floor at y -1.55, ceiling 1.41 (2.96 m). Stretched 1.5% / 1.8% to the plan's measured 4.77 × 4.5 m. Desk, work bench, shelves and armchair match the plan.",
+  "swapXZ": true,
+  "planFromScan": { "x": { "origin": -2.39, "sign": 1, "scale": 1.0149 }, "y": { "origin": 2.39, "sign": -1, "scale": 1.0181 }, "floorY": -1.55 }
 }

@@ -106,7 +106,7 @@ const ANIMAL_CLASSES=new Set(['dog','cat']),ANIMAL_LOST_MS=2500,ANIMAL_MIN_SCORE
 const LOST_AFTER_MS=1500,FORGET_AFTER_MS=60000,SUGGEST_WITHIN_MS=15000,SUGGEST_WITHIN_M=1.2,FRESH_MS=5000;
 class Tracking{
   constructor(hooks={}){this.h=hooks;this.reset();}
-  reset(){this.owner='';this.cameraId='';this.at=0;this.tracks=new Map();this.bindings=new Map();this.movement=[];this.serial=0;this.objects=this.objects||new Map();this.nextObject=this.nextObject||1;this.animals=this.animals||new Map();}
+  reset(){this.owner='';this.cameraId='';this.at=0;this.tracks=new Map();this.bindings=new Map();this.movement=[];this.serial=0;this.objects=this.objects||new Map();this.nextObject=this.nextObject||1;this.animals=this.animals||new Map();this.smoothers=new Map();}
   // Positions: feet-on-floor estimate from the calibration; null when uncalibrated, feet hidden, or off the plan.
   update(input,{calibration,plan,now=Date.now()}){
     const tracker=text(input?.tracker,64);if(!tracker)throw Error('Tracking needs a tracker id.');
@@ -135,11 +135,25 @@ class Tracking{
       }
       if(floor&&plan&&(floor[0]<-0.3||floor[1]<-0.3||floor[0]>plan.widthM+0.3||floor[1]>plan.depthM+0.3))floor=null;
       if(floor&&plan)floor=[Math.max(0,Math.min(plan.widthM,floor[0])),Math.max(0,Math.min(plan.depthM,floor[1]))];
-      const area=seat?`seated on the ${seat.name}`:floor?areaFor(plan,floor):'unknown';
-      const track={id,box:{x:b.x,y:b.y,w:b.w,h:b.h},score:finite(t.score)?Math.round(t.score*100)/100:null,feetVisible,floor:floor&&floor.map(v=>Math.round(v*100)/100),area,certainty:floor&&how==='feet'?'estimate':floor&&how==='seat'?'seated':floor&&how==='head'?'from head':'uncertain',firstSeenAt:prev?.firstSeenAt||now,lastSeenAt:now,visible:true};
+      // Body points (ankles, hips, head), when the detector gives them, beat the box: each gives a position
+      // with an honest error radius, and the smallest wins (positioning.js).
+      let radius=how==='feet'?0.3:how==='seat'?0.25:how==='head'?0.8:null;
+      const kp=Array.isArray(t.kp)&&t.kp.length===17&&t.kp.every(q=>Array.isArray(q)&&q.length===3&&q.every(finite))?t.kp:null;
+      if(kp&&calibration&&!seat){const P=require('./positioning'),best=P.place({H:calibration.H,cam:calibration.camera,plan,kp});if(best){floor=best.floor;radius=best.radius;how=best.how;}}
+      // Smoothed over time and weighted by radius; held for a moment through brief blocking.
+      if(calibration){
+        const P=require('./positioning');let sm=this.smoothers.get(id);if(!sm){sm=new P.Smoother();this.smoothers.set(id,sm);}
+        const out=sm.step(floor&&radius?{floor,radius,how}:null,now);
+        if(out){floor=out.floor;radius=out.radius;how=out.how;}
+      }
+      const conf=floor&&radius!=null?require('./positioning').confidence(radius,how):'unsure';
+      // An unsure position does not change the named area: that would make Mother act on a guess.
+      const area=seat?`seated on the ${seat.name}`:!floor?'unknown':conf==='unsure'&&prev?.area&&prev.area!=='unknown'?prev.area:areaFor(plan,floor);
+      const certainty={feet:'estimate',seat:'seated',head:'from head',hips:'from hips','hips (seated)':'seated',held:'last seen'}[how]||(floor?'estimate':'uncertain');
+      const track={id,box:{x:b.x,y:b.y,w:b.w,h:b.h},score:finite(t.score)?Math.round(t.score*100)/100:null,feetVisible:how==='feet'||feetVisible,floor:floor&&floor.map(v=>Math.round(v*100)/100),area,certainty,how:how||null,radiusM:radius!=null&&floor?Math.round(radius*100)/100:null,confidence:conf,firstSeenAt:prev?.firstSeenAt||now,lastSeenAt:now,visible:true};
       track.positionAt=floor?now:null;
       if(!floor&&calibration&&prev?.floor){
-        track.floor=prev.floor;track.area=prev.area;track.certainty='last seen';
+        track.floor=prev.floor;track.area=prev.area;track.certainty='last seen';track.confidence='unsure';track.radiusM=prev.radiusM;
         track.positionAt=prev.positionAt;
       }
       this.tracks.set(id,track);
@@ -149,7 +163,7 @@ class Tracking{
     for(const [id,t] of this.tracks){
       if(seen.has(id))continue;
       if(t.visible&&now-t.lastSeenAt>LOST_AFTER_MS){t.visible=false;this.moved(id,t.area,'out of sight',now);}
-      if(now-t.lastSeenAt>FORGET_AFTER_MS){this.tracks.delete(id);this.bindings.delete(id);}
+      if(now-t.lastSeenAt>FORGET_AFTER_MS){this.tracks.delete(id);this.bindings.delete(id);this.smoothers.delete(id);}
     }
     this.plan=plan;
     this.updateAnimals(Array.isArray(input.animals)?input.animals.slice(0,6):[],input.animalNames||{},{calibration,plan,now});
@@ -320,7 +334,7 @@ class Tracking{
   // What the directors may read: only bound roles, only while tracking is fresh.
   context(now=Date.now()){
     if(!this.owner||now-this.at>FRESH_MS)return null;
-    const people=[...this.tracks.values()].filter(t=>this.bindings.has(t.id)).map(t=>{const b=this.bindings.get(t.id);return {who:b.label,phone:b.phone,role:b.role,visible:t.visible,area:t.area,floorM:t.floor,certainty:t.visible?t.certainty:'last seen',secondsSinceSeen:Math.round((now-t.lastSeenAt)/1000),secondsSincePosition:t.positionAt==null?null:Math.round((now-t.positionAt)/1000)};});
+    const people=[...this.tracks.values()].filter(t=>this.bindings.has(t.id)).map(t=>{const b=this.bindings.get(t.id);return {who:b.label,phone:b.phone,role:b.role,visible:t.visible,area:t.area,floorM:t.floor,certainty:t.visible?t.certainty:'last seen',confidence:t.visible?t.confidence||'unsure':'unsure',radiusM:t.radiusM??null,secondsSinceSeen:Math.round((now-t.lastSeenAt)/1000),secondsSincePosition:t.positionAt==null?null:Math.round((now-t.positionAt)/1000)};});
     const unassigned=[...this.tracks.values()].filter(t=>t.visible&&!this.bindings.has(t.id)).length;
     const recent=this.movement.filter(m=>!m.object&&!m.animal&&this.bindings.has(m.track)&&now-m.at<120000).slice(-8).map(m=>({who:m.who,from:m.from,to:m.to,secondsAgo:Math.round((now-m.at)/1000)}));
     const furniture=[...this.objects.values()].filter(o=>o.binding).map(o=>({name:o.binding.footprint,seen:o.visible?'now':`${Math.round((now-o.lastSeenAt)/1000)} s ago`}));

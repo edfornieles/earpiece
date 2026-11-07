@@ -5,6 +5,9 @@
 (()=>{
 const {$,esc,api,toast}=Setup;
 const SCRIPTS=['https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js','https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js'];
+// Body points (ankles, hips, head) from MoveNet. Optional: without them the server falls back to the box.
+const POSE_SCRIPT='https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js';
+let poseModel=null,poseError='';
 const DETECT_EVERY_MS=200,SEND_EVERY_MS=400,MIN_SCORE=0.45,OBJECT_MIN_SCORE=0.2,KEEP_UNMATCHED_MS=2500,SNAP_M=0.15;
 // Furniture the detector knows. Anything else (rugs, artworks, rolls of paper) is marked by hand on the plan.
 const FURNITURE=new Set(['chair','couch','bench','dining table','suitcase','backpack','handbag','potted plant','tv']);
@@ -25,7 +28,23 @@ const t=ms=>new Date(ms).toLocaleTimeString();
 
 // ---------- detector ----------
 function loadScript(src){return new Promise((ok,fail)=>{if(document.querySelector(`script[src="${src}"]`))return ok();const s=document.createElement('script');s.src=src;s.crossOrigin='anonymous';s.onload=ok;s.onerror=()=>fail(Error('Could not load the person detector. This Mac needs an internet connection the first time.'));document.head.append(s);});}
-async function loadModel(){if(model)return model;for(const s of SCRIPTS)await loadScript(s);model=await window.cocoSsd.load({base:'mobilenet_v2'});return model;}
+async function loadModel(){if(model)return model;for(const s of SCRIPTS)await loadScript(s);model=await window.cocoSsd.load({base:'mobilenet_v2'});loadPose();return model;}
+async function loadPose(){
+  if(poseModel)return;
+  try{await loadScript(POSE_SCRIPT);const P=window.poseDetection;poseModel=await P.createDetector(P.SupportedModels.MoveNet,{modelType:P.movenet.modelType.MULTIPOSE_LIGHTNING,enableTracking:false});poseError='';}
+  catch(e){poseError='Body points unavailable: '+(e.message||e);}
+}
+// Give each person box the body whose points fall inside it most.
+function attachPoses(poses,W,H,now){
+  const bodies=poses.map(p=>p.keypoints.map(k=>[k.x/W,k.y/H,k.score??0]));
+  const used=new Set();
+  for(const tr of local){
+    if(tr.seen!==now)continue;
+    let best=-1,bestN=4;
+    bodies.forEach((kp,i)=>{if(used.has(i))return;const b=tr.box,n=kp.filter(q=>q[2]>0.3&&q[0]>=b.x-0.02&&q[0]<=b.x+b.w+0.02&&q[1]>=b.y-0.02&&q[1]<=b.y+b.h+0.02).length;if(n>bestN){best=i;bestN=n;}});
+    if(best>=0){used.add(best);tr.kp=bodies[best].map(q=>q.map(v=>Math.round(v*1000)/1000));tr.kpAt=now;}
+  }
+}
 const iou=(a,b)=>{const x1=Math.max(a.x,b.x),y1=Math.max(a.y,b.y),x2=Math.min(a.x+a.w,b.x+b.w),y2=Math.min(a.y+a.h,b.y+b.h),i=Math.max(0,x2-x1)*Math.max(0,y2-y1);return i/(a.w*a.h+b.w*b.h-i||1);};
 const centre=b=>[b.x+b.w/2,b.y+b.h/2];
 // Greedy matching: best overlap first, then nearest centre for fast movers.
@@ -50,6 +69,7 @@ async function step(){
       lastObjects=found.filter(f=>FURNITURE.has(f.class)).map(f=>({cls:f.class,score:f.score,box:{x:f.bbox[0]/W,y:f.bbox[1]/H,w:f.bbox[2]/W,h:f.bbox[3]/H}}));
       const dets=found.filter(f=>f.class==='person'&&f.score>=MIN_SCORE).map(f=>({score:f.score,box:{x:f.bbox[0]/W,y:f.bbox[1]/H,w:f.bbox[2]/W,h:f.bbox[3]/H}}));
       associate(dets,now);
+      if(poseModel&&dets.length){try{attachPoses(await poseModel.estimatePoses(canvas,{maxPoses:6}),W,H,now);}catch(e){poseError='Body points failed: '+(e.message||e);}}
       stats.ms=Math.round(performance.now()-started);stats.frames++;if(now-stats.since>2000){stats.fps=Math.round(stats.frames*10000/(now-stats.since))/10;stats.frames=0;stats.since=now;}
       if(now-lastSent>=SEND_EVERY_MS)send(now);
       drawLive();
@@ -59,7 +79,7 @@ async function step(){
 }
 async function send(now){
   if(sending)return;sending=true;lastSent=now;
-  const tracks=local.filter(tr=>tr.hits>=2&&now-tr.seen<400).map(tr=>({id:tr.id,box:tr.box,score:tr.score,feetVisible:tr.box.y+tr.box.h<0.97}));
+  const tracks=local.filter(tr=>tr.hits>=2&&now-tr.seen<400).map(tr=>({id:tr.id,box:tr.box,score:tr.score,feetVisible:tr.box.y+tr.box.h<0.97,...(tr.kp&&now-tr.kpAt<600?{kp:tr.kp}:{})}));
   try{state=await api('room',{action:'track',tracker,cameraId:camera(),tracks,objects:lastObjects,animals:lastAnimals});renderPanel();}
   catch(e){stop(e.message);}finally{sending=false;}
 }
@@ -115,13 +135,42 @@ function drawPlan(){
   const svg=$('test-map');if(!svg)return;
   let layer=svg.querySelector('#live-layer');if(!layer){layer=document.createElementNS('http://www.w3.org/2000/svg','g');layer.id='live-layer';svg.append(layer);}
   const p=plan(),u=p?Math.max(p.widthM,p.depthM)/220:0.02;
-  const people=(state?.tracks||[]).filter(x=>x.floor&&(running||x.binding)).map(x=>`<g class="live-person${!x.visible||x.certainty==='last seen'?' last-seen':x.certainty==='from head'?' rough-position':''}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})"><circle r="${4.5*u}"/><text x="${10*u}" y="${4*u}">${esc(x.binding?.person?.name||x.binding?.label||'Unknown')}${!x.visible||x.certainty==='last seen'?' · last seen':x.certainty==='from head'?' · rough':''}</text></g>`).join('');
+  // Each person: a dot coloured by how sure the position is, and a dashed ring showing its error radius.
+  const people=(state?.tracks||[]).filter(x=>x.floor&&(running||x.binding)).map(x=>{const c=conf(x);return `<g class="live-person ${c}${!x.visible?' last-seen':''}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})">${x.radiusM?`<circle class="ring" r="${Math.min(1.5,x.radiusM)}"/>`:''}<circle class="dot" r="${4.5*u}"/><text x="${10*u}" y="${4*u}">${esc(personName(x))}${!x.visible?' · last seen':''}</text></g>`;}).join('');
   const marks=calibrating?pairs.map((q,i)=>q.floor?`<g class="calib" transform="translate(${q.floor[0]} ${q.floor[1]})"><circle r="${5*u}"/><text x="${7*u}" y="${-5*u}">${i+1}</text></g>`:'').join(''):'';
   const furn=(state?.objects||[]).map(o=>`<g class="live-object${o.visible?'':' last-seen'}${o.binding?' bound':''}" transform="translate(${o.floor[0]} ${o.floor[1]})"><rect x="${-5*u}" y="${-5*u}" width="${10*u}" height="${10*u}"/><text x="${8*u}" y="${4*u}">${esc(o.binding?.footprint||furnitureLabel(o.cls))}</text></g>`).join('');
   const pets=(state?.animals||[]).filter(a=>a.floor).map(a=>`<g class="live-animal${a.visible?'':' last-seen'}" transform="translate(${a.floor[0]} ${a.floor[1]})"><circle r="${5*u}"/><text x="${8*u}" y="${4*u}">${esc(a.name)}</text></g>`).join('');
   const hasLivePositions = calibration() && (running || state?.running) && state?.cameraId === camera();
   const named=(state?.finder?.objects||[]).filter(o=>o.floor).map(o=>`<g class="live-object bound${o.visible?'':' last-seen'}" transform="translate(${o.floor[0]} ${o.floor[1]})"><rect x="${-4*u}" y="${-4*u}" width="${8*u}" height="${8*u}"/><text x="${8*u}" y="${4*u}">${esc(o.name)}</text></g>`).join('');
   layer.innerHTML = (hasLivePositions ? furn + named + pets + people : '') + marks;
+  drawCoverage(svg);
+}
+const conf=x=>!x.visible||x.certainty==='last seen'?'unsure':x.confidence||(x.certainty==='estimate'?'rough':'unsure');
+const personName=x=>x.binding?.person?.name||x.binding?.label||'Unknown';
+const coverageFor=()=>room?.coverage?.[camera()]||null;
+let coverageKey='';
+function drawCoverage(svg){
+  const cov=coverageFor(),on=$('coverage-toggle')?.checked!==false;
+  let g=svg.querySelector('#coverage-layer');
+  if(!g){g=document.createElementNS('http://www.w3.org/2000/svg','g');g.id='coverage-layer';const floor=svg.querySelector('.test-floor');floor?floor.after(g):svg.prepend(g);coverageKey='';}
+  g.classList.toggle('off',!on);
+  const key=cov?cov.cameraId+JSON.stringify(cov.summary)+cov.cells.length:'';
+  if(key!==coverageKey){
+    coverageKey=key;const h=(cov?.step||0.25)/2;
+    g.innerHTML=cov?`<defs><pattern id="cov-hatch" width=".09" height=".09" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line class="cov-hatch-line" x1="0" y1="0" x2="0" y2=".09"/></pattern></defs>`+cov.cells.filter(c=>c.state!=='feet'&&c.state!=='furniture').map(c=>`<rect class="cov-cell ${c.state==='body only'?'body':'blind'}" x="${c.x-h}" y="${c.y-h}" width="${2*h}" height="${2*h}"><title>${esc(c.state)}</title></rect>`).join(''):'';
+  }
+  const sum=$('coverage-summary');
+  if(sum){const text=!cov?'Calibrate this camera to see which parts of the floor it can see.':`This camera sees feet on ${cov.summary.feet}% of the floor and only the upper body on ${cov.summary.bodyOnly}%; ${cov.summary.unseen}% is out of sight${cov.blindAreas.length?` (${cov.blindAreas.join(', ')})`:''}.${cov.cameraPlaced?'':' Add the camera position for body-only and blind-spot estimates.'}`;if(sum.textContent!==text)sum.textContent=text;}
+  $('coverage-key').hidden=!cov;
+}
+// One line per person in view (and bound people out of sight): where, and how far to trust it.
+function renderPeopleNow(){
+  const el=$('people-now');if(!el)return;
+  const list=(state?.tracks||[]).filter(x=>x.visible||x.binding).sort((a,b)=>(b.visible-a.visible)||(!!b.binding-!!a.binding));
+  const label={sure:'sure',rough:'rough',unsure:'unsure'},how={feet:'from feet',hips:'from hips','hips (seated)':'seated',seat:'seated',head:'from head',held:'held'};
+  const markup=list.map(x=>{const c=conf(x),r=x.radiusM?` ±${Math.round(x.radiusM*100)} cm`:'';return `<div class="person-row ${c}"><span class="dot"></span><div><strong>${esc(personName(x))}</strong>${x.binding?.role?` <span class="hint">· ${esc(x.binding.role)}</span>`:''}<div class="where">${x.visible?esc(x.area||'position unknown'):'out of sight · last '+esc(x.area||'unknown')}</div></div><span class="pill ${c}" title="${esc(how[x.how]||x.certainty||'')}">${x.visible&&x.floor?label[c]+r:x.visible?'no floor position':'last seen'}</span></div>`;}).join('');
+  if(el.dataset.markup!==markup){el.innerHTML=markup;el.dataset.markup=markup;}
+  const n=list.filter(x=>x.visible).length;$('people-count').textContent=n?`${n} in view`:'none in view';
 }
 
 // ---------- calibration ----------
@@ -189,9 +238,8 @@ function renderPanel(){
   if($('faces-state'))$('faces-state').textContent=!faces?'':!faces.ready?'Face recognition is not set up on this computer.':`Faces: ${(faces.registered||[]).filter(p=>p.enrolled).map(p=>`${p.name} (${p.views} view${p.views===1?'':'s'})`).join(', ')||'nobody enrolled yet'}${(faces.registered||[]).filter(p=>p.face&&p.problem).map(p=>` · ${p.name}: ${p.problem}`).join('')}${faces.source?` · reading ${faces.source}`:''}${faces.recent?.length?` · recognised just now: ${faces.recent.map(r=>`${r.name} ${Math.round(r.score*100)}%`).join(', ')}`:''}`;
   const visiblePeople = (state?.tracks||[]).filter(person=>person.visible);
   const visibleFurniture = (state?.objects||[]).filter(object=>object.visible);
-  $('people-summary').textContent = visiblePeople.length
-    ? 'People · '+visiblePeople.map(person=>person.binding?.person?.name||person.binding?.label||'Unknown').join(', ')
-    : 'People · none in view';
+  $('people-summary').textContent = 'Name and assign'+(visiblePeople.length?' · '+visiblePeople.length:'');
+  renderPeopleNow();
   $('furniture-summary').textContent = 'Furniture · '+visibleFurniture.length+' in view';
   const tracks=(state?.tracks||[]).slice().sort((a,b)=>(b.visible-a.visible)||a.id.localeCompare(b.id));
   const suggestion=(state?.suggestions||[]).filter(s=>!dismissed.has(s.trackId+'>'+s.phone));
@@ -269,6 +317,9 @@ $('move-review').onclick=async event=>{
 };
 
 // ---------- wiring ----------
+try{const v=localStorage.getItem('room.coverage');if(v!==null)$('coverage-toggle').checked=v==='1';}catch{}
+$('coverage-toggle').addEventListener('change',e=>{try{localStorage.setItem('room.coverage',e.target.checked?'1':'0');}catch{}drawPlan();});
+if($('open-3d'))$('open-3d').href='room3d.html'+location.search;
 $('track-start').onclick=start;$('track-stop').onclick=()=>stop();
 $('calibrate').onclick=beginCalibration;
 $('calibration-undo').onclick=()=>{pairs.pop();awaiting='image';renderPanel();drawLive();};

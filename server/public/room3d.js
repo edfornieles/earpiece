@@ -110,7 +110,10 @@ async function loadScan() {
     const gltf = await new GLTFLoader().loadAsync(meta.file);
     // Scans often come without normals and with "metallic" materials; show their photo textures as they are.
     gltf.scene.traverse((m) => { if (m.isMesh) m.material = new THREE.MeshBasicMaterial({ map: m.material.map, side: THREE.DoubleSide, transparent: true, opacity: 0.92 }); });
-    const holder = new THREE.Group(); holder.add(gltf.scene);
+    const holder = new THREE.Group();
+    // A scan turned 90° to the plan: swap its x and z first, so "x" below means the scan axis along the plan's width.
+    if (meta.swapXZ) { const inner = new THREE.Group(); inner.matrixAutoUpdate = false; inner.matrix.set(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1); inner.add(gltf.scene); holder.add(inner); }
+    else holder.add(gltf.scene);
     // plan x = scale·sign·(X − origin)… expressed as a scale and offset on the 3D x / z axes
     holder.scale.set(t.x.sign * t.x.scale, 1, t.y.sign * t.y.scale);
     holder.position.set(-t.x.sign * t.x.scale * t.x.origin, -t.floorY, -t.y.sign * t.y.scale * t.y.origin);

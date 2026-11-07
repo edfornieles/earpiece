@@ -83,7 +83,18 @@ class RoomObserver{
       next.landmarks=existing?next.landmarks.map(l=>l.id===existing.id?entry:l):[...next.landmarks,entry];
       if(next.landmarks.length>100)throw Error('Keep the room inventory below 100 objects.');
     }
-    if(input.calibration){const c=input.calibration;this.camera(c.cameraId);next.calibrations={...next.calibrations,[c.cameraId]:calibrate(c,next.floorPlan)};}
+    if(input.calibration){const c=input.calibration;this.camera(c.cameraId);next.calibrations={...next.calibrations,[c.cameraId]:{...calibrate(c,next.floorPlan),...(next.calibrations?.[c.cameraId]?.camera?{camera:next.calibrations[c.cameraId].camera}:{})}};}
+    if(input.cameraPosition){
+      const c=input.cameraPosition,id=this.camera(c.cameraId).id,saved=next.calibrations?.[id],plan=next.floorPlan;
+      if(!saved)throw Error('Calibrate this camera to the floor first.');
+      if(![c.x,c.y,c.z].every(Number.isFinite)||c.x<-0.5||c.y<-0.5||c.x>plan.widthM+0.5||c.y>plan.depthM+0.5||c.z<=0.3||c.z>plan.heightM+0.5)throw Error('Give the camera position in metres on the plan and its height above the floor.');
+      next.calibrations={...next.calibrations,[id]:{...saved,camera:{x:c.x,y:c.y,z:c.z,note:text(c.note,200)}}};
+    }
+    if(input.pauseCalibration){
+      const id=this.camera(input.pauseCalibration).id, saved=next.calibrations[id];
+      if(!saved)throw Error('That camera has no floor calibration.');
+      next.calibrations={...next.calibrations,[id]:{...saved,needsReview:true}};
+    }
     if(input.removeCalibration){const {[input.removeCalibration]:gone,...rest}=next.calibrations||{};if(!gone)throw Error('That camera has no floor calibration.');next.calibrations=rest;}
     if('animals'in input){if(!Array.isArray(input.animals)||input.animals.length>6)throw Error('Use a valid list of animals.');next.animals=input.animals.map(a=>{const kind=text(a?.kind,20);if(!['dog','cat'].includes(kind)||!text(a.name,60))throw Error('Give each animal a name and a kind (dog or cat).');return {kind,name:text(a.name,60),notes:text(a.notes,400)};});}
     if(input.remove){if(!next.landmarks.some(l=>l.id===input.remove))throw Error('That object is no longer in the inventory.');next.landmarks=next.landmarks.filter(l=>l.id!==input.remove);}
@@ -127,7 +138,7 @@ class RoomObserver{
     this.bindings=this.bindings.filter(b=>b.personId!==input.personId&&b.phone!==phone);
     this.bindings.push({observationId:current.id,personId:input.personId,phone,role:text(input.role,100),confirmedAt:Date.now()});this.notify();return this.view();
   }
-  track(input){const plan=this.config.floorPlan,animalNames=Object.fromEntries((this.config.animals||[]).map(a=>[a.kind,a.name]));return this.tracking.update({...input,animalNames},{plan,calibration:this.config.calibrations?.[input?.cameraId]||null});}
+  track(input){const plan=this.config.floorPlan,animalNames=Object.fromEntries((this.config.animals||[]).map(a=>[a.kind,a.name]));const calibration=this.config.calibrations?.[input?.cameraId];return this.tracking.update({...input,animalNames},{plan,calibration:calibration?.needsReview?null:calibration||null});}
   // A tracked object the desk confirmed has settled somewhere new: shift its outline on the plan.
   // Translation only; the camera cannot see rotation reliably. Does not stop the observer.
   moveFootprint(name,delta){
@@ -140,6 +151,17 @@ class RoomObserver{
     this.config={...this.config,revision:this.config.revision+1,floorPlan:{...plan,footprints:plan.footprints.map(f=>f.name===name?moved:f)}};
     this.persist();this.notify();return this.config.floorPlan;
   }
+  // The object finder saw a known object that has no outline yet: add an estimated one, facing the camera.
+  addFootprint({name,centre,away,size,heightM,note}){
+    const plan=this.config.floorPlan;if(!plan||plan.footprints?.some(f=>f.name===name))return null;
+    const [fw,fd]=size,[ax,ay]=away?.every(Number.isFinite)?away:[0,1],[px,py]=[-ay,ax];
+    const pts=[[-1,-1],[1,-1],[1,1],[-1,1]].map(([s,t])=>[centre[0]+px*fw/2*s+ax*fd/2*t,centre[1]+py*fw/2*s+ay*fd/2*t]).map(([x,y])=>[Math.round(Math.max(0,Math.min(plan.widthM,x))*100)/100,Math.round(Math.max(0,Math.min(plan.depthM,y))*100)/100]);
+    const stamp=new Date().toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+    const fp={name:text(name,100),points:pts,heightM:Number.isFinite(heightM)&&heightM>0&&heightM<=plan.heightM?heightM:null,estimated:true,notes:text(`Placed by the camera ${stamp}. ${note||''}`,600),references:'Object finder'};
+    this.config={...this.config,revision:this.config.revision+1,floorPlan:{...plan,footprints:[...(plan.footprints||[]),fp]}};
+    this.persist();this.notify();return this.config.floorPlan;
+  }
+  acceptObjectMove(input){this.tracking.acceptObjectMove(input,this.config.floorPlan);return this.tracking.view();}
   bindObject(input){this.tracking.bindObject(input,this.config.floorPlan);return this.tracking.view();}
   bindTrack(input){this.tracking.bind(input);return this.tracking.view();}
   stopTracking(tracker){this.tracking.stop(tracker);return this.tracking.view();}

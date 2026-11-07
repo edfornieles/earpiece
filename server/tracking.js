@@ -44,21 +44,34 @@ function calibrate(input,plan){
     if(!Array.isArray(floor)||floor.length!==2||!floor.every(finite)||floor[0]<0||floor[0]>plan.widthM||floor[1]<0||floor[1]>plan.depthM)throw Error('Each floor point must be inside the room.');
     return {image,floor,label:text(p.label,80)};
   });
-  // Reject layouts where three of the first points are almost in a line: the fit would be unstable.
-  let spread=0;for(let i=0;i<pairs.length;i++)for(let j=i+1;j<pairs.length;j++)for(let k=j+1;k<pairs.length;k++){spread=Math.max(spread,Math.abs(cross(pairs[i].image,pairs[j].image,pairs[k].image)));}
-  let H=fitHomography(pairs);
+  const fitPoints = pairs.length > 4 ? pairs.slice(0,-1) : pairs;
+  const checkPoints = pairs.length > 4 ? pairs.slice(-1) : [];
+  let spread=0;
+  for(let i=0;i<fitPoints.length;i++)for(let j=i+1;j<fitPoints.length;j++)for(let k=j+1;k<fitPoints.length;k++){
+    spread=Math.max(spread,Math.abs(cross(fitPoints[i].image,fitPoints[j].image,fitPoints[k].image)));
+  }
+  let H=fitHomography(fitPoints);
   if(!H||spread<0.01||!invert(H))throw Error('Spread the points out across the visible floor; they cannot all sit on one line.');
   // H is only defined up to scale. Flip its sign so floor points come out with w > 0; then w <= 0
   // means "above the horizon" (wall or ceiling), which apply() rejects.
-  const ws=pairs.map(({image:[u,v]})=>H[6]*u+H[7]*v+H[8]);
+  const ws=fitPoints.map(({image:[u,v]})=>H[6]*u+H[7]*v+H[8]);
   if(ws.every(w=>w<0))H=H.map(v=>-v);
   else if(!ws.every(w=>w>0))throw Error('These points do not describe a floor seen by this camera. Check that each pair matches.');
-  const errors=pairs.map(p=>{const q=apply(H,p.image);return q?Math.hypot(q[0]-p.floor[0],q[1]-p.floor[1]):Infinity;});
+  const errors=(checkPoints.length ? checkPoints : fitPoints).map(p=>{const q=apply(H,p.image);return q?Math.hypot(q[0]-p.floor[0],q[1]-p.floor[1]):Infinity;});
   if(errors.some(e=>!Number.isFinite(e)))throw Error('These points do not describe a floor seen by this camera. Check that each pair matches.');
   const rmsM=Math.sqrt(errors.reduce((s,e)=>s+e*e,0)/errors.length);
-  return {points:pairs,H,rmsM:Math.round(rmsM*1000)/1000,maxErrorM:Math.round(Math.max(...errors)*1000)/1000,checked:pairs.length>4,savedAt:new Date().toISOString()};
+  return {points:pairs,H,rmsM:Math.round(rmsM*1000)/1000,maxErrorM:Math.round(Math.max(...errors)*1000)/1000,checked:checkPoints.length>0,validation:checkPoints.length?'holdout':null,savedAt:new Date().toISOString()};
 }
 
+// Where a person stands, worked out from their head when their feet are hidden. Needs the camera's
+// position (x, y on the plan, z above the floor): the head lies on the line from the camera to the floor
+// point "behind" it, at head height, so the person stands at camera + (that floor point - camera) * (z - h) / z.
+const HEAD_HEIGHT_M=1.7;
+function fromHead(H,cam,box,h=HEAD_HEIGHT_M){
+  if(!cam||!(cam.z>h))return null;
+  const p=apply(H,[box.x+box.w/2,box.y]);if(!p)return null;
+  const k=(cam.z-h)/cam.z;return [cam.x+(p[0]-cam.x)*k,cam.y+(p[1]-cam.y)*k];
+}
 // ---- named areas from the plan ----
 function inside([x,y],pts){let c=false;for(let i=0,j=pts.length-1;i<pts.length;j=i++){const [xi,yi]=pts[i],[xj,yj]=pts[j];if((yi>y)!==(yj>y)&&x<(xj-xi)*(y-yi)/(yj-yi)+xi)c=!c;}return c;}
 function segDist([x,y],[ax,ay],[bx,by]){const dx=bx-ax,dy=by-ay,l=dx*dx+dy*dy,t=l?Math.max(0,Math.min(1,((x-ax)*dx+(y-ay)*dy)/l)):0;return Math.hypot(x-ax-t*dx,y-ay-t*dy);}
@@ -107,12 +120,28 @@ class Tracking{
       if(!id||!b||![b.x,b.y,b.w,b.h].every(finite))continue;
       seen.add(id);
       const prev=this.tracks.get(id),feetVisible=!!t.feetVisible,foot=[b.x+b.w/2,b.y+b.h];
-      let floor=calibration?apply(calibration.H,foot):null;
+      let floor=calibration?apply(calibration.H,foot):null,how=feetVisible?'feet':'';
+      // Feet hidden (off the picture, or "standing" inside a table or bench): place them from the head instead.
+      const onFurniture=floor&&plan&&(plan.footprints||[]).some(f=>f.heightM!=null&&f.heightM>=0.5&&inside(floor,f.points));
+      let seat=null;
+      if(!feetVisible||onFurniture){
+        // Sitting: their lower body overlaps a seat the object finder has placed. They are on that seat.
+        const lower={x:b.x,y:b.y+b.h*0.4,w:b.w,h:b.h*0.6};
+        seat=(calibration?this.finderStatus?.(now)?.objects||[]:[]).filter(o=>o.visible&&o.floor&&o.box&&/stool|chair|armchair|sofa/i.test(o.name)).find(o=>{const x=Math.max(0,Math.min(lower.x+lower.w,o.box.x+o.box.w)-Math.max(lower.x,o.box.x)),y=Math.max(0,Math.min(lower.y+lower.h,o.box.y+o.box.h)-Math.max(lower.y,o.box.y));return x*y>0.2*o.box.w*o.box.h;})||null;
+        // Otherwise from the head; with a low camera this is sensitive to height, so only accept it inside the room.
+        floor=seat?seat.floor.slice():calibration?.camera?fromHead(calibration.H,calibration.camera,b):null;
+        if(!seat&&floor&&plan&&(floor[0]<0||floor[1]<0||floor[0]>plan.widthM||floor[1]>plan.depthM))floor=null;
+        how=seat?'seat':floor?'head':'';
+      }
       if(floor&&plan&&(floor[0]<-0.3||floor[1]<-0.3||floor[0]>plan.widthM+0.3||floor[1]>plan.depthM+0.3))floor=null;
       if(floor&&plan)floor=[Math.max(0,Math.min(plan.widthM,floor[0])),Math.max(0,Math.min(plan.depthM,floor[1]))];
-      const area=floor?areaFor(plan,floor):'unknown';
-      const track={id,box:{x:b.x,y:b.y,w:b.w,h:b.h},score:finite(t.score)?Math.round(t.score*100)/100:null,feetVisible,floor:floor&&floor.map(v=>Math.round(v*100)/100),area,certainty:floor&&feetVisible?'estimate':'uncertain',firstSeenAt:prev?.firstSeenAt||now,lastSeenAt:now,visible:true};
-      if(track.certainty==='uncertain'&&prev?.floor&&!floor){track.floor=prev.floor;track.area=prev.area;}
+      const area=seat?`seated on the ${seat.name}`:floor?areaFor(plan,floor):'unknown';
+      const track={id,box:{x:b.x,y:b.y,w:b.w,h:b.h},score:finite(t.score)?Math.round(t.score*100)/100:null,feetVisible,floor:floor&&floor.map(v=>Math.round(v*100)/100),area,certainty:floor&&how==='feet'?'estimate':floor&&how==='seat'?'seated':floor&&how==='head'?'from head':'uncertain',firstSeenAt:prev?.firstSeenAt||now,lastSeenAt:now,visible:true};
+      track.positionAt=floor?now:null;
+      if(!floor&&calibration&&prev?.floor){
+        track.floor=prev.floor;track.area=prev.area;track.certainty='last seen';
+        track.positionAt=prev.positionAt;
+      }
       this.tracks.set(id,track);
       if(prev&&prev.area!==track.area&&track.area!=='unknown')this.moved(id,prev.area,track.area,now);
       else if(!prev)this.moved(id,null,track.area,now);
@@ -152,14 +181,14 @@ class Tracking{
       if(!o){o={id:'F'+this.nextObject++,cls,floor:base,at:base,firstSeenAt:now,sightings:0,samples:[],boxW:b.w,binding:null};this.objects.set(o.id,o);}
       seen.add(o.id);
       o.at=base;o.lastSeenAt=now;o.visible=true;o.blocked=blocked;o.score=finite(d.score)?Math.round(d.score*100)/100:null;o.box={x:b.x,y:b.y,w:b.w,h:b.h};
-      if(blocked)continue;   // a person in front shifts the box: keep the last clean position
+      if(blocked){o.proposal=null;o.samples=[];continue;}   // a person in front shifts the box: keep the last clean position
       o.sightings++;o.floor=o.sightings===1||Math.hypot(o.floor[0]-base[0],o.floor[1]-base[1])>MOVE_M?base:[o.floor[0]*0.8+base[0]*0.2,o.floor[1]*0.8+base[1]*0.2];o.boxW=o.boxW*0.9+b.w*0.1;
       o.samples.push({at:now,p:base,w:b.w});o.samples=o.samples.filter(q=>now-q.at<=MOVE_SETTLE_MS);
       if(o.binding)this.checkMove(o,plan,now);
     }
     for(const o of this.objects.values()){
       if(seen.has(o.id))continue;
-      if(o.visible&&now-o.lastSeenAt>OBJECT_LOST_MS)o.visible=false;
+      if(o.visible&&now-o.lastSeenAt>OBJECT_LOST_MS){o.visible=false;o.proposal=null;}
       if(!o.binding&&now-o.lastSeenAt>OBJECT_FORGET_MS)this.objects.delete(o.id);
     }
   }
@@ -183,17 +212,30 @@ class Tracking{
   animalMoved(a,from,to,at){this.movement.push({at,track:a.id,who:a.name,from,to,animal:true});this.movement=this.movement.slice(-40);this.h.event?.('room_animal',{name:a.name,from,to});}
   checkMove(o,plan,now){
     const b=o.binding,s=o.samples;
-    if(s.length<4||now-s[0].at<MOVE_SETTLE_MS*0.75)return;
+    if(s.length<4||now-s[0].at<MOVE_SETTLE_MS*0.75){o.proposal=null;return;}
     // All recent sightings agree with each other, are a similar size to when it was matched, and are well away from where it was.
     const mx=s.reduce((a,q)=>a+q.p[0],0)/s.length,my=s.reduce((a,q)=>a+q.p[1],0)/s.length;
     const spread=Math.max(...s.map(q=>Math.hypot(q.p[0]-mx,q.p[1]-my)));
     const sizeOk=s.every(q=>Math.abs(q.w-b.boxW)/b.boxW<0.4);
     const delta=[mx-b.ref[0],my-b.ref[1]],dist=Math.hypot(...delta);
-    if(spread>MOVE_SPREAD_M||!sizeOk||dist<MOVE_M)return;
+    if(spread>MOVE_SPREAD_M||!sizeOk||dist<MOVE_M){o.proposal=null;return;}
+    if(!o.proposal||Math.hypot(mx-o.proposal.to[0],my-o.proposal.to[1])>0.15){
+      o.proposal={at:now,from:b.ref.slice(),to:[mx,my],delta,distanceM:Math.round(dist*100)/100,geometry:JSON.stringify(plan.footprints?.find(f=>f.name===b.footprint)?.points)};
+    }
+  }
+  acceptObjectMove(input,plan,now=Date.now()){
+    const o=this.objects.get(text(input?.objectId,24)),proposal=o?.proposal;
+    if(!this.viewIsFresh(now)||!o?.binding||!o.visible||o.blocked||!proposal||proposal.at!==input.at)
+      throw Error('That furniture move is no longer current.');
+    const b=o.binding,{delta,to:[mx,my]}=proposal,dist=Math.hypot(...delta);
+    if(proposal.geometry!==JSON.stringify(plan?.footprints?.find(f=>f.name===b.footprint)?.points)){
+      o.proposal=null;
+      throw Error('The plan changed. Wait for a fresh furniture proposal.');
+    }
     const from=areaFor(plan,b.ref);
     const moved=this.h.moveFootprint?.(b.footprint,delta);
     if(!moved)return;
-    b.ref=[mx,my];o.floor=[mx,my];o.samples=[];
+    b.ref=[mx,my];o.floor=[mx,my];o.samples=[];o.proposal=null;
     const to=areaFor(moved,[mx,my]);
     const entry={at:now,track:o.id,who:b.footprint,from,to,object:true,distanceM:Math.round(dist*10)/10};
     this.movement.push(entry);this.movement=this.movement.slice(-40);
@@ -202,10 +244,11 @@ class Tracking{
   // The operator says which plan item a detected object is ("this is the Armchair").
   bindObject(input,plan){
     const o=this.objects.get(text(input?.objectId,24));if(!o)throw Error('That object is no longer tracked.');
+    o.proposal=null;
     if(input.footprint===null){o.binding=null;return;}
     const name=text(input.footprint,100),fp=(plan?.footprints||[]).find(f=>f.name===name);
     if(!fp)throw Error('Choose an item on the floor plan.');
-    for(const other of this.objects.values())if(other.binding?.footprint===name)other.binding=null;
+    for(const other of this.objects.values())if(other.binding?.footprint===name){other.binding=null;other.proposal=null;}
     o.binding={footprint:name,ref:o.floor.slice(),boxW:o.boxW,confirmedAt:Date.now()};o.samples=[];
   }
   objectSuggestions(plan){
@@ -217,9 +260,34 @@ class Tracking{
     }
     return out;
   }
+  // Face recognition named this track (a registered person who agreed to face matching).
+  // A person can only be one track; an operator's own naming of the track is kept as its label.
+  identify(trackId,person){
+    const t=this.tracks.get(trackId);if(!t||!person?.pid)return;
+    for(const [k,b] of this.bindings)if(k!==trackId&&b.person?.pid===person.pid){if(b.phone===null&&b.by==='face')this.bindings.delete(k);else delete b.person;}
+    const by=person.by==='desk'?'desk':'face',label=`${person.name}${person.number?` #${person.number}`:''}`,b=this.bindings.get(trackId);
+    if(b){
+      if(b.by==='desk'&&by==='face'&&b.person?.pid!==person.pid)return;   // the desk's choice wins over a face match
+      const changed=b.person?.pid!==person.pid,keep=b.by==='desk'&&by==='face';   // a face match agreeing with the desk keeps it the desk's
+      b.person={...person,by:keep?'desk':by,score:person.score??b.person?.score};
+      if(b.phone===null&&(b.by==='face'||b.by==='desk'||!b.by)){b.label=label;if(!keep)b.by=by;}
+      if(changed)this.h.event?.('room_identified',{track:trackId,pid:person.pid,name:person.name,by});return;
+    }
+    this.bindings.set(trackId,{phone:null,role:'',label,person:{...person,by},by,confirmedAt:Date.now()});
+    this.h.event?.('room_identified',{track:trackId,pid:person.pid,name:person.name});
+  }
   // The operator says which phone/role a track is. Moves the binding off any other track.
   bind(input){
     const id=text(input?.trackId,24),t=this.tracks.get(id);if(!t)throw Error('That person is no longer tracked. Choose a visible track.');
+    const name=text(input.name,100);
+    if(name){
+      if(!t.visible||Date.now()-t.lastSeenAt>FRESH_MS)throw Error('Choose a person currently in view.');
+      for(const [key,binding] of this.bindings){
+        if(binding.phone===null&&binding.label===name)this.bindings.delete(key);
+      }
+      this.bindings.set(id,{phone:null,role:'',label:name,confirmedAt:Date.now()});
+      return;
+    }
     if(input.phone===null){this.bindings.delete(id);return;}
     const phone=Number(input.phone);if(!Number.isInteger(phone)||phone<1||phone>(this.h.maxPhones?.()||8))throw Error('Choose a valid phone slot.');
     for(const [k,b] of this.bindings)if(b.phone===phone)this.bindings.delete(k);
@@ -230,7 +298,7 @@ class Tracking{
   suggestions(now=Date.now()){
     const out=[];
     for(const [lostId,b] of this.bindings){
-      const lost=this.tracks.get(lostId);if(!lost||lost.visible||now-lost.lastSeenAt>SUGGEST_WITHIN_MS||!lost.floor)continue;
+      const lost=this.tracks.get(lostId);if(b.phone===null||!lost||lost.visible||now-lost.lastSeenAt>SUGGEST_WITHIN_MS||!lost.floor)continue;
       for(const t of this.tracks.values()){
         if(!t.visible||this.bindings.has(t.id)||!t.floor||t.firstSeenAt<lost.lastSeenAt-500)continue;
         const dist=Math.hypot(t.floor[0]-lost.floor[0],t.floor[1]-lost.floor[1]);
@@ -239,19 +307,20 @@ class Tracking{
     }
     return out.sort((a,b)=>a.distanceM-b.distanceM);
   }
+  viewIsFresh(now){return !!this.owner&&now-this.at<FRESH_MS;}
   view(now=Date.now()){
-    return {running:!!this.owner&&now-this.at<FRESH_MS,owner:this.owner,cameraId:this.cameraId,at:this.at,
+    return {running:this.viewIsFresh(now),owner:this.owner,cameraId:this.cameraId,at:this.at,
       tracks:[...this.tracks.values()].map(t=>({...t,binding:this.bindings.get(t.id)||null})),
-      movement:this.movement.slice(-20),suggestions:this.suggestions(now),
+      movement:this.movement.slice(-20),suggestions:this.suggestions(now),faces:this.faceStatus?.(now)||null,finder:this.finderStatus?.(now)||null,
       animals:[...this.animals.values()],
-      objects:[...this.objects.values()].filter(o=>o.binding||o.sightings>=OBJECT_CONFIRM).map(o=>({id:o.id,cls:o.cls,floor:o.floor.map(v=>Math.round(v*100)/100),visible:!!o.visible,blocked:!!o.blocked,score:o.score,box:o.box,lastSeenAt:o.lastSeenAt,binding:o.binding&&{footprint:o.binding.footprint}})),
+      objects:[...this.objects.values()].filter(o=>o.binding||o.sightings>=OBJECT_CONFIRM).map(o=>({id:o.id,cls:o.cls,floor:o.floor.map(v=>Math.round(v*100)/100),visible:!!o.visible,blocked:!!o.blocked,score:o.score,box:o.box,lastSeenAt:o.lastSeenAt,proposal:this.viewIsFresh(now)&&o.visible&&o.binding?o.proposal:null,binding:o.binding&&{footprint:o.binding.footprint}})),
       objectSuggestions:this.plan?this.objectSuggestions(this.plan):[]};
   }
   stop(tracker){if(!tracker||tracker===this.owner){this.owner='';this.at=0;}}
   // What the directors may read: only bound roles, only while tracking is fresh.
   context(now=Date.now()){
     if(!this.owner||now-this.at>FRESH_MS)return null;
-    const people=[...this.tracks.values()].filter(t=>this.bindings.has(t.id)).map(t=>{const b=this.bindings.get(t.id);return {who:b.label,phone:b.phone,role:b.role,visible:t.visible,area:t.area,floorM:t.floor,certainty:t.visible?t.certainty:'last seen',secondsSinceSeen:Math.round((now-t.lastSeenAt)/1000)};});
+    const people=[...this.tracks.values()].filter(t=>this.bindings.has(t.id)).map(t=>{const b=this.bindings.get(t.id);return {who:b.label,phone:b.phone,role:b.role,visible:t.visible,area:t.area,floorM:t.floor,certainty:t.visible?t.certainty:'last seen',secondsSinceSeen:Math.round((now-t.lastSeenAt)/1000),secondsSincePosition:t.positionAt==null?null:Math.round((now-t.positionAt)/1000)};});
     const unassigned=[...this.tracks.values()].filter(t=>t.visible&&!this.bindings.has(t.id)).length;
     const recent=this.movement.filter(m=>!m.object&&!m.animal&&this.bindings.has(m.track)&&now-m.at<120000).slice(-8).map(m=>({who:m.who,from:m.from,to:m.to,secondsAgo:Math.round((now-m.at)/1000)}));
     const furniture=[...this.objects.values()].filter(o=>o.binding).map(o=>({name:o.binding.footprint,seen:o.visible?'now':`${Math.round((now-o.lastSeenAt)/1000)} s ago`}));
@@ -260,4 +329,4 @@ class Tracking{
     return {people,unassignedPeopleVisible:unassigned,recentMovement:recent,furniture,furnitureMoves,animals};
   }
 }
-module.exports={ANIMAL_CLASSES,OBJECT_CLASSES,fitHomography,apply,invert,calibrate,areaFor,Tracking,solve};
+module.exports={fromHead,ANIMAL_CLASSES,OBJECT_CLASSES,fitHomography,apply,invert,calibrate,areaFor,Tracking,solve};

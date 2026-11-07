@@ -19,7 +19,7 @@ test('calibration validates points and reports the error of extra points',()=>{
  assert.throws(()=>calibrate({points:pairsFor([[1,1],[4,1],[4,4],[1,4]])},null),/floor plan/);
  const exact=calibrate({points:pairsFor([[0.5,0.5],[4,0.6],[4.2,4],[0.6,4.2]])},plan);assert.equal(exact.checked,false);assert.ok(exact.rmsM<0.001);
  const noisy=pairsFor([[0.5,0.5],[4,0.6],[4.2,4],[0.6,4.2],[2.4,3.1]]);noisy[4].floor=[2.6,3.1];
- const c=calibrate({points:noisy},plan);assert.equal(c.checked,true);assert.ok(c.rmsM>0.02&&c.maxErrorM<0.25);
+ const c=calibrate({points:noisy},plan);assert.equal(c.checked,true);assert.equal(c.validation,'holdout');assert.equal(c.maxErrorM,0.2);
 });
 test('areas come from doors, furniture and walls',()=>{
  assert.equal(areaFor(plan,[2.5,1.8]),'at the Work bench');
@@ -50,7 +50,7 @@ test('hidden feet keep the last floor position and are marked uncertain; uncalib
  const tr=new Tracking();let now=1e6;
  tr.update({tracker:'d',cameraId:'cam1',tracks:[{id:'T1',box:boxAt([1,3.5]),feetVisible:true}]},{calibration:cal,plan,now});
  const v=tr.update({tracker:'d',cameraId:'cam1',tracks:[{id:'T1',box:{x:.4,y:.5,w:.2,h:.6},feetVisible:false}]},{calibration:cal,plan,now:now+400});
- const t1=v.tracks[0];assert.equal(t1.certainty,'uncertain');
+ const t1=v.tracks[0];assert.equal(t1.certainty,'last seen');
  const none=new Tracking().update({tracker:'d',cameraId:'cam1',tracks:[{id:'T1',box:boxAt([1,3.5]),feetVisible:true}]},{calibration:null,plan,now});
  assert.equal(none.tracks[0].floor,null);assert.equal(none.tracks[0].area,'unknown');
 });
@@ -121,6 +121,10 @@ test('furniture keeps its identity, is suggested for its plan item, and only mov
  // The person steps away; once it has settled for a few seconds the outline follows.
  step([1.2,3.6]);assert.equal(r.config.floorPlan.footprints.find(f=>f.name==='Armchair').points[0][0],2.0,'not on the first clean sighting');
  for(let i=0;i<8;i++)step([1.2,3.6]);
+ assert.equal(r.config.floorPlan.footprints.find(f=>f.name==='Armchair').points[0][0],2.0);
+ const proposal=r.tracking.view().objects[0].proposal;
+ assert.ok(proposal);
+ r.acceptObjectMove({objectId:id,at:proposal.at});
  const moved=r.config.floorPlan.footprints.find(f=>f.name==='Armchair');
  assert.ok(Math.abs(moved.points[0][0]-0.8)<0.15,JSON.stringify(moved.points));assert.equal(moved.estimated,true);assert.match(moved.notes,/Moved by the camera/);
  assert.equal(events.find(e=>e[0]==='room_object_moved')[1].footprint,'Armchair');
@@ -131,6 +135,7 @@ test('furniture keeps its identity, is suggested for its plan item, and only mov
  // Moved while out of view: a chair turning up elsewhere is the missing armchair, not a stranger.
  clock+=4000;send([]);for(let i=0;i<8;i++)step([3.5,4.0]);
  assert.equal(r.tracking.view().objects.length,1);
+ r.acceptObjectMove({objectId:id,at:r.tracking.view().objects[0].proposal.at});
  assert.ok(Math.abs(r.config.floorPlan.footprints.find(f=>f.name==='Armchair').points[0][0]-3.1)<0.15);
 });
 
@@ -154,4 +159,31 @@ test('Yuri the dog is followed by name, logged by area, never matched to a phone
  assert.throws(()=>r.bindTrack({trackId:'dog',phone:1}),/no longer tracked/);
  r.save({revision:r.config.revision,shareWithAgents:true});
  assert.match(r.prompt(),/"animals":\[\{"name":"Yuri","kind":"dog","visible":false/);
+});
+
+test('with the camera position known, people whose feet are hidden are placed from their head',()=>{
+ // Camera on the jars wall, 2.2 m from the door wall, 2.1 m up, looking across the room and tilted down.
+ const C=[0.1,2.3,2.1],p=30*Math.PI/180,f=0.7,fwd=[Math.cos(p),0,-Math.sin(p)],right=[0,1,0],up=[Math.sin(p),0,Math.cos(p)];
+ const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+ const see=([x,y,z=0])=>{const d=[x-C[0],y-C[1],z-C[2]],k=dot(d,fwd);return [0.5+f*dot(d,right)/k,0.5-f*dot(d,up)/k];};
+ const floors=[[2,1],[4,1],[4,4],[2,4],[3,2.5]];
+ const cal={...calibrate({points:floors.map(fl=>({image:see(fl),floor:fl}))},plan),camera:{x:C[0],y:C[1],z:C[2]}};
+ // A person at (3.2, 3.0), 1.7 m tall; their legs are hidden so the box ends at the bench edge.
+ const head=see([3.2,3.0,1.7]),hip=see([3.2,3.0,0.9]);
+ const box={x:head[0]-0.03,y:head[1],w:0.06,h:hip[1]-head[1]};
+ const tr=new Tracking();
+ const v=tr.update({tracker:'d',cameraId:'cam2',tracks:[{id:'T1',box,feetVisible:false}]},{calibration:cal,plan,now:Date.now()});
+ assert.ok(Math.hypot(v.tracks[0].floor[0]-3.2,v.tracks[0].floor[1]-3.0)<0.05,JSON.stringify(v.tracks[0].floor));
+ assert.equal(v.tracks[0].certainty,'from head');
+ // Without the camera position the old behaviour stays: uncertain.
+ const v2=new Tracking().update({tracker:'d',cameraId:'cam2',tracks:[{id:'T1',box,feetVisible:false}]},{calibration:{...cal,camera:undefined},plan,now:Date.now()});
+ assert.equal(v2.tracks[0].certainty,'uncertain');
+});
+
+test('a person whose legs are hidden but who overlaps a seat the finder placed is "seated on" it',()=>{
+ const cal=calibrate({points:pairsFor([[0.5,0.5],[4,0.6],[4.2,4],[0.6,4.2]])},plan);
+ const tr=new Tracking();
+ tr.finderStatus=()=>({objects:[{name:'Tall stool',visible:true,floor:[2.11,3.34],box:{x:0.70,y:0.68,w:0.06,h:0.27}}]});
+ const v=tr.update({tracker:'d',cameraId:'cam2',tracks:[{id:'T1',box:{x:0.66,y:0.31,w:0.18,h:0.68},feetVisible:false}]},{calibration:cal,plan,now:Date.now()});
+ assert.deepEqual(v.tracks[0].floor,[2.11,3.34]);assert.equal(v.tracks[0].area,'seated on the Tall stool');assert.equal(v.tracks[0].certainty,'seated');
 });

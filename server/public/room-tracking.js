@@ -13,11 +13,13 @@ let lastAnimals=[],lastObjects=[],objectChoice=new Map(),dismissedObjects=new Se
 const tracker=Math.random().toString(36).slice(2,10);
 const chosen=new Map();
 let model=null,running=false,timer=0,lastSent=0,sending=false,nextId=1,local=[],state=null,dismissed=new Set(),stats={ms:0,fps:0,frames:0,since:0};
-let calibrating=false,pairs=[],awaiting='image',showOutline=true,home=null;
+let calibrating=false,pairs=[],awaiting='image',showOutline=false,home=null;
 function endCalibration(){calibrating=false;pairs=[];if(home){home.parent.insertBefore($('floor-plan'),home.next);home=null;}}
 const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d',{willReadFrequently:true});
 const camera=()=>$('camera').value;
-const calibration=()=>room?.calibrations?.[camera()]||null;
+const savedCalibration=()=>room?.calibrations?.[camera()]||null;
+const calibration=()=>savedCalibration()?.needsReview?null:savedCalibration();
+const furnitureLabel=cls=>cls==='dining table'?'Table-shaped furniture':cls;
 const plan=()=>room?.floorPlan||null;
 const t=ms=>new Date(ms).toLocaleTimeString();
 
@@ -77,7 +79,7 @@ function drawLive(){
   const svg=$('track-overlay');if(!svg)return;
   svg.toggleAttribute('hidden',$('live-picture').hidden);svg.classList.toggle('calibrating',calibrating);
   const byId=new Map((state?.tracks||[]).map(x=>[x.id,x]));
-  const boxes=running?local.filter(tr=>tr.hits>=2).map(tr=>{const s=byId.get(tr.id),label=s?.binding?.label||tr.id;return `<g class="${s?.binding?'bound':''}"><rect x="${tr.box.x*1000}" y="${tr.box.y*1000}" width="${tr.box.w*1000}" height="${tr.box.h*1000}"/><circle cx="${(tr.box.x+tr.box.w/2)*1000}" cy="${(tr.box.y+tr.box.h)*1000}" r="6"/><text x="${tr.box.x*1000+6}" y="${Math.max(24,tr.box.y*1000+24)}">${esc(label)}${s?.area&&s.area!=='unknown'?' · '+esc(s.area):''}</text></g>`;}).join(''):'';
+  const boxes=running?local.filter(tr=>tr.hits>=2).map(tr=>{const s=byId.get(tr.id),label=s?.binding?.person?.name||s?.binding?.label||'Unknown person';return `<g class="${s?.binding?'bound':''}"><rect x="${tr.box.x*1000}" y="${tr.box.y*1000}" width="${tr.box.w*1000}" height="${tr.box.h*1000}"/><circle cx="${(tr.box.x+tr.box.w/2)*1000}" cy="${(tr.box.y+tr.box.h)*1000}" r="6"/><text x="${tr.box.x*1000+6}" y="${Math.max(24,tr.box.y*1000+24)}">${esc(label)}${s?.area&&s.area!=='unknown'?' · '+esc(s.area):''}</text></g>`;}).join(''):'';
   let outline='';
   const cal=calibration(),p=plan();
   if(cal&&p&&showOutline&&!calibrating){
@@ -89,9 +91,10 @@ function drawLive(){
     outline=poly(room4.flatMap((a,i)=>edge(a,room4[(i+1)%4]).slice(0,-1)),'floor-edge')+(p.footprints||[]).map(o=>poly(o.points.flatMap((a,i)=>edge(a,o.points[(i+1)%o.points.length]).slice(0,-1)),'floor-object')).join('');
   }
   const marks=calibrating?pairs.map((q,i)=>q.image?`<g class="calib"><circle cx="${q.image[0]*1000}" cy="${q.image[1]*1000}" r="9"/><text x="${q.image[0]*1000+12}" y="${q.image[1]*1000-10}">${i+1}</text></g>`:'').join(''):'';
-  const furn=(state?.objects||[]).filter(o=>o.visible&&o.box).map(o=>`<g class="furniture${o.binding?' bound':''}"><rect x="${o.box.x*1000}" y="${o.box.y*1000}" width="${o.box.w*1000}" height="${o.box.h*1000}"/><text x="${o.box.x*1000+6}" y="${o.box.y*1000+22}">${esc(o.binding?.footprint||o.cls+' '+o.id)}</text></g>`).join('');
+  const furn=(state?.objects||[]).filter(o=>o.visible&&o.box).map(o=>`<g class="furniture${o.binding?' bound':''}"><rect x="${o.box.x*1000}" y="${o.box.y*1000}" width="${o.box.w*1000}" height="${o.box.h*1000}"/><text x="${o.box.x*1000+6}" y="${o.box.y*1000+22}">${esc(o.binding?.footprint||furnitureLabel(o.cls)+' '+o.id)}</text></g>`).join('');
   const pets=(state?.animals||[]).filter(a=>a.visible&&a.box).map(a=>`<g class="animal"><rect x="${a.box.x*1000}" y="${a.box.y*1000}" width="${a.box.w*1000}" height="${a.box.h*1000}"/><text x="${a.box.x*1000+6}" y="${a.box.y*1000+22}">${esc(a.name)}${a.area&&a.area!=='unknown'?' · '+esc(a.area):''}</text></g>`).join('');
-  svg.innerHTML=outline+furn+pets+boxes+marks;
+  const named=(state?.finder?.objects||[]).filter(o=>o.visible&&o.box).map(o=>`<g class="named"><rect x="${o.box.x*1000}" y="${o.box.y*1000}" width="${o.box.w*1000}" height="${o.box.h*1000}"/><text x="${o.box.x*1000+6}" y="${o.box.y*1000+22}">${esc(o.name)} ${Math.round(o.score*100)}%</text></g>`).join('');
+  svg.innerHTML=outline+furn+named+pets+boxes+marks;
   drawPlan();
 }
 function project(H,[x,y]){const w=H[6]*x+H[7]*y+H[8];if(!(w>1e-9))return null;return [(H[0]*x+H[1]*y+H[2])/w,(H[3]*x+H[4]*y+H[5])/w];}
@@ -99,14 +102,26 @@ function invert(H){const [a,b,c,d,e,f,g,h,i]=H,A=e*i-f*h,B=-(d*i-f*g),C=d*h-e*g,
 
 // ---------- floor plan layer ----------
 function drawPlan(){
+  const status = $('floor-live-state');
+  if (status) {
+    const message = savedCalibration()?.needsReview
+      ? 'Live floor positions are paused until this view is recalibrated. Person detection still works in the camera feed.'
+      : !calibration() ? 'Calibrate this camera to show live positions on the plan.'
+      : (running || state?.running) && state?.cameraId === camera()
+        ? 'Live positions are estimates. Review settled furniture moves before updating the plan.'
+        : 'Start tracking to see live positions on the plan.';
+    if (status.textContent !== message) status.textContent = message;
+  }
   const svg=$('test-map');if(!svg)return;
   let layer=svg.querySelector('#live-layer');if(!layer){layer=document.createElementNS('http://www.w3.org/2000/svg','g');layer.id='live-layer';svg.append(layer);}
   const p=plan(),u=p?Math.max(p.widthM,p.depthM)/220:0.02;
-  const people=(state?.tracks||[]).filter(x=>x.floor&&(running||x.binding)).map(x=>`<g class="live-person${x.visible?'':' last-seen'}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})"><circle r="${7*u}"/><text x="${10*u}" y="${4*u}">${esc(x.binding?.role||x.binding?.label||x.id)}</text></g>`).join('');
+  const people=(state?.tracks||[]).filter(x=>x.floor&&(running||x.binding)).map(x=>`<g class="live-person${!x.visible||x.certainty==='last seen'?' last-seen':x.certainty==='from head'?' rough-position':''}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})"><circle r="${4.5*u}"/><text x="${10*u}" y="${4*u}">${esc(x.binding?.person?.name||x.binding?.label||'Unknown')}${!x.visible||x.certainty==='last seen'?' · last seen':x.certainty==='from head'?' · rough':''}</text></g>`).join('');
   const marks=calibrating?pairs.map((q,i)=>q.floor?`<g class="calib" transform="translate(${q.floor[0]} ${q.floor[1]})"><circle r="${5*u}"/><text x="${7*u}" y="${-5*u}">${i+1}</text></g>`:'').join(''):'';
-  const furn=(state?.objects||[]).map(o=>`<g class="live-object${o.visible?'':' last-seen'}${o.binding?' bound':''}" transform="translate(${o.floor[0]} ${o.floor[1]})"><rect x="${-5*u}" y="${-5*u}" width="${10*u}" height="${10*u}"/><text x="${8*u}" y="${4*u}">${esc(o.binding?.footprint||o.cls)}</text></g>`).join('');
+  const furn=(state?.objects||[]).map(o=>`<g class="live-object${o.visible?'':' last-seen'}${o.binding?' bound':''}" transform="translate(${o.floor[0]} ${o.floor[1]})"><rect x="${-5*u}" y="${-5*u}" width="${10*u}" height="${10*u}"/><text x="${8*u}" y="${4*u}">${esc(o.binding?.footprint||furnitureLabel(o.cls))}</text></g>`).join('');
   const pets=(state?.animals||[]).filter(a=>a.floor).map(a=>`<g class="live-animal${a.visible?'':' last-seen'}" transform="translate(${a.floor[0]} ${a.floor[1]})"><circle r="${5*u}"/><text x="${8*u}" y="${4*u}">${esc(a.name)}</text></g>`).join('');
-  layer.innerHTML=furn+pets+people+marks;
+  const hasLivePositions = calibration() && (running || state?.running) && state?.cameraId === camera();
+  const named=(state?.finder?.objects||[]).filter(o=>o.floor).map(o=>`<g class="live-object bound${o.visible?'':' last-seen'}" transform="translate(${o.floor[0]} ${o.floor[1]})"><rect x="${-4*u}" y="${-4*u}" width="${8*u}" height="${8*u}"/><text x="${8*u}" y="${4*u}">${esc(o.name)}</text></g>`).join('');
+  layer.innerHTML = (hasLivePositions ? furn + named + pets + people : '') + marks;
 }
 
 // ---------- calibration ----------
@@ -118,7 +133,7 @@ function snap(pt){
 }
 function beginCalibration(){
   if(!plan())return toast('Save the measured floor plan first.');
-  calibrating=true;pairs=(calibration()?.points||[]).map(q=>({...q}));awaiting='image';
+  calibrating=true;pairs=(savedCalibration()?.points||[]).map(q=>({...q}));awaiting='image';
   // Bring the plan next to the picture while calibrating, so both clicks are on screen together.
   const planEl=$('floor-plan');home={parent:planEl.parentNode,next:planEl.nextSibling};$('calibration-plan').append(planEl);
   if($('live-picture').hidden)$('view-live').click();
@@ -140,7 +155,7 @@ function onPlan(e){
 }
 async function saveCalibration(){
   const points=pairs.filter(q=>q.image&&q.floor);
-  try{room=await api('room',{action:'save',revision:room.revision,calibration:{cameraId:camera(),points}});endCalibration();render();renderPanel();drawLive();const c=calibration();toast(c.checked?`Calibration saved. Average error ${Math.round(c.rmsM*100)} cm.`:'Calibration saved. Add a fifth point to measure its accuracy.');}
+  try{room=await api('room',{action:'save',revision:room.revision,calibration:{cameraId:camera(),points}});endCalibration();render();renderPanel();drawLive();const c=calibration();toast(c.validation==='holdout'?`Calibration saved. Check point error ${Math.round(c.maxErrorM*100)} cm.`:'Calibration saved. Add a separate check point to measure accuracy.');}
   catch(e){toast(e.message);}
 }
 async function removeCalibration(){
@@ -152,10 +167,10 @@ async function removeCalibration(){
 function renderPanel(){
   const cal=calibration();
   const elsewhere=!running&&state?.running;
-  $('tracking-state').textContent=running?`Tracking · ${stats.fps||'…'} fps · ${stats.ms} ms per frame`:elsewhere?'Tracking on another screen':'Tracking off';
+  $('tracking-state').textContent=running?'Tracking on':elsewhere?'Tracking on another screen':'Tracking off';
   $('tracking-state').classList.toggle('on',running);
   $('track-start').disabled=running||calibrating||elsewhere;$('track-stop').disabled=!running;$('calibrate').disabled=calibrating;
-  $('calibration-state').innerHTML=cal?`Floor calibration: ${cal.points.length} points, saved ${esc(new Date(cal.savedAt).toLocaleString())}. ${cal.checked?`Average error ${Math.round(cal.rmsM*100)} cm, worst ${Math.round(cal.maxErrorM*100)} cm.`:'Add a fifth point to measure accuracy.'} <label class="check inline"><input type="checkbox" id="show-outline" ${showOutline?'checked':''}> Show the plan on the live picture</label> <button id="remove-calibration" class="link">Remove</button>`:'This camera has no floor calibration yet. Tracking will show people in the picture but cannot place them on the plan.';
+  $('calibration-state').innerHTML=cal?`Floor calibration: ${cal.points.length} points, saved ${esc(new Date(cal.savedAt).toLocaleString())}. ${cal.validation==='holdout'?`Check point error ${Math.round(cal.maxErrorM*100)} cm.`:'Add a separate check point to measure accuracy.'} <label class="check inline"><input type="checkbox" id="show-outline" ${showOutline?'checked':''}> Show the plan on the live picture</label> <button id="remove-calibration" class="link">Remove</button>`:savedCalibration()?.needsReview?'Floor positions paused. Recalibrate to align the floor plan with this camera view. Your previous anchors are saved.':'This camera has no floor calibration yet. Tracking will show people in the picture but cannot place them on the plan.';
   $('show-outline')?.addEventListener('change',e=>{showOutline=e.target.checked;drawLive();});
   $('remove-calibration')?.addEventListener('click',removeCalibration);
   $('calibration-editor').hidden=!calibrating;
@@ -168,15 +183,30 @@ function renderPanel(){
   }
   const phones_=typeof phones!=='undefined'?phones:[],role=typeof roleFor==='function'?roleFor:()=>'';
   const opts=phones_.map(p=>`<option value="${p.device}">Phone ${p.device}${role(p.device)?' · '+esc(role(p.device)):''}</option>`).join('');
+  const faces=state?.faces;
+  const faceOpts=(faces?.registered||[]).filter(p=>p.face).map(p=>`<option value="${esc(p.pid)}">${esc(p.name)} #${p.number}</option>`).join('');
+  const fin=state?.finder;if($('finder-state'))$('finder-state').textContent=!fin?'':!fin.ready?'The object finder is not set up on this computer.':fin.error?`Object finder: ${fin.error}`:!fin.device?(fin.running?'Object finder starting…':''):`Objects found by description${fin.device==='mps'?' (on this Mac\'s GPU)':''}: ${(fin.objects||[]).map(o=>`${o.name}${o.visible?'':' (not seen now)'}${o.area?' · '+o.area:''}${o.follows?'':' · not moved on the plan'}`).join('; ')||'none yet'}`;
+  if($('faces-state'))$('faces-state').textContent=!faces?'':!faces.ready?'Face recognition is not set up on this computer.':`Faces: ${(faces.registered||[]).filter(p=>p.enrolled).map(p=>`${p.name} (${p.views} view${p.views===1?'':'s'})`).join(', ')||'nobody enrolled yet'}${(faces.registered||[]).filter(p=>p.face&&p.problem).map(p=>` · ${p.name}: ${p.problem}`).join('')}${faces.source?` · reading ${faces.source}`:''}${faces.recent?.length?` · recognised just now: ${faces.recent.map(r=>`${r.name} ${Math.round(r.score*100)}%`).join(', ')}`:''}`;
+  const visiblePeople = (state?.tracks||[]).filter(person=>person.visible);
+  const visibleFurniture = (state?.objects||[]).filter(object=>object.visible);
+  $('people-summary').textContent = visiblePeople.length
+    ? 'People · '+visiblePeople.map(person=>person.binding?.person?.name||person.binding?.label||'Unknown').join(', ')
+    : 'People · none in view';
+  $('furniture-summary').textContent = 'Furniture · '+visibleFurniture.length+' in view';
   const tracks=(state?.tracks||[]).slice().sort((a,b)=>(b.visible-a.visible)||a.id.localeCompare(b.id));
   const suggestion=(state?.suggestions||[]).filter(s=>!dismissed.has(s.trackId+'>'+s.phone));
   const markup=(suggestion.length?suggestion.map(s=>`<div class="room-item suggest" data-track="${esc(s.trackId)}" data-phone="${s.phone}" data-role="${esc(s.role)}"><strong>Is ${esc(s.trackId)} ${esc(s.label)}?</strong><p>${esc(s.label)} went out of sight and ${esc(s.trackId)} appeared ${s.distanceM} m from where they were last seen.</p><div class="row"><button class="yes primary">Yes, that’s ${esc(s.role||'them')}</button><button class="no">No</button></div></div>`).join(''):'')+
-    (tracks.length?tracks.map(x=>`<div class="room-item" data-track="${esc(x.id)}"><strong>${esc(x.binding?.label||x.id)}${x.binding?` <span class="hint">· ${esc(x.id)}</span>`:''}</strong><p class="status"></p><div class="row"><select aria-label="Phone for ${esc(x.id)}">${opts.replace(`value="${chosen.get(x.id)??x.binding?.phone}"`,`value="${chosen.get(x.id)??x.binding?.phone}" selected`)}</select><button class="bind">This is them</button>${x.binding?'<button class="unbind">Clear</button>':''}</div></div>`).join(''):`<p class="hint">${running||elsewhere?'No one in view yet.':'Start tracking to find people in the live picture.'}</p>`);
+    (tracks.length?tracks.map(x=>`<div class="room-item" data-track="${esc(x.id)}"><strong>${esc(x.binding?.label||x.id)}${x.binding?` <span class="hint">· ${esc(x.id)}</span>`:''}</strong><p class="status"></p><div class="row"><select aria-label="Phone for ${esc(x.id)}">${opts.replace(`value="${chosen.get(x.id)??x.binding?.phone}"`,`value="${chosen.get(x.id)??x.binding?.phone}" selected`)}</select><button class="bind">This is them</button>${x.visible?'<button class="name-person">Name person</button>':''}${x.binding?'<button class="unbind">Clear</button>':''}</div>${x.visible&&faceOpts?`<div class="row"><select class="who" aria-label="Who is ${esc(x.id)}"><option value="">Who is this?</option>${faceOpts}</select><button class="identify">That's them</button></div>`:''}${x.binding?.person?`<p class="hint">${x.binding.person.by==='desk'?'Named at the desk':'Recognised by face'}${x.binding.person.score?` · ${Math.round(x.binding.person.score*100)}% match`:''}</p>`:''}</div>`).join(''):`<p class="hint">${running||elsewhere?'No one in view yet.':'Start tracking to find people in the live picture.'}</p>`);
   if($('tracks').dataset.markup!==markup){
     const focused=document.activeElement?.tagName==='SELECT'&&document.activeElement.closest('#tracks');if(!focused){$('tracks').innerHTML=markup;$('tracks').dataset.markup=markup;
     for(const el of $('tracks').querySelectorAll('[data-track]')){
       el.querySelector('select')?.addEventListener('change',e=>chosen.set(el.dataset.track,e.target.value));
       el.querySelector('.bind')?.addEventListener('click',()=>bind(el.dataset.track,Number(el.querySelector('select').value)));
+      el.querySelector('.identify')?.addEventListener('click',async()=>{const pid=el.querySelector('.who').value;if(!pid)return toast('Choose who this is.');try{state=await api('room',{action:'identifyTrack',trackId:el.dataset.track,pid});if(room)room.tracking=state;renderPanel();drawLive();toast('Named. The camera will learn this face as it sees it.');}catch(e){toast(e.message);}});
+      el.querySelector('.name-person')?.addEventListener('click',()=>{
+        const name=window.prompt('Name this person');
+        if(name?.trim())bind(el.dataset.track,null,undefined,name.trim());
+      });
       el.querySelector('.unbind')?.addEventListener('click',()=>bind(el.dataset.track,null));
       el.querySelector('.yes')?.addEventListener('click',()=>bind(el.dataset.track,Number(el.dataset.phone),el.dataset.role));
       el.querySelector('.no')?.addEventListener('click',()=>{dismissed.add(el.dataset.track+'>'+el.dataset.phone);renderPanel();});
@@ -184,8 +214,17 @@ function renderPanel(){
   }
   const byId=new Map(tracks.map(x=>[x.id,x]));
   for(const el of $('tracks').querySelectorAll('.room-item[data-track]:not(.suggest)')){const x=byId.get(el.dataset.track);if(!x)continue;
-    el.querySelector('.status').textContent=`${x.visible?'Visible':`Out of sight · last seen ${Math.round((Date.now()-x.lastSeenAt)/1000)} s ago`} · ${x.area}${x.floor?` · x ${x.floor[0].toFixed(1)} m, y ${x.floor[1].toFixed(1)} m`:''}${x.visible&&!x.feetVisible?' · feet not in view, position uncertain':''}`;}
+    el.querySelector('.status').textContent=`${x.visible?'Visible':`Out of sight · last seen ${Math.round((Date.now()-x.lastSeenAt)/1000)} s ago`} · ${x.area}${x.floor?` · x ${x.floor[0].toFixed(1)} m, y ${x.floor[1].toFixed(1)} m`:''}${x.certainty==='last seen'&&x.positionAt?' · position last seen '+Math.max(0,Math.round((Date.now()-x.positionAt)/1000))+' s ago':x.certainty==='from head'?' · rough position':x.visible&&!x.floor?' · floor position unavailable':''}`;}
   renderObjects();
+  const proposals = [
+    ...(state?.objects||[]).filter(o=>o.proposal).map(o=>({id:o.id,name:o.binding.footprint,proposal:o.proposal})),
+    ...(state?.finder?.objects||[]).filter(o=>state?.running&&o.proposal).map(o=>({id:o.name,name:o.name,proposal:o.proposal,source:'finder'}))
+  ];
+  const review = $('move-review');
+  const proposalMarkup = proposals.map(({id,name,proposal,source})=>
+    `<div class="room-item"><strong>${esc(name)} · ${proposal.from?'proposed move '+proposal.distanceM.toFixed(2)+' m':'proposed placement'}</strong><p class="hint">${proposal.from?proposal.from.map(v=>v.toFixed(2)).join(', ')+' → ':''}${proposal.to.map(v=>v.toFixed(2)).join(', ')} m</p><button data-move-id="${esc(id)}" data-move-at="${proposal.at}" data-move-source="${source||'tracker'}">Apply to plan</button></div>`
+  ).join('');
+  if(review.dataset.markup!==proposalMarkup){review.innerHTML=proposalMarkup;review.dataset.markup=proposalMarkup;}
   $('movement').innerHTML=(state?.movement||[]).slice().reverse().map(m=>`<p><strong>${esc(t(m.at))}</strong> · ${esc(m.who)}${m.object?` moved ${m.distanceM} m`:''}: ${m.from?esc(m.from)+' → ':''}${esc(m.to)}</p>`).join('')||'No movement yet.';
   drawPlan();
 }
@@ -194,8 +233,8 @@ function renderObjects(){
   const objs=(state?.objects||[]).slice().sort((a,b)=>(b.visible-a.visible)||a.id.localeCompare(b.id));
   const sugg=(state?.objectSuggestions||[]).filter(x=>!dismissedObjects.has(x.objectId+'>'+x.footprint));
   const opts=sel=>items.map(n=>`<option${n===sel?' selected':''}>${esc(n)}</option>`).join('');
-  const markup=sugg.map(x=>`<div class="room-item suggest" data-object="${esc(x.objectId)}" data-footprint="${esc(x.footprint)}"><strong>Is this ${esc(x.cls)} the ${esc(x.footprint)}?</strong><p>The camera sees a ${esc(x.cls)} ${x.distanceM?x.distanceM+' m from':'on'} the ${esc(x.footprint)} outline.</p><div class="row"><button class="yes primary">Yes, it’s the ${esc(x.footprint)}</button><button class="no">No</button></div></div>`).join('')+
-    (objs.length?objs.map(o=>`<div class="room-item" data-object="${esc(o.id)}"><strong>${esc(o.binding?o.binding.footprint:o.cls)}${o.binding?` <span class="hint">· ${esc(o.cls)} ${esc(o.id)}</span>`:` <span class="hint">· ${esc(o.id)}</span>`}</strong><p class="status"></p><div class="row"><select aria-label="Plan item for ${esc(o.id)}">${opts(objectChoice.get(o.id)??o.binding?.footprint)}</select><button class="bind">This is it</button>${o.binding?'<button class="unbind">Clear</button>':''}</div></div>`).join(''):`<p class="hint">${running?'No furniture recognised yet. The detector knows chairs, sofas, tables, benches and bags.':'Start tracking to follow furniture too.'}</p>`);
+  const markup=sugg.map(x=>`<div class="room-item suggest" data-object="${esc(x.objectId)}" data-footprint="${esc(x.footprint)}"><strong>Is this ${esc(furnitureLabel(x.cls))} the ${esc(x.footprint)}?</strong><p>The camera sees a ${esc(furnitureLabel(x.cls))} ${x.distanceM?x.distanceM+' m from':'on'} the ${esc(x.footprint)} outline.</p><div class="row"><button class="yes primary">Yes, it’s the ${esc(x.footprint)}</button><button class="no">No</button></div></div>`).join('')+
+    (objs.length?objs.map(o=>`<div class="room-item" data-object="${esc(o.id)}"><strong>${esc(o.binding?o.binding.footprint:o.cls)}${o.binding?` <span class="hint">· ${esc(furnitureLabel(o.cls))} ${esc(o.id)}</span>`:` <span class="hint">· ${esc(o.id)}</span>`}</strong><p class="status"></p><div class="row"><select aria-label="Plan item for ${esc(o.id)}">${opts(objectChoice.get(o.id)??o.binding?.footprint)}</select><button class="bind">This is it</button>${o.binding?'<button class="unbind">Clear</button>':''}</div></div>`).join(''):`<p class="hint">${running?'No furniture recognised yet. The detector knows chairs, sofas, tables, benches and bags.':'Start tracking to follow furniture too.'}</p>`);
   if($('objects').dataset.markup!==markup&&!(document.activeElement?.tagName==='SELECT'&&document.activeElement.closest('#objects'))){
     $('objects').innerHTML=markup;$('objects').dataset.markup=markup;
     for(const el of $('objects').querySelectorAll('[data-object]')){
@@ -213,11 +252,21 @@ function renderObjects(){
 async function bindObject(objectId,footprint){
   try{state=await api('room',{action:'bindObject',objectId,footprint});if(room)room.tracking=state;objectChoice.delete(objectId);renderPanel();drawLive();}catch(e){toast(e.message);}
 }
-async function bind(trackId,phone,knownRole){
+async function bind(trackId,phone,knownRole,name){
   // Keep a role the desk already confirmed (from a suggestion); otherwise use the program's role for that phone.
   const role=knownRole??(phone&&typeof roleFor==='function'?roleFor(phone):'');
-  try{state=await api('room',{action:'bindTrack',trackId,phone,role});if(room)room.tracking=state;chosen.delete(trackId);renderPanel();drawLive();}catch(e){toast(e.message);}
+  try{state=await api('room',{action:'bindTrack',trackId,phone,role,name});if(room)room.tracking=state;chosen.delete(trackId);renderPanel();drawLive();}catch(e){toast(e.message);}
 }
+
+$('move-review').onclick=async event=>{
+  const button=event.target.closest('[data-move-id]');
+  if(!button)return;
+  try{
+    state=await api('room',{action:'acceptObjectMove',source:button.dataset.moveSource,objectId:button.dataset.moveId,at:Number(button.dataset.moveAt)});
+    await load();
+    renderPanel();
+  }catch(error){toast(error.message);}
+};
 
 // ---------- wiring ----------
 $('track-start').onclick=start;$('track-stop').onclick=()=>stop();

@@ -340,6 +340,14 @@ const roomObserver=new RoomObserver(path.join(__dirname,'.room.json'),{
   cameras:()=>cameras,maxPhones:()=>MAX_PHONES,event:(type,data)=>logEvent(type,data)
 });
 setInterval(()=>roomObserver.tick(),1000);
+// Live face recognition of registered people (face matching agreed) on the tracking camera.
+const { Identity } = require('./identity');
+const identity = new Identity({ root: __dirname, registry, cameras, tracking: roomObserver.tracking, log: (s) => console.log('  ' + s) });
+roomObserver.tracking.faceStatus = (now) => identity.status(now);
+// Named studio objects found by description in the tracking camera (local OWLv2), placed on the floor plan.
+const { ObjectFinder } = require('./objects-finder');
+const finder = new ObjectFinder({ root: __dirname, cameras, tracking: roomObserver.tracking, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
+roomObserver.tracking.finderStatus = (now) => finder.status(now);
 
 // ---------- http ----------
 const PUB = path.join(__dirname, 'public');
@@ -469,7 +477,16 @@ const server = http.createServer(async (req, res) => {
           else if(d.action==='bind')roomObserver.bind(d);
           else if(d.action==='track')return json(res,roomObserver.track(d));
           else if(d.action==='bindTrack')return json(res,roomObserver.bindTrack(d));
+          else if(d.action==='identifyTrack'){identity.name(d.trackId,d.pid);return json(res,roomObserver.tracking.view());}
           else if(d.action==='bindObject')return json(res,roomObserver.bindObject(d));
+          else if(d.action==='acceptObjectMove'){
+            if(d.source==='finder'){
+              if(!roomObserver.tracking.view().running)throw Error('Start tracking to review furniture.');
+              finder.accept(d.objectId,d.at);
+              return json(res,roomObserver.tracking.view());
+            }
+            return json(res,roomObserver.acceptObjectMove(d));
+          }
           else if(d.action==='stopTracking')return json(res,roomObserver.stopTracking(d.tracker));
           else throw Error('Choose a Room action.');
         }

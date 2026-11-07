@@ -17,3 +17,27 @@
 #calibration-plan .floor-diagram{max-width:360px}#calibration-plan #test-hide,#calibration-plan #test-export,#calibration-plan .plan-inventory{display:none}
 #track-overlay .furniture rect{fill:none;stroke:#c9a7ff;stroke-dasharray:8 5}#track-overlay .furniture.bound rect{stroke:#b48cff;stroke-dasharray:none}#track-overlay .furniture text{font-size:18px}.live-object rect{fill:#c9a7ff;stroke:var(--card);stroke-width:1.5;vector-effect:non-scaling-stroke}.live-object.bound rect{fill:#9a6cf0}.live-object.last-seen rect{fill:var(--card);stroke:#c9a7ff;stroke-dasharray:3 2}.live-object text{fill:var(--fg);font-size:var(--plan-font);paint-order:stroke;stroke:var(--bg);stroke-width:3;vector-effect:non-scaling-stroke}
 #track-overlay .animal rect{fill:none;stroke:#7fe0c0;stroke-width:3;vector-effect:non-scaling-stroke}#track-overlay .animal text{font-size:18px}.live-animal circle{fill:#7fe0c0;stroke:var(--card);stroke-width:1.5;vector-effect:non-scaling-stroke}.live-animal.last-seen circle{fill:var(--card);stroke:#7fe0c0;stroke-dasharray:3 2}.live-animal text{fill:var(--fg);font-size:var(--plan-font);paint-order:stroke;stroke:var(--bg);stroke-width:3;vector-effect:non-scaling-stroke}
+
+#floor-test .floor-diagram{max-width:680px}
+
+#floor-test .test-map{max-width:640px;color:var(--dim)}
+.test-map .test-floor{fill:#1c1e20;stroke:#b4bac0;stroke-width:3}
+.test-map .plan-object{fill:#383e43;stroke:#9ca8af;stroke-width:1.2;vector-effect:non-scaling-stroke}
+.test-map .rug .plan-object{fill:url(#plan-weave);stroke:#818985}
+.test-map .chair .plan-object{fill:#43413b}
+.test-map .shelves .plan-object{fill:#282f35}
+.test-map .plan-detail{fill:none;stroke:#9ca8af;stroke-opacity:.65;stroke-width:1;vector-effect:non-scaling-stroke}
+.test-map .plan-weave-line{stroke:#a1aaa2;stroke-width:.009;opacity:.45}
+.test-map .plan-opening{stroke:#1c1e20;stroke-width:6;vector-effect:non-scaling-stroke}
+.test-map .plan-door{stroke:#a2d6ad;stroke-width:1;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
+.test-map .live-person text{font-size:calc(var(--plan-font)*.68)}
+.test-map .live-object text{display:none}
+.plan-inventory summary{cursor:pointer;color:var(--dim);margin:8px 0}
+#track-overlay .named rect{fill:none;stroke:#ffd27a;stroke-width:3;vector-effect:non-scaling-stroke}#track-overlay .named text{font-size:18px;fill:#ffd27a}
+.room-disclosure > summary{cursor:pointer;font-weight:600}
+.room-disclosure[open] > summary{margin-bottom:12px}
+#tracking-panel .room-disclosure{border-top:1px solid var(--line);padding:12px 0}
+.room-movement{max-height:12rem;overflow:auto}
+.room-disclosure > .panel{margin:14px 0 0}
+
+.test-map .live-person.rough-position circle{fill:var(--card);stroke:#e3c28f;stroke-dasharray:2 2}

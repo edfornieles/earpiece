@@ -3,3 +3,6 @@ participants
 programs
 recordings
 room-objects
+models
+.faces-venv
+public/scans/*.glb

@@ -158,7 +158,7 @@ function drawPlan(){
   let layer=svg.querySelector('#live-layer');if(!layer){layer=document.createElementNS('http://www.w3.org/2000/svg','g');layer.id='live-layer';svg.append(layer);}
   const p=plan(),u=p?Math.max(p.widthM,p.depthM)/220:0.02;
   // Each person: a dot coloured by how sure the position is, and a dashed ring showing its error radius.
-  const people=(state?.tracks||[]).filter(x=>x.floor&&(tracking_()||x.binding)).map(x=>{const c=conf(x);return `<g class="live-person ${c}${!x.visible?' last-seen':''}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})">${x.radiusM?`<circle class="ring" r="${Math.min(1.5,x.radiusM)}"/>`:''}<circle class="dot" r="${4.5*u}"/><text x="${10*u}" y="${4*u}">${esc(personName(x))}${!x.visible?' · last seen':''}</text></g>`;}).join('');
+  const people=(state?.tracks||[]).filter(x=>x.floor&&(x.visible?tracking_():x.binding)).map(x=>{const c=conf(x);return `<g class="live-person ${c}${!x.visible?' last-seen':''}${x.binding?' bound':''}" transform="translate(${x.floor[0]} ${x.floor[1]})">${x.radiusM?`<circle class="ring" r="${Math.min(1.5,x.radiusM)}"/>`:''}<circle class="dot" r="${4.5*u}"/><text x="${10*u}" y="${4*u}">${esc(personName(x))}${!x.visible?' · last seen':''}</text></g>`;}).join('');
   const marks=calibrating?pairs.map((q,i)=>q.floor?`<g class="calib" transform="translate(${q.floor[0]} ${q.floor[1]})"><circle r="${5*u}"/><text x="${7*u}" y="${-5*u}">${i+1}</text></g>`:'').join(''):'';
   const furn=(state?.objects||[]).map(o=>`<g class="live-object${o.visible?'':' last-seen'}${o.binding?' bound':''}" transform="translate(${o.floor[0]} ${o.floor[1]})"><rect x="${-5*u}" y="${-5*u}" width="${10*u}" height="${10*u}"/><text x="${8*u}" y="${4*u}">${esc(o.binding?.footprint||furnitureLabel(o.cls))}</text></g>`).join('');
   const pets=(state?.animals||[]).filter(a=>a.floor).map(a=>`<g class="live-animal${a.visible?'':' last-seen'}" transform="translate(${a.floor[0]} ${a.floor[1]})"><circle r="${5*u}"/><text x="${8*u}" y="${4*u}">${esc(a.name)}</text></g>`).join('');
@@ -188,7 +188,9 @@ function drawCoverage(svg){
 // One line per person in view (and bound people out of sight): where, and how far to trust it.
 function renderPeopleNow(){
   const el=$('people-now');if(!el)return;
-  const list=(state?.tracks||[]).filter(x=>x.visible||x.binding).sort((a,b)=>(b.visible-a.visible)||(!!b.binding-!!a.binding));
+  // When tracking is off, nobody is "in view": what is left is where people were last seen.
+  const live=!!state?.running&&state?.cameraId===camera();
+  const list=(state?.tracks||[]).map(x=>live?x:{...x,visible:false}).filter(x=>x.visible||x.binding).sort((a,b)=>(b.visible-a.visible)||(!!b.binding-!!a.binding));
   const label={sure:'sure',rough:'rough',unsure:'unsure'},how={feet:'from feet',hips:'from hips','hips (seated)':'seated',seat:'seated',head:'from head',held:'held'};
   const markup=list.map(x=>{const c=conf(x),r=x.radiusM?` ±${Math.round(x.radiusM*100)} cm`:'';return `<div class="person-row ${c}"><span class="dot"></span><div><strong>${esc(personName(x))}</strong>${x.binding?.role?` <span class="hint">· ${esc(x.binding.role)}</span>`:''}<div class="where">${x.visible?esc(x.area||'position unknown'):'out of sight · last '+esc(x.area||'unknown')}</div></div><span class="pill ${c}" title="${esc(how[x.how]||x.certainty||'')}">${x.visible&&x.floor?label[c]+r:x.visible?'no floor position':'last seen'}</span></div>`;}).join('');
   if(el.dataset.markup!==markup){el.innerHTML=markup;el.dataset.markup=markup;}
@@ -206,7 +208,6 @@ function beginCalibration(){
   if(!plan())return toast('Save the measured floor plan first.');
   calibrating=true;pairs=(savedCalibration()?.points||[]).map(q=>({...q}));awaiting='image';
   // Bring the plan next to the picture while calibrating, so both clicks are on screen together.
-  const planEl=$('floor-plan');home={parent:planEl.parentNode,next:planEl.nextSibling};$('calibration-plan').append(planEl);
   if($('live-picture').hidden)$('view-live').click();
   renderPanel();drawLive();
 }
@@ -240,7 +241,7 @@ function renderPanel(){
   const srv=serverOn(),on=running||srv,elsewhere=!on&&state?.running&&state?.pose?.on!==true,pz=state?.pose;
   $('tracking-state').textContent=srv?(pz.error?'Tracking · '+pz.error:pz.device?`Tracking · ${pz.fps||'…'} fps · ${pz.source==='full'?'full resolution':'preview'}`:'Tracking · loading model…'):running?'Tracking in this browser':elsewhere?'Tracking on another screen':'Tracking off';
   $('tracking-state').classList.toggle('on',on);
-  $('track-start').disabled=on||calibrating||elsewhere;$('track-stop').disabled=!on;$('calibrate').disabled=calibrating;
+  $('track-start').disabled=on||calibrating||elsewhere;$('track-stop').disabled=!on;$('track-start').hidden=on;$('track-stop').hidden=!on;document.body.classList.toggle('rm-live',on);document.body.classList.toggle('rm-calibrating',calibrating);$('calibrate').disabled=calibrating;
   $('calibration-state').innerHTML=cal?`Floor calibration: ${cal.points.length} points, saved ${esc(new Date(cal.savedAt).toLocaleString())}. ${cal.validation==='holdout'?`Check point error ${Math.round(cal.maxErrorM*100)} cm.`:'Add a separate check point to measure accuracy.'} <label class="check inline"><input type="checkbox" id="show-outline" ${showOutline?'checked':''}> Show the plan on the live picture</label> <button id="remove-calibration" class="link">Remove</button>`:savedCalibration()?.needsReview?'Floor positions paused. Recalibrate to align the floor plan with this camera view. Your previous anchors are saved.':'This camera has no floor calibration yet. Tracking will show people in the picture but cannot place them on the plan.';
   $('show-outline')?.addEventListener('change',e=>{showOutline=e.target.checked;drawLive();});
   $('remove-calibration')?.addEventListener('click',removeCalibration);
@@ -295,7 +296,9 @@ function renderPanel(){
     `<div class="room-item"><strong>${esc(name)} · ${proposal.from?'proposed move '+proposal.distanceM.toFixed(2)+' m':'proposed placement'}</strong><p class="hint">${proposal.from?proposal.from.map(v=>v.toFixed(2)).join(', ')+' → ':''}${proposal.to.map(v=>v.toFixed(2)).join(', ')} m</p><button data-move-id="${esc(id)}" data-move-at="${proposal.at}" data-move-source="${source||'tracker'}">Apply to plan</button></div>`
   ).join('');
   if(review.dataset.markup!==proposalMarkup){review.innerHTML=proposalMarkup;review.dataset.markup=proposalMarkup;}
-  $('movement').innerHTML=(state?.movement||[]).slice().reverse().map(m=>`<p><strong>${esc(t(m.at))}</strong> · ${esc(m.who)}${m.object?` moved ${m.distanceM} m`:''}: ${m.from?esc(m.from)+' → ':''}${esc(m.to)}</p>`).join('')||'No movement yet.';
+  // Anonymous detections dropping out of view are noise; named people, objects and arrivals are not.
+  const feed=(state?.movement||[]).filter(m=>!(m.to==='out of sight'&&/^Track /.test(m.who))).filter((m,i,a)=>{const p=a[i-1];return !p||p.who!==m.who||p.from!==m.from||p.to!==m.to;}).slice().reverse().slice(0,30).map(m=>`<p><time>${esc(t(m.at).replace(/:\d\d(?=\D*$)/,''))}</time><span><b>${esc(m.who)}</b>${m.object?` moved ${m.distanceM} m`:''} ${m.from?`<i>${esc(m.from)}</i> → `:''}${esc(m.to)}</span></p>`).join('')||'<p class="rm-dim">No movement yet.</p>';
+  if($('movement').dataset.markup!==feed){$('movement').innerHTML=feed;$('movement').dataset.markup=feed;}
   drawPlan();
 }
 function renderObjects(){

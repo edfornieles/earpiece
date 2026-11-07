@@ -22,7 +22,7 @@ class PoseTracker {
     const cam = this.cameras.find((c) => c.id === cameraId); if (!cam) throw Error('Choose a camera.');
     const t = this.room.tracking;
     if (t.owner && t.owner !== TRACKER && Date.now() - t.at < 5000) throw Error('Tracking is already running on another screen. Stop it there first.');
-    this.on = true; this.cameraId = cameraId; this.error = ''; this.seq = 0; this.lastFrame = null;
+    this.on = true; this.startedAt = Date.now(); this.fullAt = 0; this.cameraId = cameraId; this.error = ''; this.seq = 0; this.lastFrame = null;
     this.stats = { ms: 0, fps: 0, n: 0, since: Date.now(), source: '' };
     if (this.identity) this.identity.fullFps = FULL_FPS;
     this.spawn(); this.timer ||= setInterval(() => this.tick(), 60);
@@ -51,7 +51,10 @@ class PoseTracker {
   frame(now) {
     const cam = this.cameras.find((c) => c.id === this.cameraId); if (!cam) return null;
     const full = this.identity?.fullFrames?.(cam);
-    if (full?.frame && now - full.at < FRESH_FULL_MS) return { jpeg: full.frame, source: 'full' };
+    if (full?.frame && now - full.at < FRESH_FULL_MS) { this.fullAt = now; return { jpeg: full.frame, source: 'full' }; }
+    // Switching picture size restarts the tracker's ids, so stay on the full stream through short gaps
+    // and give it a few seconds to start before falling back to the preview.
+    if (now - (this.fullAt || 0) < 5000 || now - this.startedAt < 6000) return null;
     if (cam.frame && now - cam.frameAt < FRESH_PREVIEW_MS) return { jpeg: cam.frame, source: 'preview' };
     return null;
   }

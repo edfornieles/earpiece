@@ -173,7 +173,7 @@ class RoomObserver{
     const cal=camId&&cals[camId];if(!plan||!cal?.H||cal.needsReview)return null;
     const key=JSON.stringify([cal.H,cal.camera,plan.widthM,plan.depthM,plan.footprints]);
     this._coverage=this._coverage||new Map();const hit=this._coverage.get(camId);if(hit?.key===key)return hit.value;
-    const c=require('./positioning').coverage({H:cal.H,cam:cal.camera,plan,step:0.25});
+    const c=require('./positioning').coverage({H:cal.H,cam:cal.camera,plan,step:0.15});
     // Named areas that are mostly out of sight, so Mother avoids relying on tracking there.
     const byArea=new Map();for(const cell of c.cells){if(cell.state==='furniture')continue;const a=areaFor(plan,[cell.x,cell.y]);const e=byArea.get(a)||{n:0,blind:0};e.n++;if(!['feet','body only'].includes(cell.state))e.blind++;byArea.set(a,e);}
     const blindAreas=[...byArea].filter(([,e])=>e.n>=2&&e.blind/e.n>=0.6).map(([a])=>a).filter(a=>a&&a!=='unknown');

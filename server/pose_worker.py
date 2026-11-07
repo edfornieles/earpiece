@@ -42,8 +42,9 @@ def merge(people):
         for q in out:
             small = min(p['box'][2] * p['box'][3], q['box'][2] * q['box'][3]) or 1
             a, b = shoulders(p), shoulders(q)
-            near = a and b and abs(a[0] - b[0]) + abs(a[1] - b[1]) < 0.25 * max(p['box'][2], q['box'][2])
-            if inter(p['box'], q['box']) / small > 0.6 and near:
+            # Same body if the shoulders coincide; with no shoulders to compare, a box mostly inside the other.
+            near = abs(a[0] - b[0]) + abs(a[1] - b[1]) < 0.35 * max(p['box'][2], q['box'][2]) if a and b else inter(p['box'], q['box']) / small > 0.8
+            if inter(p['box'], q['box']) / small > 0.5 and near:
                 q['kp'] = [x if x[2] >= y[2] else y for x, y in zip(p['kp'], q['kp'])]
                 x0, y0 = min(p['box'][0], q['box'][0]), min(p['box'][1], q['box'][1])
                 x1, y1 = max(p['box'][0] + p['box'][2], q['box'][0] + q['box'][2]), max(p['box'][1] + p['box'][3], q['box'][1] + q['box'][3])

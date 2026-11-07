@@ -29,29 +29,25 @@ function renderFloorPlan(plan){
  const {widthM:w,depthM:d,heightM:h}=plan;
  const unit=Math.max(w,d)/220;
  testPosition={x:w/2,y:d*((plan.footprints?.length)?0.75:0.5),visible:true};
- const doorMarks=plan.doors.filter(door=>door.wall==='bottom'&&door.offsetM===null&&/right/i.test(door.position)).map(()=>`<text x="${w}" y="${d+14*unit}" text-anchor="end">Door near here ↗</text>`).join('');
- const footprints=plan.footprints||[];
+ // A clean architectural plan: floor, walls named along their edges, furniture labelled, doors as openings.
+ const footprints=plan.footprints||[],wn=plan.wallNames||{},pad=Math.max(w,d)*0.09,fs=Math.max(w,d)*0.026;
  const furniture=[...footprints].sort((a,b)=>(a.heightM??1)-(b.heightM??1)).map(item=>{
   const xs=item.points.map(p=>p[0]),ys=item.points.map(p=>p[1]);
   const x=Math.min(...xs),y=Math.min(...ys),width=Math.max(...xs)-x,depth=Math.max(...ys)-y;
-  const kind=/rug/i.test(item.name)?'rug':/shel/i.test(item.name)?'shelves':/chair/i.test(item.name)?'chair':/desk|bench|table/i.test(item.name)?'surface':'other';
+  const kind=/rug/i.test(item.name)?'rug':/shel/i.test(item.name)?'shelves':/chair|stool/i.test(item.name)?'chair':/desk|bench|table/i.test(item.name)?'surface':'other';
   const points=item.points.map(p=>p.join(',')).join(' ');
-  let detail='';
-  if(kind==='shelves') detail=Array.from({length:5},(_,i)=>`<path class="plan-detail" d="M${x+width*(i+1)/6} ${y}v${depth}"/>`).join('');
-  return `<g class="plan-symbol ${kind}" aria-label="${esc(item.name)}"><title>${esc(item.name)}${item.estimated?' · estimated location':''}</title><polygon class="plan-object${item.estimated?' estimated':''}" points="${points}"/>${detail}</g>`;
+  const detail=kind==='shelves'?Array.from({length:5},(_,i)=>`<path class="plan-detail" d="M${x+width*(i+1)/6} ${y}v${depth}"/>`).join(''):'';
+  return `<g class="plan-symbol ${kind}"><title>${esc(item.name)}${item.heightM!=null?' · '+Math.round(item.heightM*100)+' cm high':''}${item.estimated?' · estimated':''}</title><polygon class="plan-object${item.estimated?' estimated':''}" points="${points}"/>${detail}</g>`;
  }).join('');
+ const labels=footprints.filter(f=>!/rug/i.test(f.name)).map(f=>{const xs=f.points.map(p=>p[0]),ys=f.points.map(p=>p[1]),cx=(Math.min(...xs)+Math.max(...xs))/2,cy=(Math.min(...ys)+Math.max(...ys))/2,small=Math.max(...xs)-Math.min(...xs)<0.7;return `<text class="plan-label" x="${cx}" y="${small?Math.max(...ys)+fs*1.1:cy+fs*0.35}" text-anchor="middle">${esc(f.name)}</text>`;}).join('');
  const doors=plan.doors.filter(door=>door.offsetM!==null).map(door=>{
   const a=door.offsetM,b=a+door.widthM,horizontal=door.wall==='top'||door.wall==='bottom',edge=door.wall==='bottom'?d:door.wall==='right'?w:0;
   const line=`x1="${horizontal?a:edge}" y1="${horizontal?edge:a}" x2="${horizontal?b:edge}" y2="${horizontal?edge:b}"`;
-  return `<g><title>${esc(door.name)}</title><line class="plan-opening" ${line}/><line class="plan-door" ${line}/></g>`;
+  return `<g><title>${esc(door.name)} · ${esc(door.widthM)} m</title><line class="plan-opening" ${line}/><line class="plan-door" ${line}/></g>`;
  }).join('');
- const inventory=footprints.map(o=>`<li><strong>${esc(o.name)}</strong>${o.estimated?' · estimated placement or outline':''}${o.heightM!=null?' · '+esc(Math.round(o.heightM*100))+' cm high':''}${o.notes?' — '+esc(o.notes):''}</li>`).join('');
- $('floor-plan').innerHTML=`<svg id="test-map" class="floor-diagram test-map" tabindex="0" role="img" aria-label="Studio test plan. Click to place your marker or use arrow keys." style="--plan-font:${10*unit}px" viewBox="${-12*unit} ${-22*unit} ${w+24*unit} ${d+49*unit}"><defs><pattern id="plan-weave" width=".085" height=".085" patternUnits="userSpaceOnUse"><path d="M0 .085L.085 0" class="plan-weave-line"/></pattern></defs><rect class="test-floor" x="0" y="0" width="${w}" height="${d}"/><text x="${w/2}" y="${-8*unit}" text-anchor="middle">${esc(w)} m</text><text x="0" y="${d+25*unit}">${esc(d)} m · ceiling ${esc(h)} m</text><circle class="plan-origin" cx="0" cy="0" r="${3*unit}"/>${doorMarks}${furniture}${doors}<g id="test-marker"><circle r="${7*unit}"/><text x="${10*unit}" y="${-6*unit}">Test marker</text></g></svg>${plan.doors.map(door=>`<p class="hint"><strong>${esc(door.name)} · ${esc(door.widthM)} m</strong><br>${esc(door.wall)} wall${door.position?' · '+esc(door.position):''}${door.offsetM===null?' · exact offset unmeasured':''}</p>`).join('')}${inventory?`<details class="plan-inventory"><summary>Plan key and furniture notes</summary><ul class="hint">${inventory}</ul></details>`:''}<details class="room-disclosure"><summary>Rehearsal marker</summary><p class="hint">Click the floor plan or use arrow keys to place a test marker.</p><p id="test-position" class="hint" role="status"></p><div class="row"><button id="test-hide">Mark out of sight</button><button id="test-export">Download test log</button></div><p id="test-count" class="hint actions"></p></details>`;
- const wallNames=plan.wallNames||{};
- const wallLabels=['top','right','bottom','left'].filter(side=>wallNames[side]);
- if(wallLabels.length){
-  $('floor-plan').insertAdjacentHTML('afterbegin',`<p class="hint">${wallLabels.map(side=>`${side[0].toUpperCase()+side.slice(1)} · ${esc(wallNames[side])}`).join(' / ')}</p>`);
- }
+ const wall=(side,x,y,rot)=>wn[side]?`<text class="plan-wall" x="${x}" y="${y}" text-anchor="middle"${rot?` transform="rotate(${rot} ${x} ${y})"`:''}>${esc(wn[side])}</text>`:'';
+ const walls=wall('top',w/2,-pad*0.35)+wall('bottom',w/2,d+pad*0.6)+wall('left',-pad*0.4,d/2,-90)+wall('right',w+pad*0.4,d/2,90);
+ $('floor-plan').innerHTML=`<svg id="test-map" class="floor-diagram test-map" tabindex="0" role="img" aria-label="Studio floor plan, ${esc(w)} by ${esc(d)} metres" style="--plan-font:${fs}px" viewBox="${-pad} ${-pad} ${w+2*pad} ${d+2*pad}" preserveAspectRatio="xMidYMid meet"><defs><pattern id="plan-weave" width=".085" height=".085" patternUnits="userSpaceOnUse"><path d="M0 .085L.085 0" class="plan-weave-line"/></pattern></defs><rect class="test-floor" x="0" y="0" width="${w}" height="${d}"/>${furniture}${doors}<g class="plan-labels">${labels}</g>${walls}<text class="plan-dims" x="${w}" y="${d+pad*0.6}" text-anchor="end">${esc(w)} × ${esc(d)} m</text><g id="test-marker"><circle r="${fs*0.6}"/><text x="${fs}" y="${-fs*0.5}">Test marker</text></g></svg><div class="plan-rehearsal" hidden><p id="test-position"></p><button id="test-hide"></button><button id="test-export"></button><p id="test-count"></p></div>`;
  const svg=$('test-map');
  const place=(x,y)=>{testPosition={x,y,visible:true};logTestPosition('placed');};
  svg.onclick=e=>{
@@ -79,7 +75,7 @@ function render(){
    .find(id => room.cameras.some(camera => camera.id === id)) || room.cameras[0]?.id || '';
  const options=room.cameras.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}${c.live?'':' — no live picture'}</option>`).join('');if($('camera').innerHTML!==options)$('camera').innerHTML=options;$('camera').value=selected;
  if(!metadataDirty){$('room-name').value=room.name;$('room-notes').value=room.notes;$('share').checked=room.shareWithAgents;dimensionIds.forEach((id,i)=>{$(id).value=room.floorPlan?.[['widthM','depthM','heightM'][i]]??'';});}renderFloorPlan(room.floorPlan);
- $('notice').textContent=room.error;
+ $('vision-error').textContent=room.error?'Last analysis failed: '+room.error:'';
  $('observer-state').textContent=(room.busy||busy)?'Analysing a frame…':room.enabled?'Observer on':'Observer off';
  $('observe').disabled=busy||room.busy||room.enabled||!selected;$('start').disabled=busy||room.busy||room.enabled||!selected;$('stop').disabled=!(room.enabled||room.busy||busy);
  const current=selectedObservation();$('view-analysis').disabled=!current;$('draw').disabled=!current;

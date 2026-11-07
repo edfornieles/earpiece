@@ -122,6 +122,7 @@ async function loadScan() {
     renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, -1, 0), (plan?.heightM || 3) - 0.15)];
     // Off by default: a scan is a snapshot of how the room once was. Switch it on to check alignment or for reference.
     scanGroup.visible = false; renderer.clippingPlanes = [];
+    if (new URLSearchParams(location.search).get('scan') === '1') document.getElementById('v-scan').click();
     const b = document.getElementById('v-scan'); b.hidden = false; b.title = meta.label; b.textContent = `Scan (${meta.label.replace(/^Scan, /, '')})`;
   } catch { /* no scan for this room */ }
 }
@@ -143,7 +144,8 @@ function person(t) {
 }
 function renderLive(tr) {
   dispose(liveGroup); if (!tr || !plan) return;
-  for (const t of tr.tracks || []) if (t.floor) liveGroup.add(person(t));
+  // Unnamed people only while tracking sees them; named people also where they were last seen.
+  for (const t of tr.tracks || []) if (t.floor && (t.binding || (tr.running && t.visible))) liveGroup.add(person(tr.running ? t : { ...t, visible: false }));
   for (const o of tr.finder?.objects || []) {
     if (!o.floor) continue;
     const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.09), new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0x332200 }));
@@ -158,7 +160,7 @@ function renderLive(tr) {
   }
 }
 function renderList(tr) {
-  const people = (tr?.tracks || []).filter((t) => t.visible || t.binding);
+  const people = (tr?.tracks || []).filter((t) => t.binding || (tr.running && t.visible));
   const lines = [
     ...people.map((t) => `<p><span class="dot" style="background:#${(COLORS[t.visible ? t.certainty : 'last seen'] ?? 0x999999).toString(16).padStart(6, '0')}"></span>${esc(t.binding?.label || t.id)} — ${esc(t.area)}${t.visible ? '' : ' (last seen)'}</p>`),
     ...(tr?.finder?.objects || []).filter((o) => o.visible).map((o) => `<p><span class="dot" style="background:#ffd27a"></span>${esc(o.name)}${o.area ? ' — ' + esc(o.area) : ''}</p>`),
@@ -180,12 +182,14 @@ function setView(v, keep) {
 document.getElementById('v-persp').onclick = () => setView('persp');
 document.getElementById('v-top').onclick = () => setView('top');
 document.getElementById('v-cam').onclick = () => setView('cam');
+// Links can open a particular view: room3d.html?view=top (persp, top, cam) and &scan=1 to show the scan.
+{ const v = new URLSearchParams(location.search).get('view'); if (['persp', 'top', 'cam'].includes(v)) setTimeout(() => document.getElementById('v-' + v).click(), 0); }
 document.getElementById('v-coverage').onclick = (e) => { showCoverage = !showCoverage; coverageGroup.visible = showCoverage; e.target.classList.toggle('on', showCoverage); };
 
 // ---------- loop ----------
 async function poll() {
   try {
-    data = await api('room');
+    data = await api('room', undefined, { allowStatusError: true });
     const key = JSON.stringify([data.floorPlan, Object.fromEntries(Object.entries(data.calibrations || {}).map(([k, c]) => [k, [c.H, c.camera]]))]);
     if (key !== planKey) { planKey = key; buildRoom(data); }
     const tr = data.tracking; renderLive(tr); renderList(tr);

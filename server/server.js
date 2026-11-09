@@ -1009,7 +1009,10 @@ async function lookAt(id, question) {
   const { me } = participantTrack(id, v, now);
   if (!me?.visible || !me.box) return 'I looked, but the participant is not in the camera picture right now.';
   const t0 = Date.now();
-  try { const answer = await ai.look(await cropJpeg(frame, me.box), question); logEvent('look', { id, question, answer, ms: Date.now() - t0 }); return answer; }
+  const hints = bodyNotes(me.kp), crop = await cropJpeg(frame, me.box);
+  // Keep each close-up with the session, so what Mother saw can be checked afterwards.
+  let file = ''; try { const dir = path.join(SESSION_DIR, 'looks'); fs.mkdirSync(dir, { recursive: true }); file = `looks/${clock().replace('.', '_')}.jpg`; fs.writeFileSync(path.join(SESSION_DIR, file), crop); } catch {}
+  try { const answer = await ai.look(crop, question, hints); logEvent('look', { id, question, answer, hints, file, ms: Date.now() - t0 }); return answer; }
   catch (e) { logEvent('look', { id, question, error: e.message }); return 'I tried to look but the camera analysis failed.'; }
 }
 // The model is asked for {"action","text","reason"}; if it answers in prose anyway, speak the prose
@@ -1021,6 +1024,15 @@ function parseDecision(raw) {
   if (d) return null;
   if (!body || /^\[?\s*(silence|wait)\s*\]?$/i.test(body)) return { action: 'wait', reason: 'stayed quiet' };
   return { action: 'respond', text: body.slice(0, 600), reason: 'answered (free text)' };
+}
+// What the body-point detector can and cannot see: which way they face, whether hands are in view.
+function bodyNotes(kp) {
+  if (!Array.isArray(kp) || kp.length < 11) return '';
+  const on = (i) => kp[i] && kp[i][2] >= 0.4, any = (...i) => i.some(on);
+  const face = any(0, 1, 2), shoulders = any(5, 6), ears = any(3, 4);
+  const facing = face ? 'facing the camera or turned partly towards it' : shoulders || ears ? 'facing away from the camera (back to it)' : 'facing unknown';
+  const hands = any(9, 10) ? `${on(9) && on(10) ? 'both wrists' : 'one wrist'} visible` : 'wrists not visible';
+  return `${facing}; ${hands}; ${any(7, 8) ? 'elbows visible' : 'elbows not visible'}`;
 }
 function perceptionFor(id) {
   const v = roomObserver.tracking.view(), now = Date.now();
@@ -1034,7 +1046,7 @@ function perceptionFor(id) {
   const ago = Math.round((now - me.lastSeenAt) / 1000), cm = me.radiusM != null ? Math.round(me.radiusM * 100) : null;
   const where = me.floor ? `${me.area && me.area !== 'unknown' ? me.area : 'in the room'} (x ${me.floor[0].toFixed(1)} m, y ${me.floor[1].toFixed(1)} m)` : 'position unknown';
   if (!me.visible) return `The participant (${how}) is NOT visible now; last seen ${ago} s ago ${where}. Treat their position as unknown.` + blindNote;
-  const pose = /seat/i.test(me.how || '') ? 'seated' : 'standing or moving';
+  const pose = (/seat/i.test(me.how || '') ? 'seated' : 'standing or moving') + (bodyNotes(me.kp) ? ', ' + bodyNotes(me.kp) : '');
   return `The participant (${how}) is visible, ${pose}, ${where}; confidence ${me.confidence || 'unsure'}${cm != null ? ` ±${cm} cm` : ''}. Name an exact spot only if confidence is sure; if rough, name the area only; if unsure, say you can't see them clearly and ask.` + blindNote;
 }
 function programContext(id, context) {

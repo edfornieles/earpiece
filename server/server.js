@@ -351,6 +351,12 @@ roomObserver.tracking.finderStatus = (now) => finder.status(now);
 const { PoseTracker } = require('./pose-tracker');
 const pose = new PoseTracker({ root: __dirname, cameras, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
 roomObserver.tracking.poseStatus = () => pose.status();
+const { CameraViews } = require('./camera-views');
+const cameraViews = new CameraViews({ root: __dirname, cameras, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
+pose.paused = (id) => cameraViews.moving(id);
+roomObserver.tracking.cameraStatus = () => cameraViews.statusAll();
+roomObserver.h.viewCalibrated = (cam, vid) => cameraViews.refreshRef(cam, vid);
+setInterval(() => cameraViews.tick(), 400);
 process.on('exit', () => pose.stop());
 
 // ---------- http ----------
@@ -500,6 +506,16 @@ const server = http.createServer(async (req, res) => {
             return json(res,roomObserver.acceptObjectMove(d));
           }
           else if(d.action==='trackingView')return json(res,roomObserver.tracking.view());
+          else if(d.action==='camera'){   // pan/tilt positions: {op:'nudge'|'save'|'goto'|'remove'|'follow'|'probe', cameraId, …}
+            const id=String(d.cameraId||'');
+            if(d.op==='nudge')await cameraViews.nudge(id,Number(d.dx),Number(d.dy));
+            else if(d.op==='save')await cameraViews.save(id,d.name);
+            else if(d.op==='goto')await cameraViews.goto(id,String(d.viewId||''));
+            else if(d.op==='remove')await cameraViews.remove(id,String(d.viewId||''));
+            else if(d.op==='follow')cameraViews.setFollow(id,{on:d.on,wanted:d.wanted});
+            else if(d.op==='probe')await cameraViews.probe(id);
+            else throw Error('Choose a camera action.');
+          }
           else if(d.action==='serverTracking'){if(d.on)pose.start(String(d.cameraId||''));else pose.stop();return json(res,roomObserver.tracking.view());}
           else if(d.action==='stopTracking'){if(d.tracker==='server')pose.stop();return json(res,roomObserver.stopTracking(d.tracker));}
           else throw Error('Choose a Room action.');

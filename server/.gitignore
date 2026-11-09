@@ -7,3 +7,4 @@ models
 .faces-venv
 public/scans/*.glb
 .plan-before-*.json
+.camera-views

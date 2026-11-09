@@ -59,7 +59,7 @@ class PoseTracker {
     return null;
   }
   tick(now = Date.now()) {
-    if (!this.on || !this.proc || !this.device || this.busy) return;
+    if (!this.on || !this.proc || !this.device || this.busy || this.paused?.(this.cameraId)) return;
     const f = this.frame(now); if (!f || f.jpeg === this.lastFrame) return;
     this.lastFrame = f.jpeg; this.busy = true; this.stats.source = f.source; this.sentAt = now;
     const id = ++this.seq;

@@ -326,7 +326,7 @@ class Tracking{
   view(now=Date.now()){
     return {running:this.viewIsFresh(now),owner:this.owner,cameraId:this.cameraId,at:this.at,
       tracks:[...this.tracks.values()].map(t=>({...t,binding:this.bindings.get(t.id)||null})),
-      movement:this.movement.slice(-20),suggestions:this.suggestions(now),faces:this.faceStatus?.(now)||null,finder:this.finderStatus?.(now)||null,pose:this.poseStatus?.()||null,
+      movement:this.movement.slice(-20),suggestions:this.suggestions(now),faces:this.faceStatus?.(now)||null,finder:this.finderStatus?.(now)||null,pose:this.poseStatus?.()||null,cameraControl:this.cameraStatus?.()||null,
       animals:[...this.animals.values()],
       objects:[...this.objects.values()].filter(o=>o.binding||o.sightings>=OBJECT_CONFIRM).map(o=>({id:o.id,cls:o.cls,floor:o.floor.map(v=>Math.round(v*100)/100),visible:!!o.visible,blocked:!!o.blocked,score:o.score,box:o.box,lastSeenAt:o.lastSeenAt,proposal:this.viewIsFresh(now)&&o.visible&&o.binding?o.proposal:null,binding:o.binding&&{footprint:o.binding.footprint}})),
       objectSuggestions:this.plan?this.objectSuggestions(this.plan):[]};

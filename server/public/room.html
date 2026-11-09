@@ -30,7 +30,7 @@
      <figcaption id="coverage-key" class="rm-key"><span><i class="k-sure"></i>sure</span><span><i class="k-rough"></i>rough</span><span><i class="k-unsure"></i>unsure</span><span class="rm-key-gap"><i class="k-body"></i>body only</span><span><i class="k-blind"></i>not seen</span></figcaption>
     </figure>
     <figure class="rm-pane rm-follow" id="follow"><canvas id="follow-canvas" aria-label="Follow view: the camera picture cropped around one person"></canvas>
-     <figcaption class="rm-follow-bar"><label>Follow <select id="follow-who"><option value="auto">Auto</option></select></label><span id="follow-note" class="rm-dim"></span></figcaption>
+     <figcaption class="rm-follow-bar"><label>Follow <select id="follow-who"><option value="auto">Auto</option></select></label><label class="rm-check" hidden><input type="checkbox" id="camera-follow"> Turn camera to follow <span id="camera-follow-note" class="rm-dim"></span></label><span id="follow-note" class="rm-dim"></span></figcaption>
     </figure>
     <figure class="rm-pane rm-cam"><div id="picture"><img id="live-picture" alt="Live camera preview"><img id="analysed-picture" alt="The exact camera frame sent for analysis" hidden><svg id="track-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="People found by live tracking"></svg><svg id="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" hidden aria-label="Approximate object and person regions"></svg><div id="picture-empty" hidden>No live picture. Check the camera on Screens.</div></div></figure>
    </div>
@@ -51,6 +51,14 @@
   <header class="rm-drawer-head"><div class="rm-seg" role="tablist"><button role="tab" data-tab="calibration" aria-selected="true">Calibration</button><button role="tab" data-tab="room" aria-selected="false">Room</button><button role="tab" data-tab="vision" aria-selected="false">Vision</button></div><button class="rm-btn" id="close-setup" aria-label="Close setup">Close</button></header>
 
   <section data-panel="calibration">
+   <section id="camera-positions" class="rm-positions" hidden>
+    <h3>Camera positions</h3><p id="position-state" class="rm-dim"></p>
+    <div class="rm-aim"><div class="rm-pad" aria-label="Aim the camera"><button class="rm-btn nudge" data-dir="0,1" aria-label="Tilt up">▲</button><button class="rm-btn nudge" data-dir="-1,0" aria-label="Pan left">◀</button><button class="rm-btn nudge" data-dir="1,0" aria-label="Pan right">▶</button><button class="rm-btn nudge" data-dir="0,-1" aria-label="Tilt down">▼</button></div>
+     <label>Step <select id="nudge-size"><option value="small">Small</option><option value="large">Large</option></select></label></div>
+    <ul id="position-list" class="rm-pos-list"></ul>
+    <div class="rm-row"><input id="position-name" maxlength="40" placeholder="Name this view, e.g. Armchair"><button id="position-save" class="rm-btn">Save this view</button></div>
+    <p id="position-calibrate-note" class="rm-warn"></p>
+   </section>
    <h3>Floor calibration</h3><div id="calibration-state" class="rm-dim"></div>
    <button id="calibrate" class="rm-btn rm-wide">Calibrate camera to floor</button>
    <p class="rm-dim">Click a floor point in the picture, then the same point on the plan. Repeat at least four times.</p>
@@ -83,4 +91,4 @@
  </aside>
 </main>
 <div id="toast" role="status"></div>
-<script src="setup.js"></script><script src="room.js"></script><script src="room-tracking.js"></script><script src="room-layout.js"></script><script src="follow-core.js"></script><script src="room-follow.js"></script><script src="nav.js"></script></body></html>
+<script src="setup.js"></script><script src="room.js"></script><script src="room-tracking.js"></script><script src="room-layout.js"></script><script src="follow-core.js"></script><script src="room-follow.js"></script><script src="room-camera.js"></script><script src="nav.js"></script></body></html>

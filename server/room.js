@@ -1,5 +1,7 @@
 // Studio/gallery observer. Camera frames are held in memory; only reviewed room metadata is persisted.
 const fs=require('fs'),crypto=require('crypto');
+const mul3=(A,B)=>[0,1,2].flatMap(r=>[0,1,2].map(c=>A[r*3]*B[c]+A[r*3+1]*B[3+c]+A[r*3+2]*B[6+c]));
+function inv3(M){const [a,b,c,d,e,f,g,h,i]=M,A=e*i-f*h,B=-(d*i-f*g),C=d*h-e*g,det=a*A+b*B+c*C;return [A,-(b*i-c*h),b*f-c*e,B,a*i-c*g,-(a*f-c*d),C,-(a*h-b*g),a*e-b*d].map(v=>v/det);}
 const {Tracking,calibrate,areaFor}=require('./tracking');
 const text=(v,max=1000)=>String(v??'').trim().slice(0,max);
 const obj=properties=>({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
@@ -61,13 +63,33 @@ class RoomObserver{
   constructor(file,hooks={}){
     this.file=file;this.h=hooks;this.config={revision:0,name:'Studio',notes:'',shareWithAgents:false,floorPlan:null,landmarks:[],calibrations:{}};
     try{this.config={...this.config,...JSON.parse(fs.readFileSync(file,'utf8'))};}catch{}
-    this.latest=null;this.history=[];this.frames=new Map();this.enabled=false;this.busy=false;this.error='';this.serial=0;this.interval=10;this.cameraId='';this.bindings=[];this.lastAttempt=0;this.nextAt=0;
+    this.active={};this.latest=null;this.history=[];this.frames=new Map();this.enabled=false;this.busy=false;this.error='';this.serial=0;this.interval=10;this.cameraId='';this.bindings=[];this.lastAttempt=0;this.nextAt=0;
     this.tracking=new Tracking({event:(t,d)=>this.h.event?.(t,d),maxPhones:()=>this.h.maxPhones?.()||8,moveFootprint:(name,delta)=>this.moveFootprint(name,delta)});
   }
   camera(id){const cam=this.h.cameras().find(c=>c.id===id);if(!cam)throw Error('Choose an available camera.');return cam;}
   notify(){this.h.change?.(this.view());}
+  // ---- camera positions (pan/tilt presets), each with its own floor calibration ----
+  // While a position is active its calibration replaces the camera's saved one, corrected by how far
+  // the picture moved from that position's reference picture (G: reference picture → current picture).
+  // While the camera is turning there is no calibration at all, so nobody is placed from a moving picture.
+  cals(){
+    const out={...(this.config.calibrations||{})};
+    for(const [cam,a] of Object.entries(this.active)){
+      if(a.moving||a.correction?.bad){delete out[cam];continue;}
+      const v=(this.config.cameraViews?.[cam]||[]).find(x=>x.id===a.viewId);
+      if(!v?.calibration){delete out[cam];continue;}
+      const H=a.G?mul3(v.calibration.H,inv3(a.G)):v.calibration.H;
+      out[cam]={...v.calibration,H,camera:v.calibration.camera||this.config.calibrations?.[cam]?.camera,position:v.name};
+    }
+    return out;
+  }
+  activeView(){return Object.fromEntries(Object.entries(this.active).map(([cam,a])=>[cam,{viewId:a.viewId,moving:!!a.moving,correction:a.correction||null}]));}
+  setActive(cam,viewId,{G=null,correction=null}={}){this.active[cam]={viewId,G,correction,moving:false};this.notify();}
+  setMoving(cam,moving){this.active[cam]={...(this.active[cam]||{}),moving};this.notify();}
+  clearActive(cam){delete this.active[cam];this.notify();}
+  saveViews(cam,list){this.config={...this.config,revision:this.config.revision+1,cameraViews:{...(this.config.cameraViews||{}),[cam]:list}};this.persist();this.notify();return this.view();}
   persist(){const tmp=this.file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(this.config,null,2));fs.renameSync(tmp,this.file);}
-  view(){return {...this.config,enabled:this.enabled,busy:this.busy,error:this.error,cameraId:this.cameraId,interval:this.interval,nextAt:this.nextAt,latest:this.latest,bindings:this.bindings,tracking:this.tracking.view(),coverage:this.coverageAll(),history:this.history.slice(-12).map(o=>({id:o.id,cameraId:o.cameraId,capturedAt:o.capturedAt,analysedAt:o.analysedAt,summary:o.summary})),cameras:this.h.cameras().map(c=>({...c.status(),frameAt:c.frameAt}))};}
+  view(){return {...this.config,calibrations:this.cals(),savedCalibrations:this.config.calibrations||{},cameraViews:this.config.cameraViews||{},activeViews:this.activeView(),enabled:this.enabled,busy:this.busy,error:this.error,cameraId:this.cameraId,interval:this.interval,nextAt:this.nextAt,latest:this.latest,bindings:this.bindings,tracking:this.tracking.view(),coverage:this.coverageAll(),history:this.history.slice(-12).map(o=>({id:o.id,cameraId:o.cameraId,capturedAt:o.capturedAt,analysedAt:o.analysedAt,summary:o.summary})),cameras:this.h.cameras().map(c=>({...c.status(),frameAt:c.frameAt}))};}
   save(input){
     if(input.revision!==this.config.revision)throw Error('The room was edited elsewhere. Reload it before saving.');
     const next={...this.config,revision:this.config.revision+1};
@@ -83,7 +105,15 @@ class RoomObserver{
       next.landmarks=existing?next.landmarks.map(l=>l.id===existing.id?entry:l):[...next.landmarks,entry];
       if(next.landmarks.length>100)throw Error('Keep the room inventory below 100 objects.');
     }
-    if(input.calibration){const c=input.calibration;this.camera(c.cameraId);next.calibrations={...next.calibrations,[c.cameraId]:{...calibrate(c,next.floorPlan),...(next.calibrations?.[c.cameraId]?.camera?{camera:next.calibrations[c.cameraId].camera}:{})}};}
+    let recalibrated=null;
+    if(input.calibration&&this.active[input.calibration.cameraId]?.viewId){
+      const c=input.calibration,cam=this.camera(c.cameraId).id,a=this.active[cam];
+      if(a.moving)throw Error('Wait for the camera to stop turning.');
+      const list=next.cameraViews?.[cam]||[];if(!list.some(v=>v.id===a.viewId))throw Error('That camera position was removed.');
+      next.cameraViews={...next.cameraViews,[cam]:list.map(v=>v.id===a.viewId?{...v,calibration:{...calibrate(c,next.floorPlan),camera:v.calibration?.camera||next.calibrations?.[cam]?.camera}}:v)};
+      recalibrated={cam,viewId:a.viewId};
+    }
+    else if(input.calibration){const c=input.calibration;this.camera(c.cameraId);next.calibrations={...next.calibrations,[c.cameraId]:{...calibrate(c,next.floorPlan),...(next.calibrations?.[c.cameraId]?.camera?{camera:next.calibrations[c.cameraId].camera}:{})}};}
     if(input.cameraPosition){
       const c=input.cameraPosition,id=this.camera(c.cameraId).id,saved=next.calibrations?.[id],plan=next.floorPlan;
       if(!saved)throw Error('Calibrate this camera to the floor first.');
@@ -95,10 +125,17 @@ class RoomObserver{
       if(!saved)throw Error('That camera has no floor calibration.');
       next.calibrations={...next.calibrations,[id]:{...saved,needsReview:true}};
     }
-    if(input.removeCalibration){const {[input.removeCalibration]:gone,...rest}=next.calibrations||{};if(!gone)throw Error('That camera has no floor calibration.');next.calibrations=rest;}
+    if(input.removeCalibration&&this.active[input.removeCalibration]?.viewId){
+      const cam=input.removeCalibration,a=this.active[cam];
+      next.cameraViews={...next.cameraViews,[cam]:(next.cameraViews?.[cam]||[]).map(v=>v.id===a.viewId?{...v,calibration:null}:v)};
+    }
+    else if(input.removeCalibration){const {[input.removeCalibration]:gone,...rest}=next.calibrations||{};if(!gone)throw Error('That camera has no floor calibration.');next.calibrations=rest;}
     if('animals'in input){if(!Array.isArray(input.animals)||input.animals.length>6)throw Error('Use a valid list of animals.');next.animals=input.animals.map(a=>{const kind=text(a?.kind,20);if(!['dog','cat'].includes(kind)||!text(a.name,60))throw Error('Give each animal a name and a kind (dog or cat).');return {kind,name:text(a.name,60),notes:text(a.notes,400)};});}
     if(input.remove){if(!next.landmarks.some(l=>l.id===input.remove))throw Error('That object is no longer in the inventory.');next.landmarks=next.landmarks.filter(l=>l.id!==input.remove);}
-    this.stop();this.config=next;this.persist();this.notify();return this.view();
+    this.stop();this.config=next;
+    // The new calibration was made on the current picture: it becomes this position's reference.
+    if(recalibrated){this.active[recalibrated.cam]={...this.active[recalibrated.cam],G:null,correction:{ok:true,fresh:true}};this.h.viewCalibrated?.(recalibrated.cam,recalibrated.viewId);}
+    this.persist();this.notify();return this.view();
   }
   start(cameraId,interval){this.camera(cameraId);this.stop();this.cameraId=cameraId;this.interval=Math.max(5,Math.min(120,Number(interval)||10));this.enabled=true;this.error='';this.nextAt=Math.max(Date.now(),this.lastAttempt+this.interval*1000);this.notify();}
   stop(){this.enabled=false;this.serial++;this.abort?.abort();this.nextAt=0;this.notify();}
@@ -138,7 +175,7 @@ class RoomObserver{
     this.bindings=this.bindings.filter(b=>b.personId!==input.personId&&b.phone!==phone);
     this.bindings.push({observationId:current.id,personId:input.personId,phone,role:text(input.role,100),confirmedAt:Date.now()});this.notify();return this.view();
   }
-  track(input){const plan=this.config.floorPlan,animalNames=Object.fromEntries((this.config.animals||[]).map(a=>[a.kind,a.name]));const calibration=this.config.calibrations?.[input?.cameraId];return this.tracking.update({...input,animalNames},{plan,calibration:calibration?.needsReview?null:calibration||null});}
+  track(input){const plan=this.config.floorPlan,animalNames=Object.fromEntries((this.config.animals||[]).map(a=>[a.kind,a.name]));const calibration=this.cals()[input?.cameraId];return this.tracking.update({...input,animalNames},{plan,calibration:calibration?.needsReview?null:calibration||null});}
   // A tracked object the desk confirmed has settled somewhere new: shift its outline on the plan.
   // Translation only; the camera cannot see rotation reliably. Does not stop the observer.
   moveFootprint(name,delta){
@@ -168,7 +205,7 @@ class RoomObserver{
   // Where a camera can and cannot place people: feet seen, upper body only, or nothing.
   // Recomputed only when the plan or that camera's calibration changes.
   coverage(camId){
-    const plan=this.config.floorPlan,cals=this.config.calibrations||{};
+    const plan=this.config.floorPlan,cals=this.cals();
     camId=camId||[this.tracking.cameraId,this.cameraId,...Object.keys(cals)].find(id=>id&&cals[id]&&!cals[id].needsReview);
     const cal=camId&&cals[camId];if(!plan||!cal?.H||cal.needsReview)return null;
     const key=JSON.stringify([cal.H,cal.camera,plan.widthM,plan.depthM,plan.footprints]);
@@ -180,7 +217,7 @@ class RoomObserver{
     const value={cameraId:camId,step:c.step,cells:c.cells,summary:c.summary,blindAreas,cameraPlaced:!!cal.camera};
     this._coverage.set(camId,{key,value});return value;
   }
-  coverageAll(){return Object.fromEntries(Object.keys(this.config.calibrations||{}).map(id=>[id,this.coverage(id)]).filter(([,v])=>v));}
+  coverageAll(){return Object.fromEntries(Object.keys(this.cals()).map(id=>[id,this.coverage(id)]).filter(([,v])=>v));}
   prompt(){
     if(!this.config.shareWithAgents)return '';
     const inventory=this.config.landmarks.slice(0,24).map(l=>({id:l.id,name:l.name,description:text(l.description,400),rules:l.rules,cameraId:l.cameraId}));

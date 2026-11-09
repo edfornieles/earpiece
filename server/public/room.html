@@ -20,7 +20,7 @@
  <div class="rm-grid">
   <section class="rm-stage" id="stage" data-view="both">
    <div class="rm-stage-bar">
-    <div class="rm-seg" role="group" aria-label="Show"><button data-view="both" aria-pressed="true">Both</button><button data-view="plan" aria-pressed="false">Plan</button><button data-view="camera" aria-pressed="false">Camera</button></div>
+    <div class="rm-seg" role="group" aria-label="Show"><button data-view="both" aria-pressed="true">Both</button><button data-view="plan" aria-pressed="false">Plan</button><button data-view="camera" aria-pressed="false">Camera</button><button data-view="follow" aria-pressed="false">Follow</button></div>
     <label class="rm-check"><input type="checkbox" id="coverage-toggle" checked> Camera coverage</label>
     <span class="rm-spacer"></span>
     <div class="rm-seg" role="group" aria-label="Picture"><button id="view-live" aria-pressed="true">Live</button><button id="view-analysis" aria-pressed="false" disabled>Analysed</button></div>
@@ -28,6 +28,9 @@
    <div class="rm-panes">
     <figure class="rm-pane rm-plan" id="floor-test"><div id="floor-plan"></div>
      <figcaption id="coverage-key" class="rm-key"><span><i class="k-sure"></i>sure</span><span><i class="k-rough"></i>rough</span><span><i class="k-unsure"></i>unsure</span><span class="rm-key-gap"><i class="k-body"></i>body only</span><span><i class="k-blind"></i>not seen</span></figcaption>
+    </figure>
+    <figure class="rm-pane rm-follow" id="follow"><canvas id="follow-canvas" aria-label="Follow view: the camera picture cropped around one person"></canvas>
+     <figcaption class="rm-follow-bar"><label>Follow <select id="follow-who"><option value="auto">Auto</option></select></label><span id="follow-note" class="rm-dim"></span></figcaption>
     </figure>
     <figure class="rm-pane rm-cam"><div id="picture"><img id="live-picture" alt="Live camera preview"><img id="analysed-picture" alt="The exact camera frame sent for analysis" hidden><svg id="track-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="People found by live tracking"></svg><svg id="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" hidden aria-label="Approximate object and person regions"></svg><div id="picture-empty" hidden>No live picture. Check the camera on Screens.</div></div></figure>
    </div>
@@ -80,4 +83,4 @@
  </aside>
 </main>
 <div id="toast" role="status"></div>
-<script src="setup.js"></script><script src="room.js"></script><script src="room-tracking.js"></script><script src="room-layout.js"></script><script src="nav.js"></script></body></html>
+<script src="setup.js"></script><script src="room.js"></script><script src="room-tracking.js"></script><script src="room-layout.js"></script><script src="follow-core.js"></script><script src="room-follow.js"></script><script src="nav.js"></script></body></html>

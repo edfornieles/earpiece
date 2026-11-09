@@ -457,6 +457,14 @@ const server = http.createServer(async (req, res) => {
     if (!ctl || !file || !fs.existsSync(file)) { res.writeHead(ctl ? 404 : 403); return res.end(); }
     res.writeHead(200, { 'content-type': TYPES[path.extname(file)], 'cache-control': 'no-store' }); return fs.createReadStream(file).pipe(res);
   }
+  const fullPic = /^\/cam\/([\w-]+)\/full\.jpg$/.exec(p);
+  if (fullPic) {   // newest full-resolution frame, for the follow view (only while tracking reads the main stream)
+    if (!mon) { res.writeHead(403); return res.end(); }
+    const f = identity.full;
+    if (!f || f.camId !== fullPic[1] || !f.frame || Date.now() - f.at > 3000 || f.at <= Number(u.searchParams.get('after') || 0)) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store', 'x-frame-at': String(f.at) });
+    return res.end(f.frame);
+  }
   if (p.startsWith('/cam/')) {
     if (!mon) { res.writeHead(403); return res.end(); }
     const cam = cameras.find((c) => c.id === p.slice(5).replace('.mjpg', ''));

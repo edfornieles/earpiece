@@ -98,7 +98,7 @@ async function start(){
 }
 async function poll(){
   clearTimeout(polling);
-  try{state=await api('room',{action:'trackingView'});if(room)room.tracking=state;renderPanel();drawLive();}catch{}
+  try{state=await api('room',{action:'trackingView'});if(room)room.tracking=state;renderPanel();drawLive();dispatchEvent(new CustomEvent('room-tracking',{detail:state}));}catch{}
   if(serverOn())polling=setTimeout(poll,350);
 }
 async function startBrowser(){

@@ -34,6 +34,14 @@
 .rm-panes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1px;background:var(--line)}
 .rm-stage[data-view=plan] .rm-panes,.rm-stage[data-view=camera] .rm-panes{grid-template-columns:1fr}
 .rm-stage[data-view=plan] .rm-cam,.rm-stage[data-view=camera] .rm-plan{display:none}
+.rm-follow{display:none;flex-direction:column;gap:8px}
+.rm-stage[data-view=follow] .rm-follow{display:flex;order:-1}
+.rm-stage[data-view=follow] .rm-cam{display:none}
+.rm-stage[data-view=follow] .rm-panes{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+.rm-stage[data-view=follow] .rm-stage-bar .rm-seg:last-child{visibility:hidden}
+#follow-canvas{width:100%;aspect-ratio:16/9;background:#000;border-radius:8px;display:block;max-height:calc(100vh - 240px)}
+.rm-follow-bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;width:100%;font-size:13px}
+.rm-follow-bar select{margin-left:6px}
 .rm-stage[data-view=camera] .rm-stage-bar .rm-check{visibility:hidden}
 .rm-stage[data-view=plan] .rm-stage-bar .rm-seg:last-child{visibility:hidden}
 .rm-pane{margin:0;background:var(--stage);position:relative;display:flex;align-items:center;justify-content:center;padding:10px;min-width:0}

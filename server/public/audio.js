@@ -71,8 +71,8 @@ async function openMic(ctx) {
 }
 
 // A player: feed it int16 at WIRE_RATE, it plays through `dest`.
-function makePlayer(ctx, dest) {
-  const node = new AudioWorkletNode(ctx, 'playback', { outputChannelCount: [2] });
+function makePlayer(ctx, dest, opts = {}) {
+  const node = new AudioWorkletNode(ctx, 'playback', { outputChannelCount: [2], processorOptions: opts });
   node.connect(dest);
   const rs = new Resampler(WIRE_RATE, ctx.sampleRate);
   let level = 0;

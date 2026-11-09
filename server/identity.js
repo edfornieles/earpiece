@@ -28,6 +28,7 @@ class Identity {
   }
   start() {
     this.proc = this.spawnImpl(this.py, [path.join(this.root, 'face_worker.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.proc.stdin?.on?.('error', () => {});   // the worker may exit first, e.g. while the server shuts down
     let buf = '';
     this.proc.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { this.onReply(JSON.parse(line)); } catch {} } });
     this.proc.stderr.on('data', () => {});

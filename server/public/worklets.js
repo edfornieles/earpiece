@@ -13,14 +13,15 @@ registerProcessor('capture', CaptureProcessor);
 // Plays incoming chunks with a small jitter buffer.
 // Waits for ~80 ms before starting, re-buffers after a gap, drops audio if it falls >400 ms behind.
 class PlaybackProcessor extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
+    const o = options?.processorOptions || {};   // phones over the internet need a deeper buffer than the desk
     this.queue = [];
     this.offset = 0;
     this.buffered = 0;
     this.playing = false;
-    this.target = Math.round(sampleRate * 0.08);
-    this.max = Math.round(sampleRate * 0.4);
+    this.target = Math.round(sampleRate * (o.target ?? 0.08));
+    this.max = Math.round(sampleRate * (o.max ?? 0.4));
     this.port.onmessage = (e) => {
       const d = e.data;
       if (d === 'flush') { this.queue = []; this.offset = 0; this.buffered = 0; this.playing = false; return; }

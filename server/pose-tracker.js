@@ -39,6 +39,7 @@ class PoseTracker {
     if (this.proc) return;
     const p = this.spawnImpl(this.py, [path.join(this.root, 'pose_worker.py')], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, YOLO_OFFLINE: '1' } });
     this.proc = p; let buf = '', err = '';
+    p.stdin?.on?.('error', () => {});   // the worker may exit first, e.g. while the server shuts down
     p.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { this.onReply(JSON.parse(line)); } catch {} } });
     p.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
     p.on('exit', (code) => {

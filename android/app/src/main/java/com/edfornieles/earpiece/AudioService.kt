@@ -89,6 +89,8 @@ class AudioService : Service() {
     private var micThread: Thread? = null
     private var playThread: Thread? = null
     private val playQueue = LinkedBlockingDeque<ShortArray>()
+    @Volatile private var buffering = true
+    @Volatile private var lastArrival = 0L
     @Volatile private var flushNow = false
 
     private var wake: PowerManager.WakeLock? = null
@@ -186,6 +188,7 @@ class AudioService : Service() {
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 retry = 0; connected = true; status = "connected"
+                sendJson(JSONObject().put("type", "caps").put("jitterBuffer", true))   // lets the server send speech further ahead
                 sendJson(JSONObject().put("type", "headset").put("connected", headset).put("name", headsetName))
                 sendDevice()
                 if (record?.recordingState == AudioRecord.RECORDSTATE_RECORDING) sendJson(JSONObject().put("type", "hello"))
@@ -223,10 +226,10 @@ class AudioService : Service() {
                 var sum = 0.0
                 for (v in s) sum += (v * v).toDouble()
                 playLevel = max(playLevel * 0.7f, (sqrt(sum / max(1, s.size)) / 32768.0).toFloat())
-                playQueue.add(s)
-                // never fall more than ~0.4 s behind
+                playQueue.add(s); lastArrival = System.currentTimeMillis()
+                // the server sends up to 0.8 s ahead; never fall more than 1.5 s behind
                 var queued = playQueue.sumOf { it.size }
-                while (queued > WIRE_RATE * 0.4 && playQueue.size > 1) queued -= playQueue.removeFirst().size
+                while (queued > WIRE_RATE * 1.5 && playQueue.size > 1) queued -= playQueue.removeFirst().size
             }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null) }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -282,11 +285,20 @@ class AudioService : Service() {
             while (!Thread.currentThread().isInterrupted) {
                 if (flushNow) {
                     flushNow = false
-                    playQueue.clear()
+                    playQueue.clear(); buffering = true
                     try { track?.pause(); track?.flush(); track?.play() } catch (_: Exception) {}
                 }
-                val chunk = try { playQueue.pollFirst(20, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { break }
+                // Jitter buffer: hold ~0.25 s before starting a line (or less if the line is short and
+                // nothing more is coming), and refill after a gap instead of stuttering through it.
                 val t = track ?: break
+                if (buffering) {
+                    val queued = playQueue.sumOf { it.size }
+                    val quiet = System.currentTimeMillis() - lastArrival > 150
+                    if (queued >= WIRE_RATE / 4 || (queued > 0 && quiet)) buffering = false
+                    else { t.write(silence, 0, silence.size); continue }
+                }
+                val chunk = try { playQueue.pollFirst(20, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { break }
+                if (chunk == null) buffering = true
                 t.write(chunk ?: silence, 0, (chunk ?: silence).size)
                 playLevel *= 0.92f
             }

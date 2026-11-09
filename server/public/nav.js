@@ -5,17 +5,13 @@
   if (!KEY) return;
   const here = location.pathname.replace(/\.html$/, '').replace(/^\/$/, '/control');
   const inControl = here === '/control';
-  const pages = [
-    ['/control', 'Live desk'],
-    ['/session', 'Session'],
-    ['/programs', 'Programs'],
-    ['/room', 'Room'],
-    ['/people', 'Registrations'],
-    ['/phones', 'Phones'],
-    ['/screens', 'Screens'],
-    ['/library', 'Library'],
-    ['/files', 'Files'],
-    ['/trash', 'Trash'],
+  // Five sections. The section you are in lists its pages underneath.
+  const sections = [
+    ['Perform', [['/control', 'Live desk'], ['/session', 'Brief & notes']]],
+    ['Programs', [['/programs', 'Programs']]],
+    ['Room', [['/room', 'Room']]],
+    ['Setup', [['/phones', 'Phones'], ['/screens', 'Screens'], ['/people', 'Registrations']]],
+    ['Archive', [['/library', 'Library'], ['/files', 'Files'], ['/trash', 'Trash']]],
   ];
   const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/studio.css';
   document.head.appendChild(css); document.body.classList.add('mother-shell');
@@ -30,24 +26,35 @@
     return a;
   };
   bar.innerHTML = '<span class="brand">Mother</span>';
-  for (const [href, label] of pages) {
-    const group = ({'/control':'Workspace', '/phones':'Equipment', '/library':'Archive', '/people':'People'})[href];
-    if (group) { const heading = document.createElement('span'); heading.className = 'nav-group'; heading.dataset.group = group.toLowerCase(); heading.textContent = group; bar.appendChild(heading); }
-    bar.appendChild(link(href, label));
+  for (const [name, pages] of sections) {
+    const current = pages.some(([href]) => href === here);
+    const top = link(pages[0][0], name, 'section' + (current ? ' current' : ''));
+    if (current && pages.length > 1) top.classList.remove('on');   // the page itself is highlighted below
+    if (current) top.classList.add(pages.length > 1 ? 'open' : 'on');
+    bar.appendChild(top);
+    if (current && pages.length > 1) for (const [href, label] of pages) bar.appendChild(link(href, label, 'sub'));
   }
   bar.insertAdjacentHTML('beforeend', '<span class="sp"></span><span class="st" id="navstate">…</span>');
   document.body.prepend(bar);
   if (inControl) window.name = 'earpiece_control';
 
+  // What is happening, and the one thing to do next.
   async function status() {
+    const st = document.getElementById('navstate');
     try {
       const s = await (await fetch('/api/status?k=' + KEY)).json();
-      const st = document.getElementById('navstate');
+      const phones = s.phonesConnected || [], prog = s.program, launch = s.launch;
       st.className = 'st' + (s.standby ? '' : ' rec');
-      st.textContent = s.standby ? `○ Standby${s.title ? ' — next: ' + s.title : ''}` : `● Recording${s.title ? ' — ' + s.title : ''}`;
-      if(s.observer?.enabled)st.textContent+=' · Vision on';
+      const lines = [s.standby ? '○ Not recording' : '● Recording' + (s.title ? ' — ' + s.title : '')];
+      lines.push(phones.length ? `Phone${phones.length > 1 ? 's' : ''} ${phones.join(', ')} connected` : 'No phones connected');
+      if (prog && ['running', 'paused'].includes(prog.status)) lines.push(`▶ ${prog.title} · ${prog.status}`);
+      if (launch?.waitingFor) lines.push(`Starting ${launch.title}: ` + (launch.waitingFor.map((w) => `phone ${w.phone} — ${w.reason}`).join('; ') || 'starting…'));
+      else if (launch?.error) lines.push(launch.error);
+      else if (!prog || !['running', 'paused'].includes(prog.status)) lines.push(!phones.length ? 'Next: connect a phone (Setup → Phones)' : 'Next: press ▶ Run on a program');
+      if (s.observer?.enabled) lines.push('Vision on');
+      st.innerHTML = lines.map((l, i) => `<span${i === lines.length - 1 && /^Next:/.test(l) ? ' class="next"' : ''}>${l.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</span>`).join('');
       st.title = s.standby ? 'Nothing is being recorded' : 'Recording since ' + new Date(s.since).toLocaleTimeString();
-    } catch { document.getElementById('navstate').textContent = 'server not reachable'; }
+    } catch { st.textContent = 'server not reachable'; }
   }
   status(); setInterval(status, 5000);
 })();

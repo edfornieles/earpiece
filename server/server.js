@@ -291,6 +291,9 @@ saveSession();
 const NULL_STREAM = { write() {}, end(cb) { if (cb) cb(); } };
 const events = STANDBY ? NULL_STREAM : fs.createWriteStream(path.join(SESSION_DIR, 'events.jsonl'), { flags: 'a' });
 const transcriptFile = STANDBY ? NULL_STREAM : fs.createWriteStream(path.join(SESSION_DIR, 'transcript.txt'), { flags: 'a' });
+const lastPerception = new Map(), connLog = [], phoneTelemetry = new Map();
+const diagFile = fs.createWriteStream(path.join(SESSION_DIR, 'diagnostics.jsonl'), { flags: 'a' });
+function diag(type, data) { const e = { at: new Date().toISOString(), type, ...data }; diagFile.write(JSON.stringify(e) + '\n'); return e; }
 function logEvent(type, data = {}) { events.write(JSON.stringify({ t: clock(), type, ...data }) + '\n'); }
 
 class WavTrack {
@@ -540,11 +543,32 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, req.method === 'POST' ? { program:programStore.save(await readSetupBody(req)) } : { programs:programStore.list() }); }
       catch(e) { return json(res,{error:e.message},400); }
     }
+    if (p === '/api/diagnostics') {   // one place to see what is going on: phones, connection history, program, perception
+      const v = roomObserver.tracking.view(), now = Date.now();
+      let tail = []; try { tail = fs.readFileSync(path.join(SESSION_DIR, 'events.jsonl'), 'utf8').trim().split('\n').slice(-40).map((l) => JSON.parse(l)); } catch {}
+      return json(res, {
+        now: new Date(now).toISOString(), standby: STANDBY, session: stamp,
+        phones: [...sessions.values()].map((t) => ({ id: t.id, connected: !!t.ws && t.ws.readyState === 1, waiting: t.waiting, audioReady: t.audioReady, headset: t.headset, headsetName: t.headsetName, hidden: t.hidden, telemetry: phoneTelemetry.get(t.id) || null, telemetryAgeS: phoneTelemetry.get(t.id) ? Math.round((now - phoneTelemetry.get(t.id).at) / 1000) : null, perceptionNow: perceptionFor(t.id), lastPerception: lastPerception.get(t.id) || null })),
+        connections: connLog.slice(-30), program: programRunner.view(), launch: launcher.status(),
+        tracking: { running: v.running, pose: v.pose, people: (v.tracks || []).map((x) => ({ id: x.id, visible: x.visible, area: x.area, floor: x.floor, confidence: x.confidence, radiusM: x.radiusM, how: x.how, phone: x.binding?.phone ?? null, name: x.binding?.person?.name || null, lastSeenS: Math.round((now - x.lastSeenAt) / 1000) })) },
+        recentEvents: tail,
+      });
+    }
+    if (p === '/api/run-plan') {
+      try { return json(res, launcher.plan(u.searchParams.get('id'))); } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/run' && req.method === 'POST') {
+      try {
+        const d = await readSetupBody(req);
+        if (d.action === 'cancel') { launcher.cancel(); return json(res, { ok: true }); }
+        return json(res, launcher.run({ id: String(d.id || ''), assignments: d.assignments, replace: !!d.replace }));
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     if (p === '/api/program-selection' && req.method === 'POST') {
       try {
         const d=await readSetupBody(req);
         if (d.instance !== T0) return json(res,{error:'The session changed. Reload before choosing a program.'},409);
-        if (!STANDBY) throw Error('Choose the program before recording. End this session to prepare another.');
+        if (['running','paused'].includes(programRunner.view().status)) throw Error('Stop the running program before choosing another.');
         let selected=null;
         if(d.id) {
           const snapshot=programStore.get(d.id); if(!snapshot)throw Error('That program no longer exists.');
@@ -574,7 +598,7 @@ const server = http.createServer(async (req, res) => {
           else if(d.action==='stop')programRunner.stop();
           else throw Error('Choose a program control.');
         }
-        return json(res,{instance:T0,standby:STANDBY,selection:session.program || null,run:programRunner.view()});
+        return json(res,{instance:T0,standby:STANDBY,selection:session.program || null,run:programRunner.view(),launch:launcher.status()});
       }catch(e){return json(res,{error:e.message},400);}
     }
     if (p === '/api/setup') return json(res, { instance: T0, name: stamp, standby: STANDBY, title: session.title, notes: session.notes || '', documents: session.documents || [], brief: readBrief(), program: session.program || null, maxPhones: MAX_PHONES });
@@ -643,7 +667,7 @@ const server = http.createServer(async (req, res) => {
         return { name: d, title: s.title || '', start: s.start_iso, participants: (s.participants || []).map((x) => x.name || `Phone ${x.phone}`), duration: s.exports?.duration || null, cameras: (s.cameras || []).length, live: d === stamp };
       }));
     }
-    if (p === '/api/status') return json(res, { standby: STANDBY, name: stamp, title: session.title || '', since: session.start_iso, monitorKey: MONITOR_KEY, observer:{enabled:roomObserver.enabled,busy:roomObserver.busy,cameraId:roomObserver.cameraId} });
+    if (p === '/api/status') return json(res, { phonesConnected: [...sessions.values()].filter((t) => t.ws && t.ws.readyState === 1).map((t) => t.id), program: session.program ? { title: session.program.snapshot.title, status: programRunner.view().status } : null, launch: launcher.status(), standby: STANDBY, name: stamp, title: session.title || '', since: session.start_iso, monitorKey: MONITOR_KEY, observer:{enabled:roomObserver.enabled,busy:roomObserver.busy,cameraId:roomObserver.cameraId} });
     if (p === '/api/trash') return json(res, { items: readTrash().reverse().map((t) => ({ id: t.id, kind: t.kind, label: t.label, size: t.size, at: t.at, count: t.moves.length })) });
     if (req.method === 'POST' && ['/api/trash-restore', '/api/trash-purge', '/api/delete-session', '/api/delete-registration'].includes(p)) {
       let body = ''; for await (const c of req) body += c;
@@ -959,15 +983,72 @@ function endParticipant(s, why) {
   toControls({ type: 'participants', list: list() }); state(s);
 }
 
+// What Mother can perceive of one participant right now, in plain words. It goes into every program
+// prompt (adapted lines, conversations, interruptions) and is logged, so a run can be checked afterwards.
+function participantTrack(id, v = roomObserver.tracking.view(), now = Date.now()) {
+  const tracks = v.tracks || [], me = tracks.find((x) => x.binding?.phone === id);
+  if (me) return { me, how: 'assigned to this phone' };
+  const seen = tracks.filter((x) => x.visible), recent = tracks.filter((x) => now - x.lastSeenAt < 10000), pool = seen.length ? seen : recent;
+  return pool.length === 1 ? { me: pool[0], how: 'the only person in view, assumed to be this participant' } : { me: null, count: pool.length };
+}
+// A visual question from the participant: crop the 4K picture round them and ask the vision model.
+const LOOK = /\b(holding|hold|in my hands?|wearing|see me|look at (me|this)|what colou?r|what('s| is) this|how many fingers|what am i (doing|holding|wearing)|can you see)\b/i;
+function cropJpeg(jpeg, b) {
+  const m = 0.25, x = Math.max(0, b.x - b.w * m), y = Math.max(0, b.y - b.h * 0.1), w = Math.min(1 - x, b.w * (1 + 2 * m)), h = Math.min(1 - y, b.h * 1.2);
+  return new Promise((res) => {
+    const p = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vf', `crop=iw*${w.toFixed(4)}:ih*${h.toFixed(4)}:iw*${x.toFixed(4)}:ih*${y.toFixed(4)}`, '-q:v', '3', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1']);
+    const out = []; p.stdout.on('data', (d) => out.push(d)); p.on('error', () => res(jpeg)); p.on('exit', () => res(out.length ? Buffer.concat(out) : jpeg));
+    p.stdin.on('error', () => {}); p.stdin.end(jpeg);
+  });
+}
+async function lookAt(id, question) {
+  const v = roomObserver.tracking.view(); if (!v.running) return 'I could not look: the camera tracking is off.';
+  const cam = cameras.find((c) => c.id === v.cameraId), f = identity.full, now = Date.now();
+  const frame = f?.camId === v.cameraId && f.frame && now - f.at < 3000 ? f.frame : cam?.frame && now - cam.frameAt < 3000 ? cam.frame : null;
+  if (!frame) return 'I could not look: there is no fresh camera picture.';
+  const { me } = participantTrack(id, v, now);
+  if (!me?.visible || !me.box) return 'I looked, but the participant is not in the camera picture right now.';
+  const t0 = Date.now();
+  try { const answer = await ai.look(await cropJpeg(frame, me.box), question); logEvent('look', { id, question, answer, ms: Date.now() - t0 }); return answer; }
+  catch (e) { logEvent('look', { id, question, error: e.message }); return 'I tried to look but the camera analysis failed.'; }
+}
+// The model is asked for {"action","text","reason"}; if it answers in prose anyway, speak the prose
+// rather than freezing the program.
+function parseDecision(raw) {
+  const body = String(raw || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+  let d = null; try { d = JSON.parse(body); } catch { const m = body.match(/\{[\s\S]*\}/); if (m) try { d = JSON.parse(m[0]); } catch {} }
+  if (d && ['resume', 'wait', 'respond'].includes(d.action) && (d.action !== 'respond' || String(d.text || '').trim())) return d;
+  if (d) return null;
+  if (!body || /^\[?\s*(silence|wait)\s*\]?$/i.test(body)) return { action: 'wait', reason: 'stayed quiet' };
+  return { action: 'respond', text: body.slice(0, 600), reason: 'answered (free text)' };
+}
+function perceptionFor(id) {
+  const v = roomObserver.tracking.view(), now = Date.now();
+  if (!v.running) return 'TRACKING IS OFF: you cannot see the participant at all. Never state or guess where they are or what they are doing; if it matters, ask them.';
+  if (cameraViews.moving(v.cameraId)) return 'The camera is turning right now, so you have no position for anyone. Do not guess; wait or ask.';
+  const { me, how, count } = participantTrack(id, v, now);
+  if (!me && count > 1) return `The camera sees ${count} people and none is assigned to this phone, so you do not know which one is the participant. Ask them where they are.`;
+  const blind = roomObserver.coverage(v.cameraId)?.blindAreas || [];
+  const blindNote = blind.length ? ` The camera cannot see well: ${blind.slice(0, 6).join(', ')}.` : '';
+  if (!me) return 'Tracking is on but the camera cannot see the participant right now. Say so honestly and ask where they are.' + blindNote;
+  const ago = Math.round((now - me.lastSeenAt) / 1000), cm = me.radiusM != null ? Math.round(me.radiusM * 100) : null;
+  const where = me.floor ? `${me.area && me.area !== 'unknown' ? me.area : 'in the room'} (x ${me.floor[0].toFixed(1)} m, y ${me.floor[1].toFixed(1)} m)` : 'position unknown';
+  if (!me.visible) return `The participant (${how}) is NOT visible now; last seen ${ago} s ago ${where}. Treat their position as unknown.` + blindNote;
+  const pose = /seat/i.test(me.how || '') ? 'seated' : 'standing or moving';
+  return `The participant (${how}) is visible, ${pose}, ${where}; confidence ${me.confidence || 'unsure'}${cm != null ? ` ±${cm} cm` : ''}. Name an exact spot only if confidence is sure; if rough, name the area only; if unsure, say you can't see them clearly and ask.` + blindNote;
+}
 function programContext(id, context) {
   const s=sessions.get(id);
-  return `${systemPrompt(s)}\nYou are performing Mother program: ${context.program.title}.\nOverall score: ${context.program.description}\nYour role: ${context.role.name}. ${context.role.brief}\nScene: ${context.scene?.name || 'end'}. Current cue: ${context.cue?.text || ''}. Delivery: ${context.cue?.delivery || ''}\nOnly direct this participant. Never invent another participant's readiness. Respect the script's coordination cues. Stage instructions are private; speak only the words intended for the earpiece.`;
+  const seen = perceptionFor(id);
+  logEvent('perception', { id, scene: context.scene?.name || '', cue: context.cue?.id || '', text: seen });
+  lastPerception.set(id, { at: Date.now(), cue: context.cue?.id || '', text: seen });
+  return `${systemPrompt(s)}\nLIVE PERCEPTION (camera tracking, now): ${seen}\nYou are performing Mother program: ${context.program.title}.\nOverall score: ${context.program.description}\nYour role: ${context.role.name}. ${context.role.brief}\nScene: ${context.scene?.name || 'end'}. Current cue: ${context.cue?.text || ''}. Delivery: ${context.cue?.delivery || ''}\nOnly direct this participant. Never invent another participant's readiness. Respect the script's coordination cues. Stage instructions are private; speak only the words intended for the earpiece.`;
 }
 async function programSpeech(id,cue,context) {
   const s=sessions.get(id);if(!s)throw Error('Phone unavailable.');
   stopAi(s,'program cue',true); const turn=++s.turn;
   let text=cue.text;
-  if(cue.adapt){s.thinking=true;state(s);text=await ai.think([{role:'system',content:programContext(id,context)},...s.history.slice(-20),{role:'user',content:`Deliver this passage, preserving its actions and essential meaning. You may adapt wording. Return only spoken text: ${cue.text}`}]);}
+  if(cue.adapt){s.thinking=true;state(s);text=await ai.think([{role:'system',content:programContext(id,context)},...s.history.slice(-20),{role:'user',content:`Deliver this passage, preserving its actions and essential meaning. You may adapt wording. Anything in the passage about where the participant is, what they are doing, or how sure you are is a placeholder: replace it with what LIVE PERCEPTION says. If LIVE PERCEPTION says you cannot see them, say that plainly and ask, instead of the placeholder. Return only spoken text: ${cue.text}`}]);}
   if(turn!==s.turn || s.waiting || !s.ws || s.edHold)throw Error('Cue interrupted.');
   text=String(text).trim().slice(0,6000); if(!text || /^\[?silence\]?$/i.test(text))throw Error('Mother returned no spoken passage. Repeat or advance this cue.');
   s.thinking=false;s.history.push({role:'assistant',content:text});
@@ -979,16 +1060,41 @@ programRunner=new ProgramRunner({
   visit:id=>sessions.get(id)?.visitToken,
   cancel:id=>{const s=sessions.get(id);if(s)stopAi(s,'program paused',true);},
   perform:programSpeech,
-  converse:(id,text,context)=>ai.think([{role:'system',content:programContext(id,context)+`\nThis is a bounded conversation (${context.exchanges+1} of ${context.cue.turns}). Respond briefly within the cue's subject. On the final exchange, finish naturally so the script can continue. Return spoken words only.`},...sessions.get(id).history.slice(-20)]),
+  converse:async(id,text,context)=>ai.think([{role:'system',content:programContext(id,context)+(LOOK.test(text)?`\nLOOKED JUST NOW (camera close-up, for "${text}"): ${await lookAt(id,text)}`:'')+`\nThis is a bounded conversation (${context.exchanges+1} of ${context.cue.turns}). Respond briefly within the cue's subject. On the final exchange, finish naturally so the script can continue. Return spoken words only.`},...sessions.get(id).history.slice(-20)]),
   decide:async(id,text,context)=>{
-    const raw=await ai.think([{role:'system',content:programContext(id,context)+'\nAfter an interruption choose when to return. Return ONLY JSON: {"action":"resume"|"wait"|"respond","text":"optional spoken response","reason":"short desk explanation"}. Resume repeats the current cue from its beginning. Respond asks or answers briefly then waits for the participant. Wait silently awaits their reply. After two exchanges prefer resume. Do not direct any other role.'},...sessions.get(id).history.slice(-20),{role:'user',content:`${context.director?'Controller intervention':'Participant reply'}: ${text}`}]);
-    const decision=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,''));
-    if(!['resume','wait','respond'].includes(decision.action) || (decision.action==='respond' && !String(decision.text || '').trim()))throw Error('Mother could not decide how to return. Choose Repeat cue or Continue cue at the desk.');
+    const silenceRules='\nThe participant spoke during a timed pause in the score. Return ONLY JSON: {"action":"resume"|"wait"|"respond","text":"optional spoken response","reason":"short desk explanation"}. resume = they are done or ready: move on to the next cue now. respond = they asked something, sound unsure, or think you cannot hear them: answer in one short sentence (acknowledge you hear them), then the pause continues. wait = nothing needs saying.';
+    const looked=!context.director&&LOOK.test(text)?`\nLOOKED JUST NOW (camera close-up, for "${text}"): ${await lookAt(id,text)}`:'';
+    const raw=await ai.think([{role:'system',content:programContext(id,context)+looked+'\nIf the participant asks you a question, choose respond and answer it truthfully from LIVE PERCEPTION and LOOKED JUST NOW (if present); never ignore a question.'+(context.duringSilence?silenceRules:'\nAfter an interruption choose when to return. Return ONLY JSON: {"action":"resume"|"wait"|"respond","text":"optional spoken response","reason":"short desk explanation"}. Resume repeats the current cue from its beginning. Respond asks or answers briefly then waits for the participant. Wait silently awaits their reply. After two exchanges prefer resume. Do not direct any other role.')},...sessions.get(id).history.slice(-20),{role:'user',content:`${context.director?'Controller intervention':'Participant reply'}: ${text}`}],{json:true});
+    const decision=parseDecision(raw);
+    if(!decision)throw Error('Mother could not decide how to return. Choose Repeat cue or Continue cue at the desk.');
     return {action:decision.action,text:String(decision.text || '').slice(0,2000),reason:String(decision.reason || '').slice(0,300)};
   },
   event:(type,data)=>logEvent(type,data),change:run=>toControls({type:'program',run})
 });
 programRunner.configure(session.program || null);
+// One-step Run: see run-launcher.js.
+const { Launcher } = require('./run-launcher');
+const phoneProblem = (s) => !s.audioReady ? 'enable audio on the phone' : (s.headset === false || s.headsetDropped) ? 'connect the earpiece' : s.hidden ? 'bring Mother to the front on the phone' : s.edHold ? 'held by the desk' : '';
+const launcher = new Launcher({
+  standby: STANDBY, maxPhones: () => MAX_PHONES, program: (id) => programStore.get(id), runner: programRunner,
+  phones: () => Array.from({ length: MAX_PHONES }, (_, i) => {
+    const s = sessions.get(i + 1), connected = !!s?.ws && s.ws.readyState === 1;
+    return { id: i + 1, connected, waiting: !!s?.waiting, ready: connected && programRunner.h.ready(i + 1), problem: s && connected ? phoneProblem(s) : '' };
+  }),
+  select: (sel) => { session.program = sel; saveSession(); programRunner.configure(sel); },
+  remember: (sel, pending) => { session.program = sel; session.autoRun = pending; saveSession(); programRunner.configure(sel); },
+  beginVisit: (id) => { const s = sessions.get(id); if (s?.ws && s.waiting) beginParticipant(s, '', null); },
+  startRecording: () => { toControls({ type: 'sessionStarting' }); setTimeout(() => shutdown('record'), 400); },
+  // A program that talks about where people are needs to see them: switch on tracking with the run.
+  startTracking: () => {
+    if (!pose.ready || pose.on) return;
+    const cam = roomObserver.config.defaultCameraId || cameras.find((c) => /^rtsp:/.test(c.main || ''))?.id;
+    try { if (cam) pose.start(cam); } catch (e) { console.log('  run: tracking not started — ' + e.message); }
+  },
+  log: (t) => console.log('  ' + t),
+});
+if (!STANDBY && prepared?.autoRun && Date.now() - prepared.autoRun.at < 10 * 60 * 1000) launcher.resume(session.program);
+setInterval(() => launcher.tick(), 1000);
 setInterval(()=>programRunner.tick(),50);
 
 // plays queued AI audio to the phone in real time (a little ahead, so the phone never runs dry)
@@ -1004,7 +1110,8 @@ setInterval(() => {
     }
     let lead = s.playSent / RATE - (now - s.playT0) / 1000;
     if (lead < 0 && s.pending.length) { s.playT0 = now - (s.playSent / RATE) * 1000; lead = 0; }
-    while (lead < 0.25 && s.pending.length >= (s.ttsDone ? 1 : FRAME)) {
+    // How far ahead to send: phones that buffer get 0.8 s, which rides out network jitter; older apps drop anything past 0.4 s.
+    while (lead < (s.jitterBuffer ? 0.8 : 0.25) && s.pending.length >= (s.ttsDone ? 1 : FRAME)) {
       const chunk = s.pending.subarray(0, FRAME); s.pending = s.pending.subarray(chunk.length);
       if (s.ws && s.ws.readyState === 1) s.ws.send(chunk);
       track(`phone${s.id}-heard`).write(chunk);
@@ -1238,9 +1345,17 @@ wss.on('connection', (ws, req) => {
     if (!id) { send(ws, { type: 'full' }); return ws.close(); }
     let s = sessions.get(id);
     if (!s) { s = new Session(id); sessions.set(id, s); }
-    s.ws = ws; s.hidden = false; s.audioReady = false;
+    s.ws = ws; s.hidden = false; s.audioReady = false; s.jitterBuffer = false;
     send(ws, { type: 'welcome', id, waiting: s.waiting, name: s.name });
     logEvent('phone_connected', { id });
+    const since = Date.now(), via = req.headers['cf-connecting-ip'] ? 'internet link' : 'local network';
+    console.log(`  phone ${id} connected (${via})`);
+    connLog.push(diag('phone_connected', { phone: id, via })); if (connLog.length > 200) connLog.shift();
+    ws.on('close', (code) => {
+      const secs = Math.round((Date.now() - since) / 1000), why = code === 1006 ? 'connection lost' : code === 1001 ? 'page closed or backgrounded' : 'code ' + code;
+      console.log(`  phone ${id} disconnected after ${secs} s (${why})`);
+      connLog.push(diag('phone_disconnected', { phone: id, secs, why, lastTelemetry: phoneTelemetry.get(id) || null })); if (connLog.length > 200) connLog.shift();
+    });
     toControls({ type: 'participants', list: list() });
     ws.on('message', (data, isBinary) => {
       if (s.ws !== ws) return;   // ignore frames from a phone whose slot has been replaced
@@ -1258,6 +1373,9 @@ wss.on('connection', (ws, req) => {
       let m; try { m = JSON.parse(data); } catch { return; }
       if (!m || typeof m !== 'object' || Array.isArray(m)) return;
       // Phones are desk equipment: only the control room can start a participant visit.
+      if (m.type === 'ping') { send(ws, { type: 'pong', t: m.t }); return; }
+      if (m.type === 'caps') { s.jitterBuffer = !!m.jitterBuffer; return; }   // this phone buffers: send speech further ahead
+      if (m.type === 'telemetry') { const t = { ...m, at: Date.now() }; delete t.type; phoneTelemetry.set(id, t); diag('phone_telemetry', { phone: id, ...t }); return; }
       if (m.type === 'hello') { s.audioReady = true; state(s); }
       if (m.type === 'hello' && !s.waiting && s.mode === 'auto') {   // came back after a dropout
         s.history.push({ role: 'user', content: '[The participant reconnected after a dropout. Pick up where you left off, briefly.]' });

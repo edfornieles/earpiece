@@ -104,9 +104,20 @@ const overlap=(a,b)=>{const x=Math.max(0,Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,
 // Animals (Yuri the studio dog): one track per named animal, followed like a person but never matched to a phone.
 const ANIMAL_CLASSES=new Set(['dog','cat']),ANIMAL_LOST_MS=2500,ANIMAL_MIN_SCORE=0.35;
 const LOST_AFTER_MS=1500,FORGET_AFTER_MS=60000,SUGGEST_WITHIN_MS=15000,SUGGEST_WITHIN_M=1.2,FRESH_MS=5000;
+// Compare a short history of fresh floor positions. Require motion to exceed the position error.
+function activityFor(samples,now){
+  const first=samples[0], last=samples.at(-1);
+  if(first && last.at-first.at>=800 && now-last.at<=500){
+    const metres=Math.hypot(last.floor[0]-first.floor[0],last.floor[1]-first.floor[1]);
+    if(metres>Math.max(0.45,first.radius+last.radius))return {label:'moving',source:'floor history',observedAt:last.at};
+    if(first.seated && samples.every(sample=>sample.seated))return {label:'appears seated',source:'pose history',observedAt:last.at};
+    if(metres<0.2)return {label:'staying in place',source:'floor history',observedAt:last.at};
+  }
+  return null;
+}
 class Tracking{
   constructor(hooks={}){this.h=hooks;this.reset();}
-  reset(){this.owner='';this.cameraId='';this.at=0;this.tracks=new Map();this.bindings=new Map();this.movement=[];this.serial=0;this.objects=this.objects||new Map();this.nextObject=this.nextObject||1;this.animals=this.animals||new Map();this.smoothers=new Map();}
+  reset(){this.owner='';this.cameraId='';this.at=0;this.tracks=new Map();this.bindings=new Map();this.movement=[];this.serial=0;this.objects=this.objects||new Map();this.nextObject=this.nextObject||1;this.animals=this.animals||new Map();this.smoothers=new Map();this.activitySamples=new Map();}
   // Positions: feet-on-floor estimate from the calibration; null when uncalibrated, feet hidden, or off the plan.
   update(input,{calibration,plan,now=Date.now()}){
     const tracker=text(input?.tracker,64);if(!tracker)throw Error('Tracking needs a tracker id.');
@@ -157,6 +168,16 @@ class Tracking{
         track.floor=prev.floor;track.area=prev.area;track.certainty='last seen';track.confidence='unsure';track.radiusM=prev.radiusM;
         track.positionAt=prev.positionAt;
       }
+      const samples=(this.activitySamples.get(id)||[]).filter(sample=>now-sample.at<=1800);
+      if(!prev?.visible || now-prev.lastSeenAt>900) samples.length=0;
+      if(track.floor && track.confidence!=='unsure' && track.how!=='held'){
+        samples.push({at:now,floor:track.floor,radius:track.radiusM,seated:!!seat||!!(kp&&require('./positioning').looksSeated(kp))});
+      } else samples.length=0;
+      this.activitySamples.set(id,samples);
+      track.activity=activityFor(samples,now);
+      if(track.activity && track.activity.label!==prev?.activity?.label){
+        this.h.event?.('room_activity',{track:id,cameraId,label:track.activity.label,source:track.activity.source});
+      }
       this.tracks.set(id,track);
       if(prev&&prev.area!==track.area&&track.area!=='unknown')this.moved(id,prev.area,track.area,now);
       else if(!prev)this.moved(id,null,track.area,now);
@@ -164,7 +185,7 @@ class Tracking{
     for(const [id,t] of this.tracks){
       if(seen.has(id))continue;
       if(t.visible&&now-t.lastSeenAt>LOST_AFTER_MS){t.visible=false;this.moved(id,t.area,'out of sight',now);}
-      if(now-t.lastSeenAt>FORGET_AFTER_MS){this.tracks.delete(id);this.bindings.delete(id);this.smoothers.delete(id);}
+      if(now-t.lastSeenAt>FORGET_AFTER_MS){this.tracks.delete(id);this.bindings.delete(id);this.smoothers.delete(id);this.activitySamples.delete(id);}
     }
     this.plan=plan;
     this.updateAnimals(Array.isArray(input.animals)?input.animals.slice(0,6):[],input.animalNames||{},{calibration,plan,now});
@@ -325,7 +346,7 @@ class Tracking{
   viewIsFresh(now){return !!this.owner&&now-this.at<FRESH_MS;}
   view(now=Date.now()){
     return {running:this.viewIsFresh(now),owner:this.owner,cameraId:this.cameraId,at:this.at,
-      tracks:[...this.tracks.values()].map(t=>({...t,binding:this.bindings.get(t.id)||null})),
+      tracks:[...this.tracks.values()].map(t=>({...t,activity:this.viewIsFresh(now)&&t.visible&&now-t.lastSeenAt<=1000?t.activity:null,binding:this.bindings.get(t.id)||null})),
       movement:this.movement.slice(-20),suggestions:this.suggestions(now),faces:this.faceStatus?.(now)||null,finder:this.finderStatus?.(now)||null,pose:this.poseStatus?.()||null,cameraControl:this.cameraStatus?.()||null,
       animals:[...this.animals.values()],
       objects:[...this.objects.values()].filter(o=>o.binding||o.sightings>=OBJECT_CONFIRM).map(o=>({id:o.id,cls:o.cls,floor:o.floor.map(v=>Math.round(v*100)/100),visible:!!o.visible,blocked:!!o.blocked,score:o.score,box:o.box,lastSeenAt:o.lastSeenAt,proposal:this.viewIsFresh(now)&&o.visible&&o.binding?o.proposal:null,binding:o.binding&&{footprint:o.binding.footprint}})),

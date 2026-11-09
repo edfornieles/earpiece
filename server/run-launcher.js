@@ -52,6 +52,19 @@ class Launcher {
     this.tick();
     return { phase: this.pending ? 'waiting' : 'running' };
   }
+  // Play: no program, just Mother and one phone, with tracking on. Same start-up path as a run.
+  play({ phone, replace = false } = {}) {
+    const status = this.h.runner.view().status;
+    if (['running', 'paused'].includes(status)) { if (!replace) throw Error('A program is running. Stop it, or choose to replace it.'); this.h.runner.stop(); }
+    const n = Number(phone) || this.h.phones().find((p) => p.connected)?.id || 1;
+    if (!Number.isInteger(n) || n < 1 || n > this.h.maxPhones()) throw Error('Choose a phone.');
+    this.error = '';
+    if (this.h.standby) { this.h.rememberPlay(n); this.h.log(`play on phone ${n} — starting recording`); this.h.startRecording(); return { phase: 'recording' }; }
+    this.pending = { since: Date.now(), assignments: { play: n }, title: 'Play', play: true };
+    this.tick();
+    return { phase: this.pending ? 'waiting' : 'playing' };
+  }
+  resumePlay(phone) { this.pending = { since: Date.now(), assignments: { play: Number(phone) || 1 }, title: 'Play', play: true }; }
   // Called after a restart into recording when a run was remembered.
   resume(selection) { if (selection) this.pending = { since: Date.now(), assignments: selection.assignments, title: selection.snapshot.title }; }
   cancel() { this.pending = null; }
@@ -64,6 +77,7 @@ class Launcher {
     this.h.startTracking?.();
     const waiting = this.waitingFor(phones);
     if (waiting.length) return;
+    if (p.play) { this.pending = null; this.h.startPlay(p.assignments.play); this.h.log(`play started on phone ${p.assignments.play}`); return; }
     try { this.h.runner.start(); this.pending = null; this.h.log(`run: ${p.title} started`); }
     catch (e) { this.error = e.message; }
   }

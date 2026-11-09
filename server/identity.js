@@ -27,8 +27,9 @@ class Identity {
     if (this.ready) this.start();
   }
   start() {
-    this.proc = this.spawnImpl(this.py, [path.join(this.root, 'face_worker.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
-    this.proc.stdin?.on?.('error', () => {});   // the worker may exit first, e.g. while the server shuts down
+    this.proc = this.spawnImpl(this.py, [path.join(this.root, 'face_worker.py')], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, OMP_NUM_THREADS: '2', MKL_NUM_THREADS: '2', VECLIB_MAXIMUM_THREADS: '2', OPENBLAS_NUM_THREADS: '2' } });   // few threads: the workers share the Mac with live audio
+    this.proc.stdin?.on?.('error', () => {});
+    try { require('os').setPriority(this.proc.pid, 10); } catch {}   // vision runs below the voice and the audio loop   // the worker may exit first, e.g. while the server shuts down
     let buf = '';
     this.proc.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { this.onReply(JSON.parse(line)); } catch {} } });
     this.proc.stderr.on('data', () => {});
@@ -70,6 +71,8 @@ class Identity {
 
   tick(now = Date.now()) {
     const t = this.tracking; if (!this.proc || this.busy || !this.enrolled.size) return;
+    if (now - (this.matchAt || 0) < 1500) return;   // faces every 1.5 s: plenty to keep names, and frees the CPU for the voice
+    this.matchAt = now;
     const view = t.view(now); if (!view.running) { this.stopFull(); return; }
     const cam = this.cameras.find((c) => c.id === t.cameraId); if (!cam) return;
     const full = this.fullFrames(cam);

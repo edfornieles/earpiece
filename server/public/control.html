@@ -15,6 +15,17 @@
   .rec { color:var(--hot); font-size:12px; letter-spacing:.08em; }
   .rec::before { content:'●'; margin-right:6px; }
   main { display:grid; grid-template-columns: 1fr 330px; gap:18px; padding:18px 20px; }
+  .desk-room { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin:0 0 16px; }
+  .dr-head { display:flex; align-items:baseline; gap:12px; margin-bottom:10px; } .dr-head h2 { font-size:15px; margin:0; } .dr-head a { margin-left:auto; font-size:12px; color:var(--dim); }
+  .dr-body { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1.3fr) minmax(0,1.2fr); gap:14px; align-items:start; }
+  .dr-plan { width:100%; aspect-ratio:1/1; max-height:300px; } .dr-plan .room { fill:none; stroke:var(--dim); stroke-width:.03; }
+  .dr-plan .fp { fill:rgba(127,127,127,.18); stroke:rgba(127,127,127,.5); stroke-width:.015; } .dr-plan .fpl { font-size:.16px; fill:var(--dim); text-anchor:middle; dominant-baseline:middle; }
+  .dr-plan .pl { font-size:.2px; fill:var(--fg); }
+  .desk-room #cams { margin:8px 0 0; } .dr-sub { margin-top:16px; }
+  .dr-follow { width:100%; aspect-ratio:16/9; background:#000; border-radius:6px; }
+  .dr-label { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); } .dr-sees p { margin:6px 0 10px; font-size:13px; line-height:1.45; }
+  .dr-look { display:flex; gap:10px; font-size:12.5px; line-height:1.4; } .dr-look img { width:84px; height:110px; object-fit:cover; border-radius:5px; flex:none; }
+  @media(max-width:1100px) { .dr-body { grid-template-columns:1fr 1fr; } .dr-sees { grid-column:1/-1; } }
   #cams { display:grid; grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); gap:12px; margin-bottom:16px; }
   #cams:empty { display:none; }
   .cam { position:relative; background:#000; border:1px solid var(--line); border-radius:10px; overflow:hidden; aspect-ratio:16/9; cursor:zoom-in; }
@@ -134,10 +145,18 @@
     <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
     <div id="audio-status" role="status"><span id="audio-label">Desk sound is off. Enable it to listen to participants.</span><button id="enable-sound">Enable sound</button><button id="enable-mic">Enable microphone</button></div>
     <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
+    <div id="desk-room" class="desk-room">
+      <div class="dr-head"><h2>Room</h2><span class="hint">plan · close-up · cameras · mics</span><span id="dr-state" class="hint"></span><a id="dr-open" target="earpiece_pages">Open Room ↗</a></div>
+      <div class="dr-body">
+        <svg id="dr-plan" class="dr-plan" aria-label="Floor plan with people"></svg>
+        <canvas id="dr-follow" class="dr-follow" aria-label="Close-up following the person"></canvas>
+        <div class="dr-sees"><div class="dr-label">Mother sees</div><p id="dr-perception"></p><div id="dr-look" class="dr-look"></div></div>
+      </div>
+      <div class="dr-label dr-sub">Cameras &amp; room microphones</div>
+      <div id="cams"></div><div id="room"></div>
+    </div>
     <div class="desk-heading"><h2>Participants</h2><span class="hint">Select a phone to direct</span></div>
     <div class="desk-workspace"><div id="roster" aria-label="Phones"></div><div id="grid"></div></div>
-    <div class="desk-heading"><h2>Gallery</h2><span class="hint">Live camera feeds &amp; room microphones</span></div>
-    <div id="cams"></div><div id="room"></div>
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="earpiece_pages" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
       <div id="arrivals"></div>
@@ -729,7 +748,7 @@ document.addEventListener('keyup', (e) => {
   if (e.code === 'Space' || /^Digit[1-9]$/.test(e.code)) setTalk(latched ? 0 : null);
 });
 </script>
-<script src="run-sheet.js"></script><script src="program-session.js"></script>
+<script src="follow-core.js"></script><script src="desk-room.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>
 <script src="nav.js"></script>
 </body>
 </html>

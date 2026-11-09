@@ -6,7 +6,7 @@ const RATE = 24000;
 const MOCK = !!process.env.MOCK_AI;
 const OPENAI = 'https://api.openai.com/v1';
 const KEY = () => process.env.OPENAI_API_KEY;
-const TEXT_MODEL = () => process.env.OPENAI_TEXT_MODEL || 'gpt-4o-mini';
+const TEXT_MODEL = () => process.env.OPENAI_TEXT_MODEL || 'gpt-4.1';   // the small model mishandled live perception (contradicted its own camera)
 const STT_MODEL = () => process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe';
 const TTS_URL = () => (process.env.POCKET_TTS_URL || 'http://localhost:8123').replace(/\/+$/, '');
 const VOICE = () => process.env.POCKET_TTS_VOICE || 'hf://kyutai/tts-voices/vctk/p329_023.wav';

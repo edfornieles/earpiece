@@ -9,14 +9,43 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { apply, areaFor } = require('./tracking');
+const { apply, invert, areaFor } = require('./tracking');
 
-const EVERY_MS = 2500, SETTLE_MS = 12000, MIN_SAMPLES = 3, MOVE_M = 0.4, SPREAD_M = 0.3, MIN_SCORE = 0.22;
+// Furniture rarely moves, and a search costs ~20 s of GPU shared with live tracking: look every 15 s.
+const EVERY_MS = 15000, SETTLE_MS = 12000, MIN_SAMPLES = 3, MOVE_M = 0.4, SPREAD_M = 0.3, MIN_SCORE = 0.22;
 const overlap = (a, b) => { const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)), y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)); return x * y / (a.w * a.h || 1); };
+
+// Match the projected tabletop outline to a detected tabletop box. The search only
+// translates the known footprint, and rejects views where its outline cannot fit.
+function tabletopCentre(cal, fp, plan, box) {
+  const cam = cal.camera, height = fp?.heightM;
+  if (!cam || !height || cam.z <= height || !fp.points?.length ||
+      box.x <= .01 || box.y <= .01 || box.x+box.w >= .99 || box.y+box.h >= .99) return null;
+  const inverse = invert(cal.H), scale = (cam.z-height)/cam.z;
+  if (!inverse) return null;
+  const [minX,minY,maxX,maxY] = [Math.min,Math.min,Math.max,Math.max].map((fn,i)=>fn(...fp.points.map(p=>p[i%2])));
+  const centre = [(minX+maxX)/2,(minY+maxY)/2];
+  let best = null, score = 0;
+  const search = (x0,x1,y0,y1,step) => {
+    for(let dx=x0;dx<=x1;dx+=step)for(let dy=y0;dy<=y1;dy+=step){
+      if(minX+dx<0 || minY+dy<0 || maxX+dx>plan.widthM || maxY+dy>plan.depthM) continue;
+      const pixels = fp.points.map(([x,y])=>apply(inverse,[cam.x+(x+dx-cam.x)/scale,cam.y+(y+dy-cam.y)/scale]));
+      if(pixels.some(p=>!p))continue;
+      const xs=pixels.map(p=>p[0]),ys=pixels.map(p=>p[1]),x=Math.min(...xs),y=Math.min(...ys);
+      const predicted={x,y,w:Math.max(...xs)-x,h:Math.max(...ys)-y};
+      const fit=Math.min(overlap(box,predicted),overlap(predicted,box));
+      if(fit>score){score=fit;best=[dx,dy];}
+    }
+  };
+  search(-minX,plan.widthM-maxX,-minY,plan.depthM-maxY,.12);
+  if(best)search(best[0]-.12,best[0]+.12,best[1]-.12,best[1]+.12,.025);
+  return best && score>=.8 ? centre.map((v,i)=>v+best[i]) : null;
+}
 
 class ObjectFinder {
   constructor({ root, cameras, tracking, room, identity, log = () => {}, spawnImpl = spawn }) {
     Object.assign(this, { root, cameras, tracking, room, identity, log, spawnImpl });
+    this.enabled = process.env.OBJECT_FINDER === 'on';   // off by default (~7 GB of memory): switch on from the Room page for a furniture check
     this.py = path.join(root, '.faces-venv', 'bin', 'python');
     this.objects = new Map(); this.seq = 0; this.busy = false; this.error = ''; this.device = null; this.lastAt = 0;
     this.ready = fs.existsSync(this.py) && fs.existsSync(path.join(root, 'object_finder.py'));
@@ -27,34 +56,63 @@ class ObjectFinder {
   }
   start() {
     if (this.proc) return;
-    this.proc = this.spawnImpl(this.py, [path.join(this.root, 'object_finder.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
-    this.proc.stdin?.on?.('error', () => {});   // the worker may exit first, e.g. while the server shuts down
+    const proc = this.proc = this.spawnImpl(this.py, [path.join(this.root, 'object_finder.py')], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, OMP_NUM_THREADS: '2', MKL_NUM_THREADS: '2', VECLIB_MAXIMUM_THREADS: '2', OPENBLAS_NUM_THREADS: '2' } });   // few threads: the workers share the Mac with live audio
+    this.proc.stdin?.on?.('error', () => {});
+    try { require('os').setPriority(this.proc.pid, 10); } catch {}   // vision runs below the voice and the audio loop   // the worker may exit first, e.g. while the server shuts down
     let buf = '';
-    this.proc.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { this.onReply(JSON.parse(line)); } catch {} } });
+    this.proc.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { if (this.proc===proc) this.onReply(JSON.parse(line)); } catch {} } });
     this.proc.stderr.on('data', () => {});
-    this.proc.on('exit', () => { this.proc = null; this.device = null; this.busy = false; });
+    proc.on('exit', () => { if (this.proc === proc) this.stop(); });
   }
-  stop() { if (this.proc) { try { this.proc.kill(); } catch {} this.proc = null; } }
+  stop() {
+    const proc = this.proc;
+    this.proc = null;
+    this.device = null;
+    this.busy = false;
+    this.pending = null;
+    clearTimeout(this.timeout);
+    if (proc) { try { proc.kill(); } catch {} }
+  }
+  calibration(cameraId) {
+    const all = this.room.cals ? this.room.cals() : this.room.config.calibrations;
+    const cal = all?.[cameraId];
+    return cal?.needsReview ? null : cal;
+  }
   tick(now = Date.now()) {
     const view = this.tracking.view(now);
-    if (!view.running) { this.stop(); return; }   // only while someone is tracking: it uses the GPU
+    if (!view.running || !this.enabled) { this.stop(); return; }   // only when switched on and someone is tracking: it uses ~7 GB of memory and the GPU
     this.start();
     if (!this.device || this.busy || now - this.lastAt < EVERY_MS) return;
     const cam = this.cameras.find((c) => c.id === this.tracking.cameraId); if (!cam) return;
     const full = this.identity?.full?.camId === cam.id && now - this.identity.full.at < 3000 ? this.identity.full.frame : null;
     const frame = full || (cam.frame && now - cam.frameAt < 2000 ? cam.frame : null); if (!frame) return;
     this.cat = this.catalogue(); if (!this.cat.length) return;
-    this.busy = true; this.lastAt = now; this.pendingTracks = view.tracks.filter((t) => t.visible && t.box).map((t) => t.box);
-    this.proc.stdin.write(JSON.stringify({ id: ++this.seq, jpeg: Buffer.from(frame).toString('base64'), queries: this.cat.map((o) => o.query) }) + '\n');
-    setTimeout(() => { this.busy = false; }, 15000);
+    this.busy = true; this.lastAt = now;
+    const id = ++this.seq;
+    this.pending = { id, cameraId: cam.id, calibration: JSON.stringify(this.calibration(cam.id)?.H),
+      people: view.tracks.filter(t => t.visible && t.box).map(t => t.box) };
+    this.proc.stdin.write(JSON.stringify({ id, jpeg: Buffer.from(frame).toString('base64'), queries: this.cat.map((o) => o.query) }) + '\n');
+    // Allow slow inference to finish without queuing another request behind it.
+    this.timeout = setTimeout(() => this.stop(), 90000);
   }
   onReply(m) {
     if (m.ready) { this.device = m.device; this.log(`object finder ready (${m.device})`); return; }
+    const pending = this.pending;
+    if (!pending || m.id !== pending.id) return;
     this.busy = false;
+    this.pending = null;
+    clearTimeout(this.timeout);
+    if (pending.cameraId !== this.tracking.cameraId ||
+        pending.calibration !== JSON.stringify(this.calibration(pending.cameraId)?.H)) return;
+    // How long one search of the room really takes (≈20 s when it shares the GPU with body tracking).
+    const t = Date.now(); if (this.lastReplyAt) { const gap = t - this.lastReplyAt; this.cycleMs = this.cycleMs ? 0.7 * this.cycleMs + 0.3 * gap : gap; } this.lastReplyAt = t;
     if (m.error) { this.error = m.error; return; }
     this.error = '';
-    this.place(m.found || [], m.w, m.h, this.pendingTracks || []);
+    this.place(m.found || [], m.w, m.h, pending.people);
   }
+  // Windows scale with the real search time, so a slow finder can still settle and propose moves.
+  settleWindow() { return Math.max(SETTLE_MS, 3.5 * (this.cycleMs || 0)); }
+  seenWindow() { return Math.max(EVERY_MS * 3, 1.6 * (this.cycleMs || 0)); }
   // Floor position, and which way is "away from the camera" there, from the bottom-centre of the box.
   base(H, box) {
     const u = box.x + box.w / 2, v = box.y + box.h, p = apply(H, [u, v]), q = apply(H, [u, Math.max(0, v - 0.03)]);
@@ -63,28 +121,38 @@ class ObjectFinder {
     return { p, away: [dx / n, dy / n] };
   }
   place(found, w, h, people, now = Date.now()) {
-    const cfg = this.room.config, cal = cfg.calibrations?.[this.tracking.cameraId], plan = cfg.floorPlan;
+    const cfg = this.room.config, cal = this.calibration(this.tracking.cameraId), plan = cfg.floorPlan;
+    const calibrationKey = JSON.stringify(cal?.H);
     for (const f of found) {
       const o = this.cat[f.query]; if (!o || f.score < MIN_SCORE) continue;
       const box = { x: f.box[0] / w, y: f.box[1] / h, w: f.box[2] / w, h: f.box[3] / h };
       const previous = this.objects.get(o.name);
-      const rec = previous?.cameraId===this.tracking.cameraId ? previous :
-        { name:o.name, cameraId:this.tracking.cameraId, samples:[], firstSeenAt:now };
-      Object.assign(rec, { box, score: f.score, lastSeenAt: now, follow: o.followOnPlan !== false });
+      const rec = previous?.cameraId===this.tracking.cameraId && previous.calibrationKey===calibrationKey ? previous :
+        { name:o.name, cameraId:this.tracking.cameraId, calibrationKey, samples:[], firstSeenAt:now };
+      Object.assign(rec, { box, score: f.score, visible: true, lastSeenAt: now, follow: o.followOnPlan !== false });
       rec.blocked = people.some((p) => overlap(box, p) > 0.2 || overlap(p, box) > 0.3);
       rec.feetVisible = box.y + box.h < 0.985;
-      const b = cal && !cal.needsReview && plan ? this.base(cal.H, box) : null;
+      const fp = plan?.footprints?.find(item=>item.name===o.name);
+      const top = o.locateBy === 'tabletop';
+      const centre = cal && plan && top && !rec.blocked && f.score>=.3 ? tabletopCentre(cal,fp,plan,box) : null;
+      const b = cal && plan ? (top ? centre && {p:centre,away:[0,0]} : this.base(cal.H,box)) : null;
       if (b && (b.p[0] < -0.2 || b.p[1] < -0.2 || b.p[0] > plan.widthM + 0.2 || b.p[1] > plan.depthM + 0.2)) b.p = null;   // its box bottom is not where it meets the floor
       if (b?.p && !rec.blocked && rec.feetVisible && rec.follow) {
         rec.floor = b.p.map((v) => Math.round(v * 100) / 100); rec.away = b.away; rec.area = areaFor(plan, b.p);
-        rec.samples = [...rec.samples, { at: now, p: b.p, away: b.away }].filter((s) => now - s.at <= SETTLE_MS);
+        const last = rec.samples.at(-1);
+        if (last && Math.hypot(b.p[0]-last.p[0],b.p[1]-last.p[1]) > MOVE_M) rec.samples = [];
+        rec.samples = [...rec.samples, { at: now, p: b.p, away: b.away, score: f.score }].filter((s) => now - s.at <= this.settleWindow());
         this.settle(rec, o, plan, now);
+        if (o.autoMove && fp && rec.proposal && rec.samples.every(sample=>sample.score>=.3)) {
+          this.objects.set(o.name,rec);
+          try { this.accept(o.name,rec.proposal.at,now); } catch (error) { this.error=error.message; }
+        }
       }
       else { rec.proposal = null; rec.samples = []; }
       this.objects.set(o.name, rec);
     }
     for (const rec of this.objects.values()) {
-      rec.visible = now - rec.lastSeenAt < EVERY_MS * 3;
+      rec.visible = now - rec.lastSeenAt < this.seenWindow();
       if (!rec.visible) rec.proposal = null;
     }
   }
@@ -109,7 +177,8 @@ class ObjectFinder {
   accept(name, at, now = Date.now()) {
     const rec = this.objects.get(name), proposal = rec?.proposal, plan = this.room.config.floorPlan;
     const fp = plan?.footprints.find(item=>item.name===name);
-    if (!rec?.visible || rec.cameraId!==this.tracking.cameraId || rec.blocked || now-rec.lastSeenAt>=EVERY_MS*3 || !proposal || proposal.at!==at ||
+    const cal = this.calibration(this.tracking.cameraId);
+    if (!cal || rec?.calibrationKey!==JSON.stringify(cal.H) || !rec?.visible || rec.cameraId!==this.tracking.cameraId || rec.blocked || now-rec.lastSeenAt>=this.seenWindow() || !proposal || proposal.at!==at ||
         proposal.geometry!==JSON.stringify(fp?.points)) throw Error('That furniture proposal is no longer current.');
     const saved = fp ? this.room.moveFootprint(name,proposal.delta) : this.room.addFootprint(proposal.placement);
     if (!saved) throw Error('The proposed furniture position could not be saved.');
@@ -122,8 +191,8 @@ class ObjectFinder {
     t.h.event?.('room_object_moved', { footprint: rec.name, from, to, by: 'finder' });
   }
   status(now = Date.now()) {
-    return { ready: this.ready, running: !!this.proc, device: this.device, error: this.error,
-      objects: [...this.objects.values()].filter((r) => r.cameraId===this.tracking.cameraId && now - r.lastSeenAt < 60000).map((r) => ({ name: r.name, score: r.score, visible: r.visible, box: r.box, floor: r.floor || null, area: r.area || null, blocked: r.blocked, follows: r.follow, proposal: r.visible&&r.proposal?{at:r.proposal.at,from:r.proposal.from,to:r.proposal.to,distanceM:r.proposal.distanceM}:null, secondsAgo: Math.round((now - r.lastSeenAt) / 1000) })) };
+    return { enabled: this.enabled, ready: this.ready, running: !!this.proc, device: this.device, error: this.error,
+      objects: [...this.objects.values()].filter((r) => r.cameraId===this.tracking.cameraId && now - r.lastSeenAt < 60000).map((r) => ({ name: r.name, score: r.score, visible: r.visible && now-r.lastSeenAt<this.seenWindow(), box: r.box, floor: r.floor || null, area: r.area || null, blocked: r.blocked, follows: r.follow, proposal: r.visible&&now-r.lastSeenAt<this.seenWindow()&&r.proposal?{at:r.proposal.at,from:r.proposal.from,to:r.proposal.to,distanceM:r.proposal.distanceM}:null, secondsAgo: Math.round((now - r.lastSeenAt) / 1000) })) };
   }
 }
 module.exports = { ObjectFinder };

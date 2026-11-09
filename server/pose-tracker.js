@@ -37,9 +37,10 @@ class PoseTracker {
   }
   spawn() {
     if (this.proc) return;
-    const p = this.spawnImpl(this.py, [path.join(this.root, 'pose_worker.py')], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, YOLO_OFFLINE: '1' } });
+    const p = this.spawnImpl(this.py, [path.join(this.root, 'pose_worker.py')], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, YOLO_OFFLINE: '1', OMP_NUM_THREADS: '2', MKL_NUM_THREADS: '2', VECLIB_MAXIMUM_THREADS: '2', OPENBLAS_NUM_THREADS: '2' } });
     this.proc = p; let buf = '', err = '';
-    p.stdin?.on?.('error', () => {});   // the worker may exit first, e.g. while the server shuts down
+    p.stdin?.on?.('error', () => {});
+    try { require('os').setPriority(p.pid, 10); } catch {}   // vision runs below the voice and the audio loop   // the worker may exit first, e.g. while the server shuts down
     p.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); try { this.onReply(JSON.parse(line)); } catch {} } });
     p.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
     p.on('exit', (code) => {

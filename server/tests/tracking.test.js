@@ -189,3 +189,15 @@ test('a person whose legs are hidden but who overlaps a seat the finder placed i
  const v=tr.update({tracker:'d',cameraId:'cam2',tracks:[{id:'T1',box:{x:0.66,y:0.31,w:0.18,h:0.68},feetVisible:false}]},{calibration:cal,plan,now:Date.now()});
  assert.deepEqual(v.tracks[0].floor,[2.11,3.34]);assert.equal(v.tracks[0].area,'seated on the Tall stool');assert.equal(v.tracks[0].certainty,'seated');
 });
+
+test('activity uses recent positions and clears after observation stops',()=>{
+ const tr=new Tracking();let now=1e6;
+ const send=(x,dt=400)=>{now+=dt;return tr.update({
+   tracker:'server',cameraId:'cam1',tracks:[{id:'T1',box:boxAt([x,3.4]),feetVisible:true}],
+ },{calibration:cal,plan,now}).tracks[0];};
+ assert.equal(send(.7).activity,null);
+ send(1.1);
+ assert.equal(send(1.8).activity.label,'moving');
+ assert.equal(tr.view(now+1100).tracks[0].activity,null);
+ assert.equal(send(2.1,1400).activity,null);
+});

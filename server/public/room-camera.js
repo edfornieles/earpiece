@@ -7,9 +7,13 @@
   const cam = () => $('camera').value;
   const mine = () => status[cam()] || null;
 
-  addEventListener('room-tracking', (e) => { lastEvent = Date.now(); status = e.detail?.cameraControl || {}; draw(); });
+  addEventListener('room-tracking', (e) => { lastEvent = Date.now(); status = e.detail?.cameraControl || {}; finderOn(e.detail?.finder); draw(); });
+  // The object finder switch (Objects section).
+  const finderBox = $('finder-on');
+  function finderOn(f) { if (finderBox && f && document.activeElement !== finderBox) finderBox.checked = !!f.enabled; }
+  if (finderBox) finderBox.onchange = async () => { try { const v = await api('room', { action: 'objectFinder', on: finderBox.checked }); finderOn(v.finder); toast(finderBox.checked ? 'Looking for furniture while tracking runs' : 'Furniture search off'); } catch (e) { toast(e.message); } };
   async function refresh() {
-    try { const v = await api('room', { action: 'trackingView' }); status = v.cameraControl || {}; draw(); } catch {}
+    try { const v = await api('room', { action: 'trackingView' }); status = v.cameraControl || {}; finderOn(v.finder); draw(); } catch {}
   }
   setInterval(() => {
     const visible = !$('setup').hidden || $('stage').dataset.view === 'follow';

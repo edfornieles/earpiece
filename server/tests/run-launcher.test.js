@@ -61,3 +61,17 @@ test('guards: one phone per role, and replacing a running program is explicit', 
   launcher.run({ id: 'p1', replace: true });
   assert.ok(log.includes('stop'));
 });
+
+test('Play starts recording in standby, then the visit, then Mother, with no program', () => {
+  const s1 = setup({ standby: true, phones: [{ id: 2, connected: true }] });
+  s1.launcher.h.rememberPlay = (n) => s1.log.push(['rememberPlay', n]);
+  assert.equal(s1.launcher.play().phase, 'recording');
+  assert.deepEqual(s1.log, [['rememberPlay', 2], 'record']);
+  const s2 = setup({ phones: [{ id: 1, connected: true }] });
+  s2.launcher.h.startPlay = (n) => s2.log.push(['play', n]);
+  s2.launcher.resumePlay(1); s2.launcher.tick();
+  assert.deepEqual(s2.log, [['visit', 1]]);
+  s2.ph[1].ready = true; s2.launcher.tick();
+  assert.deepEqual(s2.log.at(-1), ['play', 1]);
+  assert.ok(!s2.log.includes('start'), 'no score is started');
+});

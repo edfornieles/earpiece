@@ -75,7 +75,14 @@
   .console .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
   .console .seg button { border:0; border-radius:0; padding:7px 12px; background:transparent; }
   .console .seg button.sel { background:var(--fg); color:#000; }
-  .console .cs-all { padding:9px 16px; font-weight:500; }
+  .console-strip { flex-direction:column; align-items:stretch; }
+  .console .cs-top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .console .voice-switch { flex:1; min-width:260px; } .console .voice-switch button { flex:1; padding:10px 14px; font-size:14px; }
+  .talkpad { display:flex; gap:8px; }
+  .talkpad .padbtn { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; padding:14px 8px; min-width:0; user-select:none; touch-action:none; }
+  .talkpad .padbtn b { font-size:18px; font-weight:500; } .talkpad .padbtn small { font-size:11px; color:var(--dim); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .talkpad .padbtn kbd { margin:2px 0 0; } .talkpad #all { flex:1.3; }
+  .talkpad .padbtn.off { opacity:.45; } .talkpad .padbtn.on small, .talkpad .padbtn.on kbd { color:#000; }
   .console .cs-mic { display:flex; align-items:center; gap:8px; flex:1; min-width:140px; }
   .console .cs-mic .meter { flex:1; }
   .console .cs-hint { padding:6px 14px 0; margin:0; }
@@ -190,13 +197,14 @@
     <div class="desk-heading"><h2>Participants</h2><span class="hint">Select a phone to direct</span></div>
     <div class="console">
       <div class="console-strip">
-        <div class="cs-group" title="How the person hears you when you hold to talk. V flips it.">
-          <span class="cs-label">They hear</span>
-          <div class="seg" id="micmode"><button data-as="own" class="sel">Your voice</button><button data-as="voice">AI voice</button></div><kbd>V</kbd>
+        <div class="cs-top">
+          <div class="seg voice-switch" id="micmode" title="How they hear you when you hold to talk. V flips it."><button data-as="own" class="sel">Your voice</button><button data-as="voice">AI voice</button></div>
+          <button id="cs-mark" title="Drop a marker on the timeline now">Mark <kbd>M</kbd></button>
+          <div class="cs-mic" title="Your microphone"><span class="cs-label">Your mic</span><div class="meter"><i id="mymeter"></i></div></div>
         </div>
-        <button id="all" class="cs-all">Hold to talk to everyone <kbd>space</kbd></button>
-        <button id="cs-mark" title="Drop a marker on the timeline now">Mark <kbd>M</kbd></button>
-        <div class="cs-mic" title="Your microphone"><span class="cs-label">Your mic</span><div class="meter"><i id="mymeter"></i></div></div>
+        <div class="talkpad" id="talkpad" aria-label="Hold to talk">
+          <button id="all" class="padbtn"><b>All</b><small>everyone</small><kbd>space</kbd></button>
+        </div>
       </div>
       <div class="hint cs-hint" id="micmodehint">They hear you directly, live.</div>
       <div class="desk-workspace">
@@ -270,6 +278,8 @@ function paintRoster(p) {
   row.classList.toggle('warning', !!p.status?.classList.contains('hot'));
   const chip = row.querySelector('.chip.ai'); if (chip) { chip.hidden = !p.connected; chip.classList.toggle('on', p.mode === 'auto'); chip.textContent = p.mode === 'auto' ? 'AI on' : 'AI off'; }
   row.classList.toggle('talking', talkTarget === p.id || talkTarget === 0);
+  const pad = $('talkpad').querySelector(`[data-phone="${p.id}"]`);
+  if (pad) { pad.querySelector('small').textContent = !p.connected ? 'not connected' : p.waiting ? 'waiting' : (who?.name || p.name || 'participant'); pad.classList.toggle('off', !p.connected); }
 }
 let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [], micAs = 'own';
 const people = new Map();
@@ -329,6 +339,7 @@ function renderGrid(list) {
   for (const p of people.values()) p.connected = false;
   for (const { id, name, pid, mode, waiting } of list) { const p = person(id); Object.assign(p, { name, pid, mode, waiting, connected: true }); }
   const grid = $('grid'); grid.innerHTML = ''; $('roster').innerHTML = '';
+  for (const b of $('talkpad').querySelectorAll('[data-phone]')) b.remove();
   selectedPhone = Math.min(selectedPhone, MAX) || 1;
   for (let id = 1; id <= MAX; id++) {
     const p = people.get(id);
@@ -337,6 +348,9 @@ function renderGrid(list) {
     row.setAttribute('aria-pressed', String(id === selectedPhone));
     row.innerHTML = `<span class="phone-index">${String(id).padStart(2, '0')}</span><span class="face none"></span><span><strong>Phone ${id}</strong><small>Not connected</small></span><span class="chip ai" hidden>AI</span><span class="connection-dot"></span>`;
     row.classList.toggle('connected', !!p?.connected); row.onclick = () => selectPhone(id); $('roster').appendChild(row);
+    const pad = document.createElement('button'); pad.className = 'padbtn'; pad.dataset.phone = id;
+    pad.innerHTML = `<b>${id}</b><small>${p?.connected ? 'connected' : 'not connected'}</small>${id <= 9 ? `<kbd>${id}</kbd>` : ''}`;
+    pad.classList.toggle('off', !p?.connected); bindHold(pad, id); $('talkpad').appendChild(pad);
     if (!p || !p.connected) { el.className = 'card empty'; el.textContent = `Phone ${id} — not connected`; grid.appendChild(el); p && (p.el = null); continue; }
     el.className = 'card';
     el.innerHTML = `
@@ -346,12 +360,9 @@ function renderGrid(list) {
       <div class="meter" title="Their microphone"><i></i></div>
       <button class="startvisit primary" hidden>Start visit</button>
       <div class="row">
-        <button class="grow talk">Hold to talk <kbd>${id <= 9 ? id : ''}</kbd></button>
-        <button class="listen ${p.listening ? '' : 'muted'}" title="Hear this phone's microphone on the desk">🎧 Listen</button>
-      </div>
-      <div class="row">
         <button class="grow aimode switch" role="switch"></button>
         <button class="nudge" title="Mother gives its next direction now">Next direction <kbd>N</kbd></button>
+        <button class="listen ${p.listening ? '' : 'muted'}" title="Hear this phone's microphone on the desk">🎧 Listen</button>
       </div>
       <input class="speak" placeholder="Type a line → they hear it in the AI voice (Enter)">
       <input class="instruct" placeholder="Private note to the AI (it rephrases it), then Enter">
@@ -363,7 +374,7 @@ function renderGrid(list) {
       <div class="log"></div>
       <button class="quiet endp">End participant → ready for next</button>`;
     p.el = el; p.meter = el.querySelector('.meter i'); p.log = el.querySelector('.log'); p.status = el.querySelector('.status');
-    bindHold(el.querySelector('.talk'), id); paintMicAs();
+    paintMicAs();
     el.querySelector('.startvisit').onclick = () => ws.send(JSON.stringify({ type: 'visitStart', phone: id }));
     el.querySelector('.listen').onclick = (e) => { p.listening = !p.listening; if (p.gain) p.gain.gain.value = p.listening ? 1 : 0; e.target.classList.toggle('muted', !p.listening); };
     el.querySelector('.aimode').onclick = () => ws.send(JSON.stringify({ type: 'mode', id, mode: p.mode === 'auto' ? 'off' : 'auto' }));
@@ -397,8 +408,6 @@ function paintState(p) {
   b.innerHTML = scripted ? 'Following selected program' : `Auto directing <b>${p.mode === 'auto' ? 'ON' : 'OFF'}</b> <kbd>A</kbd>`;
   b.setAttribute('aria-checked', String(p.mode === 'auto'));
   b.title = p.mode === 'auto' ? 'Mother listens and directs by itself. Click (or A) to stop it and direct by hand.' : 'Mother stays quiet unless you make it speak. Click (or A) to let it direct.';
-  const who = p.waiting ? 'them' : (p.name || 'them');
-  p.el.querySelector('.talk').innerHTML = `Hold to talk to ${esc(who)}${p.id <= 9 ? ` <kbd>${p.id}</kbd>` : ''}`;
   const vn = p.el.querySelector('.voicename'); if (vn) vn.textContent = p.voice || '';
   p.el.querySelector('.nudge').textContent=scripted?'Continue program cue':'Next direction';
   b.classList.toggle('aion', p.mode === 'auto');
@@ -443,7 +452,7 @@ function setTalk(target) {
 }
 function releaseTalk() {
   latched = false; setTalk(null);
-  for (const btn of document.querySelectorAll('.talk, #all')) btn.classList.remove('on');
+  for (const btn of document.querySelectorAll('.padbtn')) btn.classList.remove('on');
 }
 window.addEventListener('blur', releaseTalk);
 window.addEventListener('pagehide', releaseTalk);
@@ -495,7 +504,7 @@ function paintMicAs() {
   $('micmodehint').textContent = micAs === 'voice'
     ? 'They hear what you said, transcribed and spoken in each phone’s AI voice, about 2 s after you let go.'
     : 'They hear you directly, live.';
-  for (const b of document.querySelectorAll('.talk, #all')) b.title = micAs === 'voice' ? 'Hold, speak, let go: they hear your words in the AI voice' : 'Hold and speak: they hear your own voice, live';
+  for (const b of document.querySelectorAll('.padbtn')) b.title = micAs === 'voice' ? 'Hold, speak, let go: they hear your words in the AI voice' : 'Hold and speak: they hear your own voice, live';
 }
 function setMicAs(as) {
   micAs = as === 'voice' ? 'voice' : 'own';

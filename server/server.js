@@ -1582,13 +1582,23 @@ async function talkStop(owner) {
   if (!talk || talk.owner !== owner) return;
   const t = talk; talk = null; t.t1 = Date.now();
   for (const id of t.targets) { const s = sessions.get(id); if (s) { s.edHold = false; s.lastActivity = Date.now(); state(s); } }
-  if (!t.pcm.length) return;
+  // The director always hears back what happened: a silent desk reads as a broken button.
+  const tell = (text) => send(t.owner, { type: 'error', text });
+  const note = (id, text) => toControls({ type: 'transcript', id, who: 'note', text });
+  if (!t.targets.size) return tell(t.target ? `Phone ${t.target} is not connected, so nobody heard that.` : 'No phone is connected, so nobody heard that.');
+  if (t.as !== 'voice') { if (!t.pcm.length) tell('No sound reached the server from the desk microphone.'); }
+  else if (!t.pcm.length) return tell('No sound reached the server: check the desk microphone is on (Enable audio).');
+  else if (t.t1 - t.t0 < 400) return tell('Hold the button while you speak, and let go when you have finished.');
   let text = '';
-  try { text = (await ai.transcribe(Buffer.concat(t.pcm))).trim(); } catch (e) { return console.error('  director transcription: ' + e.message); }
-  if (!text) return;
+  if (t.pcm.length) {
+    try { text = (await ai.transcribe(Buffer.concat(t.pcm))).trim(); }
+    catch (e) { console.error('  director transcription: ' + e.message); return tell(`Could not turn your speech into text (${e.message.slice(0, 80)}). Try again, or type the line.`); }
+  }
+  if (!text) return t.as === 'voice' ? tell('Heard no words. Hold the button, speak, then let go.') : undefined;
   for (const id of t.targets) {
     const s = sessions.get(id);
-    if (!s || s.waiting || s.visitToken !== t.visits.get(id)) continue;
+    if (!s || s.visitToken !== t.visits.get(id)) { note(id, `Not passed on (the visit changed while you were talking): “${text}”`); continue; }
+    if (s.waiting) { if (t.as === 'voice') note(id, `Not passed on (no visit is running on this phone; press Play or Run first): “${text}”`); continue; }
     if(programRunner.manages(id) && programRunner.token(id)!==t.programTokens.get(id))continue;
     if (t.as === 'voice') {
       if(programRunner.manages(id) && programRunner.status==='running'){

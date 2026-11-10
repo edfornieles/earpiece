@@ -30,3 +30,4 @@ server/programs/
 .room.json
 .room.json.tmp
 .room-memory.json
+__pycache__/

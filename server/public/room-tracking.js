@@ -117,8 +117,10 @@ function stop(message){
 function drawLive(){
   const svg=$('track-overlay');if(!svg)return;
   svg.toggleAttribute('hidden',$('live-picture').hidden);svg.classList.toggle('calibrating',calibrating);
+  const cameraState = state?.cameraControl?.[camera()];
+  const fromCurrentView = detection => detection.lastSeenAt >= (cameraState?.settledAt || 0);
   const byId=new Map((state?.tracks||[]).map(x=>[x.id,x]));
-  const src=running?local.filter(tr=>tr.hits>=2):serverOn()?(state?.tracks||[]).filter(x=>x.visible&&x.box):[];
+  const src=running?local.filter(tr=>tr.hits>=2):serverOn()?(state?.tracks||[]).filter(x=>x.visible&&x.box&&fromCurrentView(x)):[];
   // Body points the position came from: ankles green, hips amber, head pink.
   const joints=serverOn()||running?src.map(tr=>{const kp=byId.get(tr.id)?.kp;if(!kp)return '';return [[15,16,'ankle'],[11,12,'hip'],[0,0,'head']].map(([a,b,c])=>[kp[a],kp[b]].filter(q=>q&&q[2]>0.45).map(q=>`<circle class="joint ${c}" cx="${q[0]*1000}" cy="${q[1]*1000}" r="5"/>`).join('')).join('');}).join(''):'';
   const boxes=joints+src.map(tr=>{const s=byId.get(tr.id),label=s?.binding?.person?.name||s?.binding?.label||'Unknown person';return `<g class="${s?.binding?'bound':''}"><rect x="${tr.box.x*1000}" y="${tr.box.y*1000}" width="${tr.box.w*1000}" height="${tr.box.h*1000}"/><circle cx="${(tr.box.x+tr.box.w/2)*1000}" cy="${(tr.box.y+tr.box.h)*1000}" r="6"/><text x="${tr.box.x*1000+6}" y="${Math.max(24,tr.box.y*1000+24)}">${esc(label)}${s?.area&&s.area!=='unknown'?' · '+esc(s.area):''}</text></g>`;}).join('');
@@ -133,10 +135,12 @@ function drawLive(){
     outline=poly(room4.flatMap((a,i)=>edge(a,room4[(i+1)%4]).slice(0,-1)),'floor-edge')+(p.footprints||[]).map(o=>poly(o.points.flatMap((a,i)=>edge(a,o.points[(i+1)%o.points.length]).slice(0,-1)),'floor-object')).join('');
   }
   const marks=calibrating?pairs.map((q,i)=>q.image?`<g class="calib"><circle cx="${q.image[0]*1000}" cy="${q.image[1]*1000}" r="9"/><text x="${q.image[0]*1000+12}" y="${q.image[1]*1000-10}">${i+1}</text></g>`:'').join(''):'';
-  const furn=(state?.objects||[]).filter(o=>o.visible&&o.box).map(o=>`<g class="furniture${o.binding?' bound':''}"><rect x="${o.box.x*1000}" y="${o.box.y*1000}" width="${o.box.w*1000}" height="${o.box.h*1000}"/><text x="${o.box.x*1000+6}" y="${o.box.y*1000+22}">${esc(o.binding?.footprint||furnitureLabel(o.cls)+' '+o.id)}</text></g>`).join('');
-  const pets=(state?.animals||[]).filter(a=>a.visible&&a.box).map(a=>`<g class="animal"><rect x="${a.box.x*1000}" y="${a.box.y*1000}" width="${a.box.w*1000}" height="${a.box.h*1000}"/><text x="${a.box.x*1000+6}" y="${a.box.y*1000+22}">${esc(a.name)}${a.area&&a.area!=='unknown'?' · '+esc(a.area):''}</text></g>`).join('');
+  const furn=(state?.objects||[]).filter(o=>o.visible&&o.box&&fromCurrentView(o)).map(o=>`<g class="furniture${o.binding?' bound':''}"><rect x="${o.box.x*1000}" y="${o.box.y*1000}" width="${o.box.w*1000}" height="${o.box.h*1000}"/><text x="${o.box.x*1000+6}" y="${o.box.y*1000+22}">${esc(o.binding?.footprint||furnitureLabel(o.cls)+' '+o.id)}</text></g>`).join('');
+  const pets=(state?.animals||[]).filter(a=>a.visible&&a.box&&fromCurrentView(a)).map(a=>`<g class="animal"><rect x="${a.box.x*1000}" y="${a.box.y*1000}" width="${a.box.w*1000}" height="${a.box.h*1000}"/><text x="${a.box.x*1000+6}" y="${a.box.y*1000+22}">${esc(a.name)}${a.area&&a.area!=='unknown'?' · '+esc(a.area):''}</text></g>`).join('');
   const named=(state?.finder?.objects||[]).filter(o=>o.visible&&o.box).map(o=>`<g class="named"><rect x="${o.box.x*1000}" y="${o.box.y*1000}" width="${o.box.w*1000}" height="${o.box.h*1000}"/><text x="${o.box.x*1000+6}" y="${o.box.y*1000+22}">${esc(o.name)} ${Math.round(o.score*100)}%</text></g>`).join('');
-  svg.innerHTML=outline+furn+named+pets+boxes+marks;
+  const currentCamera = state?.cameraId === camera();
+  const turning = cameraState?.busy;
+  svg.innerHTML = turning ? '' : outline + (currentCamera ? furn + named + pets : '') + (currentCamera || running ? boxes : '') + marks;
   drawPlan();
 }
 function project(H,[x,y]){const w=H[6]*x+H[7]*y+H[8];if(!(w>1e-9))return null;return [(H[0]*x+H[1]*y+H[2])/w,(H[3]*x+H[4]*y+H[5])/w];}
@@ -196,6 +200,64 @@ function renderPeopleNow(){
   if(el.dataset.markup!==markup){el.innerHTML=markup;el.dataset.markup=markup;}
   const n=list.filter(x=>x.visible).length;$('people-count').textContent=n?`${n} in view`:'none in view';
 }
+
+// A frozen picture keeps the four clicks on one camera observation.
+let tabletop=null;
+const tabletopFrame=$('tabletop-frame'), tabletopDialog=$('tabletop-dialog');
+function drawTabletop(){
+  const {frame,corners}=tabletop, pen=tabletopFrame.getContext('2d');
+  pen.drawImage(frame,0,0);
+  for(const [i,[u,v]] of corners.entries()){
+    const x=u*frame.width,y=v*frame.height;
+    pen.fillStyle='#ffd16d';pen.beginPath();pen.arc(x,y,6,0,2*Math.PI);pen.fill();
+    pen.font='18px sans-serif';pen.fillText(i+1,x+10,y-8);
+  }
+  const edges=$('tabletop-edges').checked, count=edges?3:4;
+  $('tabletop-save').disabled=corners.length!==count;
+  if(edges){
+    $('tabletop-step').textContent=[
+      'Click the near corner where the short and long edges meet.',
+      'Click the other end of the short edge.',
+      'Click a visible point farther along the long edge from your first corner.',
+      'Edges marked. Update the workbench on the plan.',
+    ][corners.length];
+    return;
+  }
+  $('tabletop-step').textContent=corners.length===4?'Four corners marked. Update the plan if all four match the tabletop.':`Click tabletop corner ${corners.length+1} of 4. Go around the perimeter in order.`;
+}
+$('fit-tabletop').onclick=async()=>{
+  try {
+    const cameraId=camera(), current=await api('room'), cal=current.calibrations?.[cameraId];
+    const image=$('live-picture');
+    if(camera()!==cameraId || !cal?.camera || cal.needsReview)throw Error('Choose a settled camera with a floor calibration and measured camera height.');
+    if(!image.naturalWidth)throw Error('Wait for the camera preview.');
+    if(!current.floorPlan?.footprints.some(f=>f.name==='Work bench'&&f.heightM))throw Error('The plan needs a workbench footprint with its tabletop height.');
+    const frame=document.createElement('canvas');
+    frame.width=image.naturalWidth;frame.height=image.naturalHeight;
+    frame.getContext('2d').drawImage(image,0,0);
+    tabletopFrame.width=frame.width;tabletopFrame.height=frame.height;
+    tabletop={frame,corners:[],cameraId,revision:current.revision,calibration:JSON.stringify(cal.H)};
+    $('tabletop-edges').checked=false;drawTabletop();tabletopDialog.showModal();
+  } catch(error){toast(error.message);}
+};
+$('tabletop-edges').onchange=()=>{tabletop.corners=[];drawTabletop();};
+tabletopFrame.onclick=event=>{
+  if(tabletop.corners.length===($('tabletop-edges').checked?3:4))return;
+  const bounds=tabletopFrame.getBoundingClientRect();
+  tabletop.corners.push([(event.clientX-bounds.left)/bounds.width,(event.clientY-bounds.top)/bounds.height]);
+  drawTabletop();
+};
+$('tabletop-undo').onclick=()=>{tabletop.corners.pop();drawTabletop();};
+$('tabletop-cancel').onclick=()=>tabletopDialog.close();
+$('tabletop-save').onclick=async()=>{
+  $('tabletop-save').disabled=true;
+  const {corners,cameraId,revision,calibration}=tabletop;
+  try{
+    const result=await api('room',{action:'fitTabletop',name:'Work bench',mode:$('tabletop-edges').checked?'edges':'corners',corners,cameraId,revision,calibration});
+    tabletopDialog.close();room=await api('room');render();drawLive();
+    toast(`Workbench updated. Corner fit: ${Math.round(result.errorM*100)} cm.`);
+  }catch(error){$('tabletop-step').textContent=error.message;$('tabletop-save').disabled=false;}
+};
 
 // ---------- calibration ----------
 function snap(pt){

@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { apply, invert, areaFor } = require('./tracking');
 const { polyDist } = require('./world');
-const { atHeight } = require('./positioning');
+const { atHeight, detectTabletopPose, tabletopAngle, angleDifference } = require('./positioning');
 
 // Furniture rarely moves, and a search costs ~20 s of GPU shared with live tracking: look every 15 s.
 const EVERY_MS = 15000, SETTLE_MS = 12000, MIN_SAMPLES = 3, MOVE_M = 0.4, SPREAD_M = 0.3, MIN_SCORE = 0.22;
@@ -95,26 +95,47 @@ class ObjectFinder {
   tick(now = Date.now()) {
     const view = this.tracking.view(now);
     if (!view.running || !this.enabled) { this.check = null; this.since = 0; this.waiting = ''; this.stop(); return; }
-    if (!this.since) { this.since = now; this.wanted = { at: now + START_DELAY_MS, reason: 'tracking started' }; }
-    if (!this.always && !this.checking(view, now)) return;
+    if (this.h.paused?.(this.tracking.cameraId)) return;
+    if (!this.since) { this.since = now; if (!this.lastCheckAt) this.wanted ||= { at: now + START_DELAY_MS, reason: 'tracking started' }; }
+    if (this.always && this.h.gate?.({ force: false })) return;   // stay loaded, just do not look (reloading costs more than waiting)
+    if ((!this.always || this.wanted || this.check) && !this.checking(view, now)) return;
     this.start();
     if (!this.device || this.busy || (this.always && now - this.lastAt < EVERY_MS)) return;
     const cam = this.cameras.find((c) => c.id === this.tracking.cameraId); if (!cam) return;
-    const full = this.identity?.full?.camId === cam.id && now - this.identity.full.at < 3000 ? this.identity.full.frame : null;
-    const frame = full || (cam.frame && now - cam.frameAt < 2000 ? cam.frame : null); if (!frame) return;
+    const full = this.identity?.full;
+    const useFull = full?.camId === cam.id && full.frame && now - full.at < 3000;
+    const frame = useFull ? full.frame : cam.frame;
+    const frameAt = useFull ? full.at : cam.frameAt;
+    if (!frame || !frameAt || frameAt <= (this.viewStartedAt?.get(cam.id) || 0) || now - frameAt >= (useFull ? 3000 : 2000)) return;
+    if (this.lastFrame?.cameraId === cam.id && frameAt <= this.lastFrame.at) return;
     this.cat = this.catalogue(); if (!this.cat.length) return;
     this.busy = true; this.lastAt = now;
+    this.lastFrame = { cameraId: cam.id, at: frameAt };
     const id = ++this.seq;
-    this.pending = { id, cameraId: cam.id, calibration: JSON.stringify(this.calibration(cam.id)?.H),
+    this.pending = { id, cameraId: cam.id, viewStartedAt: this.viewStartedAt?.get(cam.id), calibration: JSON.stringify(this.calibration(cam.id)?.H),
       people: view.tracks.filter(t => t.visible && t.box).map(t => t.box) };
-    this.proc.stdin.write(JSON.stringify({ id, jpeg: Buffer.from(frame).toString('base64'), queries: this.cat.map((o) => o.query) }) + '\n');
+    this.proc.stdin.write(JSON.stringify({ id, jpeg: Buffer.from(frame).toString('base64'), queries: this.cat.map((o) => o.query),
+      rotationQueries: this.cat.flatMap((o,i)=>o.trackRotation?[i]:[]) }) + '\n');
     // Allow slow inference to finish without queuing another request behind it.
-    this.timeout = setTimeout(() => { if (this.check) this.check.passes++; this.stop(); }, 90000);
+    this.timeout = setTimeout(() => { this.error = 'Furniture detector timed out'; if (this.check) this.check.failures = (this.check.failures || 0) + 1; this.stop(); }, 90000);
   }
   // Ask for a room check now (the desk's button forces it past the "Mac is busy" hold, never past the voice).
   request(reason, { force = false, now = Date.now() } = {}) {
     if (this.check) { this.check.force ||= force; return; }
     this.wanted = { at: now, reason, force };
+  }
+  viewChanged(cameraId, now = Date.now()) {
+    this.viewStartedAt ||= new Map();
+    this.viewStartedAt.set(cameraId, now);
+  }
+  isCurrentView(rec) {
+    return !this.h.paused?.(rec.cameraId) &&
+      rec.viewStartedAt === this.viewStartedAt?.get(rec.cameraId);
+  }
+  checkNewView(reason) {
+    this.stop();
+    this.check=null;
+    this.request(reason);
   }
   nextCheckAt() { return this.wanted ? this.wanted.at : this.lastCheckAt + CHECK_EVERY_MS; }
   // One step of the room-check cycle. True when a look may start now.
@@ -126,7 +147,14 @@ class ObjectFinder {
       this.wanted = null; this.lastReplyAt = 0; this.quietSince = 0;   // the gap since the last check is not a search time
     }
     const c = this.check;
-    if (c.passes >= PASSES || (c.loadedAt && now - c.loadedAt > CHECK_MAX_MS)) { this.finish(now, true); return false; }
+    if (c.passes >= PASSES) { this.finish(now, true); return false; }
+    // A finder that keeps failing or runs out of time does not refresh the room memory, and waits the normal
+    // interval before trying again: retrying sooner would keep the 7 GB model loaded most of the time.
+    if ((c.failures || 0) >= PASSES || (c.loadedAt && now - c.loadedAt > CHECK_MAX_MS)) {
+      this.finish(now, false);
+      this.wanted = { at: now + CHECK_EVERY_MS, reason: c.reason, force: c.force };
+      return false;
+    }
     const held = this.h.gate?.({ force: c.force }) || null;
     if (held) {
       this.waiting = held.why; this.quietSince = 0; c.heldSince ||= now;
@@ -166,14 +194,18 @@ class ObjectFinder {
     this.busy = false;
     this.pending = null;
     clearTimeout(this.timeout);
-    if (pending.cameraId !== this.tracking.cameraId ||
+    if (pending.cameraId !== this.tracking.cameraId || !this.isCurrentView(pending) ||
         pending.calibration !== JSON.stringify(this.calibration(pending.cameraId)?.H)) return;
     // How long one search of the room really takes (≈20 s when it shares the GPU with body tracking).
     const t = Date.now(); if (this.lastReplyAt) { const gap = t - this.lastReplyAt; this.cycleMs = this.cycleMs ? 0.7 * this.cycleMs + 0.3 * gap : gap; } this.lastReplyAt = t;
+    if (m.error || !Array.isArray(m.found) || !(m.w > 0 && m.h > 0)) {
+      this.error = m.error || 'Furniture detector returned an invalid result';
+      if (this.check) this.check.failures = (this.check.failures || 0) + 1;
+      return;
+    }
+    this.place(m.found, m.w, m.h, pending.people);
     if (this.check) this.check.passes++;
-    if (m.error) { this.error = m.error; return; }
     this.error = '';
-    this.place(m.found || [], m.w, m.h, pending.people);
   }
   // Windows scale with the real search time, so a slow finder can still settle and propose moves.
   settleWindow() { return Math.max(SETTLE_MS, 3.5 * (this.cycleMs || 0)); }
@@ -193,15 +225,18 @@ class ObjectFinder {
       const o = this.cat[f.query]; if (!o || f.score < MIN_SCORE) continue;
       const box = { x: f.box[0] / w, y: f.box[1] / h, w: f.box[2] / w, h: f.box[3] / h };
       const previous = this.objects.get(o.name);
-      const rec = previous?.cameraId===this.tracking.cameraId && previous.calibrationKey===calibrationKey ? previous :
-        { name:o.name, cameraId:this.tracking.cameraId, calibrationKey, samples:[], firstSeenAt:now };
+      const rec = previous?.cameraId===this.tracking.cameraId && this.isCurrentView(previous) && previous.calibrationKey===calibrationKey ? previous :
+        { name:o.name, cameraId:this.tracking.cameraId, viewStartedAt:this.viewStartedAt?.get(this.tracking.cameraId), calibrationKey, samples:[], firstSeenAt:now };
       Object.assign(rec, { box, score: f.score, visible: true, lastSeenAt: now, follow: o.followOnPlan !== false });
       rec.blocked = people.some((p) => overlap(box, p) > 0.2 || overlap(p, box) > 0.3);
       rec.feetVisible = box.y + box.h < 0.985;
       const fp = plan?.footprints?.find(item=>item.name===o.name);
       const moveScore = o.minMoveScore ?? .3;
       const top = o.locateBy === 'tabletop';
-      let centre = cal && plan && top && !rec.blocked && f.score>=moveScore ? tabletopCentre(cal,fp,plan,box) : null;
+      const rotation = o.trackRotation && f.score>=moveScore
+        ? detectTabletopPose(cal,fp,f.lines,plan,box,people) : null;
+      if (rotation) rec.blocked = false;
+      let centre = rotation?.p || (!o.trackRotation && cal && plan && top && !rec.blocked && f.score>=moveScore ? tabletopCentre(cal,fp,plan,box) : null);
       const croppedSeat = o.croppedSeat && box.y+box.h>=.985 && box.w>=.04 && box.h>=.1;
       if (!centre && cal && fp && croppedSeat && !rec.blocked && f.score>=.45) {
         // On this low stool the detector can return the whole silhouette even for a seat query.
@@ -214,14 +249,14 @@ class ObjectFinder {
         rec.floor = b.p.map((v) => Math.round(v * 100) / 100); rec.away = b.away; rec.area = areaFor(plan, b.p);
         const last = rec.samples.at(-1);
         if (last && Math.hypot(b.p[0]-last.p[0],b.p[1]-last.p[1]) > MOVE_M) rec.samples = [];
-        rec.samples = [...rec.samples, { at: now, p: b.p, away: b.away, score: f.score }].filter((s) => now - s.at <= this.settleWindow());
+        rec.samples = [...rec.samples, { at: now, p: b.p, away: b.away, score: f.score, rotation }].filter((s) => now - s.at <= this.settleWindow());
         this.settle(rec, o, plan, now);
         if ((o.autoMove ?? this.autoMove) && fp && rec.proposal && this.h.canAuto?.(o.name) !== false && rec.samples.every(sample=>sample.score>=moveScore)) {
           this.objects.set(o.name,rec);
           try { this.accept(o.name,rec.proposal.at,now,'camera'); } catch (error) { this.error=error.message; }
         }
       }
-      else { rec.proposal = null; rec.samples = []; }
+      else { rec.proposal = null; rec.samples = []; if (o.trackRotation) { rec.floor = null; rec.area = null; } }
       this.objects.set(o.name, rec);
     }
     for (const rec of this.objects.values()) {
@@ -241,9 +276,15 @@ class ObjectFinder {
     const from = fp ? [0,1].map(axis=>fp.points.reduce((sum,p)=>sum+p[axis],0)/fp.points.length) : null;
     const delta = from?.map((v,i)=>centre[i]-v);
     const dist = delta ? Math.hypot(...delta) : 0;
-    if (fp && dist < (o.moveM ?? MOVE_M)) { rec.proposal = null; this.h.confirmed?.(o.name, now); return; }   // still where the plan has it
-    if (!rec.proposal || Math.hypot(...centre.map((v,i)=>v-rec.proposal.to[i])) > 0.15) {
-      rec.proposal = { at:now, from, to:centre, delta, distanceM:dist, geometry:JSON.stringify(fp?.points),
+    const rotation = s.at(-1).rotation;
+    if (o.trackRotation && (!rotation || s.some(q=>!q.rotation || angleDifference(q.rotation.angle,rotation.angle)>Math.PI/30))) {
+      rec.proposal=null;
+      return;
+    }
+    const turned = rotation && angleDifference(rotation.angle,tabletopAngle(fp.points))>Math.PI/36;
+    if (fp && !turned && dist < (o.moveM ?? MOVE_M)) { rec.proposal = null; this.h.confirmed?.(o.name, now); return; }   // still where the plan has it
+    if (rotation || !rec.proposal || Math.hypot(...centre.map((v,i)=>v-rec.proposal.to[i])) > 0.15) {
+      rec.proposal = { at:now, from, to:centre, delta, distanceM:dist, rotation, geometry:JSON.stringify(fp?.points),
         placement:{ name:o.name, centre, away, size:[fw,fd], heightM:o.heightM, note:o.description } };
     }
   }
@@ -251,8 +292,15 @@ class ObjectFinder {
     const rec = this.objects.get(name), proposal = rec?.proposal, plan = this.room.config.floorPlan;
     const fp = plan?.footprints.find(item=>item.name===name);
     const cal = this.calibration(this.tracking.cameraId);
-    if (!cal || rec?.calibrationKey!==JSON.stringify(cal.H) || !rec?.visible || rec.cameraId!==this.tracking.cameraId || rec.blocked || now-rec.lastSeenAt>=this.seenWindow() || !proposal || proposal.at!==at ||
+    if (!cal || rec?.calibrationKey!==JSON.stringify(cal.H) || !rec?.visible || !this.isCurrentView(rec) || rec.cameraId!==this.tracking.cameraId || rec.blocked || now-rec.lastSeenAt>=this.seenWindow() || !proposal || proposal.at!==at ||
         proposal.geometry!==JSON.stringify(fp?.points)) throw Error('That furniture proposal is no longer current.');
+    if (proposal.rotation) {
+      const error = this.room.fitTabletop({ revision:this.room.config.revision, cameraId:rec.cameraId,
+        calibration:rec.calibrationKey, name, mode:'edges', corners:proposal.rotation.marks }, by);
+      this.log(`${name} fitted from its tabletop edges (${by}, error ${Math.round(error * 100)} cm)`);
+      rec.samples=[];rec.proposal=null;
+      return;
+    }
     const saved = fp ? this.room.moveFootprint(name,proposal.delta,by) : this.room.addFootprint(proposal.placement);
     if (!saved) throw Error('The proposed furniture position could not be saved.');
     this.event(rec,proposal.from?areaFor(plan,proposal.from):null,areaFor(saved,proposal.to),proposal.distanceM);
@@ -266,7 +314,10 @@ class ObjectFinder {
   status(now = Date.now()) {
     return { enabled: this.enabled, mode: !this.enabled ? 'off' : this.always ? 'always' : 'checks', ready: this.ready, running: !!this.proc, device: this.device, error: this.error,
       check: this.check ? { reason: this.check.reason, passes: this.check.passes, of: PASSES, waiting: this.waiting } : null, lastCheckAt: this.lastCheckAt, nextCheckAt: this.enabled && !this.always && this.since ? this.nextCheckAt() : 0,
-      objects: [...this.objects.values()].filter((r) => r.cameraId===this.tracking.cameraId && now - r.lastSeenAt < Math.max(60000, this.seenWindow())).map((r) => ({ name: r.name, score: r.score, visible: r.visible && now-r.lastSeenAt<this.seenWindow(), box: r.box, floor: r.floor || null, area: r.area || null, blocked: r.blocked, follows: r.follow, proposal: r.visible&&now-r.lastSeenAt<this.seenWindow()&&r.proposal?{at:r.proposal.at,from:r.proposal.from,to:r.proposal.to,distanceM:r.proposal.distanceM}:null, secondsAgo: Math.round((now - r.lastSeenAt) / 1000) })) };
+      objects: [...this.objects.values()].filter((r) => r.cameraId===this.tracking.cameraId && now - r.lastSeenAt < Math.max(60000, this.seenWindow())).map((r) => {
+        const visible = this.isCurrentView(r) && r.visible && now-r.lastSeenAt<this.seenWindow();
+        return { name: r.name, score: r.score, visible, box: visible ? r.box : null, floor: r.floor || null, area: r.area || null, blocked: r.blocked, follows: r.follow, proposal: visible&&r.proposal?{at:r.proposal.at,from:r.proposal.from,to:r.proposal.to,distanceM:r.proposal.distanceM}:null, secondsAgo: Math.round((now - r.lastSeenAt) / 1000) };
+      }) };
   }
 }
 module.exports = { ObjectFinder };

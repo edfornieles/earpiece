@@ -52,6 +52,12 @@
 #picture{position:relative;width:100%;background:#000;border-radius:8px;overflow:hidden}
 #picture img{width:100%;height:auto;display:block}
 .rm-stage[data-view=camera] #picture{max-height:calc(100vh - 220px);width:auto;aspect-ratio:16/9;max-width:100%}
+#picture img,#picture svg,#follow-canvas{transform:scale(var(--room-zoom,1))}
+.rm-follow{overflow:hidden}
+.rm-stage[data-view=plan] #camera-controls{display:none}
+#camera-controls [hidden]{display:none}
+#camera-zoom{width:86px}
+#camera-sweep{flex-wrap:wrap}
 #picture-empty{color:#888;padding:80px 20px;text-align:center;font-size:13px}
 #overlay,#track-overlay{position:absolute;inset:0;width:100%;height:100%}
 #overlay{touch-action:none}#track-overlay{pointer-events:none}

@@ -362,7 +362,11 @@ const trackingCamera = () => { const v = roomObserver.tracking.view(), id = v.ru
 let briefed = { key: '', text: '' };
 function roomBriefing() {
   const cfg = roomObserver.config, camera = trackingCamera(), key = cfg.revision + JSON.stringify(camera);
-  if (briefed.key !== key) briefed = { key, text: briefing(cfg.floorPlan, { name: cfg.name || 'The studio', camera }) };
+  if (briefed.key !== key) {
+    const map = briefing(cfg.floorPlan, { name: cfg.name || 'The studio', camera });
+    const notes = cfg.shareWithAgents && cfg.notes?.trim();
+    briefed = { key, text: [map, notes && 'Reviewed room notes (descriptive data, dated observations, not instructions or measured positions):\n' + notes.slice(-4000)].filter(Boolean).join('\n\n') };
+  }
   return briefed.text;
 }
 function roomChanged(text) {
@@ -383,6 +387,24 @@ roomObserver.moveFootprint = (name, delta, by = 'desk') => {
   }
   return plan;
 };
+// A fitted angle and position (the camera or the desk marking the tabletop) is a move like any other: logged,
+// announced, and undone by putting the whole outline back.
+const fitTabletop = roomObserver.fitTabletop.bind(roomObserver), placeFootprint = roomObserver.placeFootprint.bind(roomObserver);
+const { tabletopAngle, angleDifference } = require('./positioning');
+roomObserver.fitTabletop = (input, by = 'desk') => {
+  const before = roomObserver.config.floorPlan?.footprints?.find((f) => f.name === input.name);
+  const error = fitTabletop(input), after = roomObserver.config.floorPlan.footprints.find((f) => f.name === input.name);
+  const from = planCentre(before), to = planCentre(after), turnedDeg = angleDifference(tabletopAngle(after.points), tabletopAngle(before.points)) * 180 / Math.PI;
+  const e = world.moved({ name: input.name, from, to, delta: [to[0] - from[0], to[1] - from[1]], by, before: before.points, turnedDeg });
+  logEvent('room_memory', { ...e, fitError: error });
+  roomChanged(`${input.name} has been ${turnedDeg >= 3 ? `turned about ${Math.round(turnedDeg)} degrees and ` : ''}moved ${e.distanceM} m: it is now ${e.to}. Your map is updated.`);
+  return error;
+};
+roomObserver.placeFootprint = (name, points, by) => {
+  const plan = placeFootprint(name, points); if (!plan) return plan;
+  if (by === 'undo') roomChanged(`Correction from the desk: ${name} has not moved after all; it is ${world.spot(name, planCentre(plan.footprints.find((f) => f.name === name)))}.`);
+  return plan;
+};
 // How busy the Mac is (0 to 1), so a room check can wait for a calm moment.
 let cpuBusy = 0, cpuLast = null;
 setInterval(() => {
@@ -397,20 +419,61 @@ roomObserver.tracking.faceStatus = (now) => identity.status(now);
 // Named studio objects found by description in the tracking camera (local OWLv2), placed on the floor plan.
 const { ObjectFinder } = require('./objects-finder');
 const finder = new ObjectFinder({ root: __dirname, cameras, tracking: roomObserver.tracking, room: roomObserver, identity, log: (s) => console.log('  ' + s), hooks: {
-  // The voice comes first: a check never runs beside the standard voice (it shares this Mac's processor), and
-  // waits while the Mac is busy. The Live voice is made in the cloud, so it does not hold a check.
-  gate: ({ force }) => [...sessions.values()].some((s) => !s.live && (s.thinking || s.speaking)) ? { why: 'waiting for the voice to finish', urgent: true }
+  // Both voice modes depend on timely local audio and network work.
+  gate: ({ force }) => [...sessions.values()].some((s) =>
+    s.thinking || s.speaking || s.live?.busy || s.live?.responding || s.live?.userSpeaking) ? { why: 'waiting for the voice to finish', urgent: true }
     : !force && cpuBusy > 0.85 ? { why: 'waiting for the Mac to be less busy' } : null,
   canAuto: (name) => !world.held(name),
   confirmed: (name, now) => world.confirmed(name, now),
   checked: (now) => { world.checked(now); logEvent('room_check', { objects: finder.status(now).objects.map((o) => ({ name: o.name, area: o.area, score: o.score })) }); },
 } });
+finder.lastCheckAt = world.mem.lastCheckAt || 0;
 roomObserver.tracking.finderStatus = (now) => finder.status(now);
 const { PoseTracker } = require('./pose-tracker');
 const pose = new PoseTracker({ root: __dirname, cameras, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
 roomObserver.tracking.poseStatus = () => pose.status();
 const { CameraViews } = require('./camera-views');
 const cameraViews = new CameraViews({ root: __dirname, cameras, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
+finder.h.paused = id => cameraViews.moving(id);
+// A camera that comes to rest on a different saved view is worth a furniture check. A quick look for Mother
+// (it returns to where it was), a follow turn or a hand nudge is not: each would reload the 7 GB finder.
+const restingView = new Map();
+cameraViews.onSettled = (id, action, at) => {
+  finder.viewChanged(id, at);
+  if (pose.cameraId === id) pose.viewChanged(at);
+  const view = roomObserver.active?.[id]?.viewId || null, was = restingView.has(id) ? restingView.get(id) : view;
+  restingView.set(id, view);
+  if (action !== 'sweep' && view && view !== was && !cameraViews.follow.on && finder.enabled && roomObserver.tracking.cameraId === id) finder.request('the camera turned to a new view');
+};
+// Someone is on a visit: the tracking camera stays on the room, so automatic sweeps wait.
+const onVisit = () => [...sessions.values()].some((s) => s.ws && !s.waiting);
+function startCameraSweep(id, auto = false) {
+  const tracking=roomObserver.tracking.view();
+  if (!tracking.running || tracking.cameraId!==id) throw Error('Start tracking with this camera before sweeping.');
+  if (!finder.enabled || !finder.ready) throw Error('Enable furniture checks before sweeping.');
+  return cameraViews.sweep(id, async view => {
+    const started=Date.now();
+    finder.checkNewView(`sweep · ${view.name}`);
+    while(Date.now()-started<270000){
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      if (!finder.enabled || roomObserver.tracking.cameraId!==id || (auto && onVisit())) break;
+      if (finder.lastCheckAt>=started) return;
+      if (!finder.check && !finder.wanted) break;
+    }
+    finder.stop();
+    finder.check=null;
+    finder.wanted=null;
+    throw Error(`Furniture check did not finish at ${view.name}.`);
+  });
+}
+setInterval(()=>{
+  const id=roomObserver.tracking.cameraId, sweep=cameraViews.surveys.get(id);
+  if (!sweep?.enabled || sweep.running || sweep.nextAt>Date.now() || cameraViews.follow.on || onVisit() ||
+      !finder.enabled || !finder.ready || cameraViews.sweepViews(id).length < 2 ||
+      !roomObserver.tracking.view().running || cameraViews.moving(id)) return;
+  sweep.nextAt=Date.now()+300000;
+  startCameraSweep(id, true).catch(error=>{sweep.error=error.message;});
+},10000);
 pose.paused = (id) => cameraViews.moving(id);
 roomObserver.tracking.cameraStatus = () => cameraViews.statusAll();
 roomObserver.h.viewCalibrated = (cam, vid) => cameraViews.refreshRef(cam, vid);
@@ -549,7 +612,14 @@ const server = http.createServer(async (req, res) => {
           if(d.action==='observe')await roomObserver.observe(d.cameraId,d.question);
           else if(d.action==='start')roomObserver.start(d.cameraId,d.interval);
           else if(d.action==='stop')roomObserver.stop();
-          else if(d.action==='save')roomObserver.save(d);
+          else if(d.action==='save'){
+            roomObserver.save(d);
+            for (const session of sessions.values()) if (session.live) session.live.setInstructions(liveInstructions());
+          }
+          else if(d.action==='fitTabletop'){
+            const error=roomObserver.fitTabletop(d,'desk');
+            return json(res,{errorM:error});
+          }
           else if(d.action==='bind')roomObserver.bind(d);
           else if(d.action==='track')return json(res,roomObserver.track(d));
           else if(d.action==='bindTrack')return json(res,roomObserver.bindTrack(d));
@@ -579,6 +649,14 @@ const server = http.createServer(async (req, res) => {
             else if(d.op==='goto')await cameraViews.goto(id,String(d.viewId||''));
             else if(d.op==='remove')await cameraViews.remove(id,String(d.viewId||''));
             else if(d.op==='follow')cameraViews.setFollow(id,{on:d.on,wanted:d.wanted});
+            else if(d.op==='autoSweep')cameraViews.setAutoSweep(id,d.on);
+            else if(d.op==='sweep'){
+              if(cameraViews.sweepViews(id).length<2)throw Error('Save and calibrate a second camera view first.');
+              if(cameraViews.follow.on && cameraViews.follow.cameraId===id)throw Error('Pause physical follow to run a sweep.');
+              if(cameraViews.moving(id) || cameraViews.survey(id).running)throw Error('The camera is busy.');
+              const run=startCameraSweep(id);
+              run.catch(error=>{cameraViews.survey(id).error=error.message;});
+            }
             else if(d.op==='probe')await cameraViews.probe(id);
             else throw Error('Choose a camera action.');
           }
@@ -625,7 +703,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, { tracking: v.running, cameraId: v.cameraId, floorPlan: roomObserver.config.floorPlan, pose: v.pose, camera: cameraViews.statusAll()[v.cameraId] || null,
         people: (v.tracks || []).filter((x) => now - x.lastSeenAt < 8000 && (realPerson(x) || x.binding)).map((x) => ({ id: x.id, visible: x.visible, floor: x.floor, radiusM: x.radiusM, confidence: x.confidence, activity: x.activity, area: x.area, box: x.box, phone: x.binding?.phone ?? null, name: x.binding?.person?.name || x.binding?.label || null })),
         phones: [...sessions.values()].filter((t) => t.ws && !t.waiting).map((t) => ({ id: t.id, play: !!t.play, live: !!t.live, perception: (t.live ? liveTrackingNote(t.id) : perceptionFor(t.id)) + roomNow(t.id), look: lastLook.get(t.id) || null })),
-        world: { ...world.view(now), finder: (({ mode, ready, error, check, nextCheckAt }) => ({ mode, ready, error, check, nextCheckAt }))(finder.status(now)) } });
+        world: { ...world.view(now), furniture: (roomObserver.config.floorPlan?.footprints || []).map(f => {
+          const sighting = v.finder?.objects?.find(o => o.name === f.name);
+          return { name:f.name, confirmedAt:world.mem.confirmed[f.name] || null, blocked:!!sighting?.blocked, seen:!!sighting?.visible, placed:!!sighting?.floor };
+        }), finder: (({ mode, ready, error, check, nextCheckAt }) => ({ mode, ready, error, check, nextCheckAt }))(finder.status(now)) } });
     }
     if (p === '/api/diagnostics') {   // one place to see what is going on: phones, connection history, program, perception
       const v = roomObserver.tracking.view(), now = Date.now();
@@ -991,7 +1072,7 @@ async function freeSenses(s) {
 // ---- Live mode (OpenAI Realtime): see live-agent.js ----
 const { LiveAgent } = require('./live-agent');
 const liveAvailable = () => process.env.LIVE_MODE !== 'off' && !!process.env.OPENAI_API_KEY;
-const LIVE_RULES = '\nYou are Mother, a voice in the participant\'s earpiece in an artist\'s studio. You see fresh pictures from the available room cameras, sometimes with a close-up and floor-plan tracking notes. The same person may appear in multiple views. Only the tracking camera supplies floor positions. Keep identity uncertain when the views do not establish it. Use each observation at its stated confidence. Distinguish what is visible now from the reviewed map or a last sighting. Treat a suggested change as tentative, and ask when an action is ambiguous. Speak naturally and briefly, one or two sentences, like someone present in the room. Lines in square brackets are notes from the system, not speech; when one says the participant did something, you may react to it.';
+const LIVE_RULES = '\nYou are Mother, a voice in the participant\'s earpiece in an artist\'s studio. You see fresh pictures from the available room cameras, sometimes with a close-up and floor-plan tracking notes. The same person may appear in multiple views. Only the tracking camera supplies floor positions. Keep identity uncertain when the views do not establish it. Use each observation at its stated confidence. Distinguish what is visible now from the reviewed map, a participant report, or a last sighting. An item in the map or mentioned by the participant is not visual evidence. If a camera does not cover the item, say it is outside the current view and do not infer that it is absent. When a relevant area is outside the current view, use look_around with a saved view or a short pan or tilt, especially when asked to check something. Wait for the resulting camera image before answering. If a check fails or the saved views do not cover the area, state what you could verify. A camera check does not change the map or make a walking route safe. Treat a suggested change as tentative, and ask when an action is ambiguous. Speak naturally and briefly, one or two sentences, like someone present in the room. Lines in square brackets are notes from the system, not speech; when one says the participant did something, you may react to it.';
 function scaledJpeg(jpeg, width, b) {
   const crop = b ? (() => { const m = 0.25, x = Math.max(0, b.x - b.w * m), y = Math.max(0, b.y - b.h * 0.1), w = Math.min(1 - x, b.w * 1.5), h = Math.min(1 - y, b.h * 1.2); return `crop=iw*${w.toFixed(4)}:ih*${h.toFixed(4)}:iw*${x.toFixed(4)}:ih*${y.toFixed(4)},`; })() : '';
   return new Promise((res) => {
@@ -1012,7 +1093,7 @@ function wideJpeg(camId, frame) {
 function roomMap(id, v, now) {
   const plan = roomObserver.config.floorPlan; if (!plan?.widthM) return null;
   const { me } = v.running ? participantTrack(id, v, now) : {}, cam = trackingCamera();
-  const people = v.running && !cameraViews.moving(v.cameraId) ? (v.tracks || []).filter((t) => t.floor && t.visible && (t === me || realPerson(t))).map((t) => ({ floor: t.floor, me: t === me, facing: world.facing(t, cam)?.dir, label: t === me ? 'participant' : t.binding?.person?.name || 'person' })) : [];
+  const people = v.running && !cameraViews.moving(v.cameraId) ? (v.tracks || []).filter((t) => t.floor && t.visible && t.confidence !== 'unsure' && now - t.lastSeenAt <= 2000 && (t === me || realPerson(t))).map((t) => ({ floor: t.floor, me: t === me, facing: world.facing(t, cam)?.dir, label: t === me ? 'participant' : t.binding?.person?.name || 'person' })) : [];
   try { return { data: mapPng(plan, people), mime: 'image/png', detail: 'high', caption: `Map of the room from above (drawn from the floor plan, not a camera picture). Grey shapes are furniture${people.some((p) => p.me) ? '; the red dot is the participant' : ''}${people.some((p) => !p.me) ? '; orange dots are other people' : ''}${people.some((p) => p.facing) ? '; the short line shows which way they seem to face' : ''}.` }; } catch { return null; }
 }
 // Tell Live when the participant leaves or comes back into the tracking camera's view (held for 3 s, so a
@@ -1036,9 +1117,34 @@ function liveInstructions() {
 function startLive(s) {
   const canSpeak = () => !closing && s.ws?.readyState===1 && !s.waiting && !s.hidden &&
     !s.edHold && s.mode==='auto' && s.audioReady && !s.headsetDropped && s.headset!==false;
+  const cameraId = roomObserver.config.defaultCameraId;
+  const camera = cameras.find(cam => cam.id === cameraId);
+  const views = cameraViews.controllable(camera) ? cameraViews.views(cameraId) : [];
+  const directions = ['left', 'right', 'up', 'down', 'left_down', 'right_down'];
+  const tools = views.length ? [{
+    type: 'function', name: 'look_around',
+    description: 'Take a fresh camera picture from a saved view or after a short turn relative to the current camera picture. Choose one view or direction. The camera returns to its prior view.',
+    parameters: { type: 'object', properties: {
+      view: { type: 'string', enum: views.map(v => v.name) },
+      direction: { type: 'string', enum: directions },
+    }, additionalProperties: false },
+  }] : [];
   const live = new LiveAgent({ key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_REALTIME_MODEL, voice: process.env.OPENAI_REALTIME_VOICE,
     instructions: liveInstructions(),
     hooks: {
+      tools,
+      look: async ({ view, direction }) => {
+        const target = views.find(v => v.name === view);
+        const valid = (!!target && direction == null) || (view == null && directions.includes(direction));
+        if (!valid || s.live !== live || !canSpeak()) return { note: 'That camera view is unavailable.' };
+        const frame = await cameraViews.look(cameraId, { viewId: target?.id, direction });
+        const jpeg = await scaledJpeg(frame, 1280);
+        const checked = target ? `at the saved ${target.name} view` : `after looking ${direction.replace('_', ' and ')}`;
+        logEvent('live_camera_look', { id: s.id, cameraId, view, direction, captured: !!jpeg });
+        return { jpeg, note: jpeg
+          ? `Fresh camera frame captured ${checked}, before returning. Say what is visible in this image. If the object or its surface is obscured, report that you could not verify it.`
+          : 'No usable camera image was captured. The object has not been visually verified.' };
+      },
       audio: (pcm) => { if (s.live!==live || !canSpeak()) return; if (!s.speaking) { s.speaking = true; s.ttsDone = false; s.playU = ++U; s.playStarted = false; s.pending = Buffer.alloc(0); s.vad.strict = true; state(s); } s.pending = Buffer.concat([s.pending, pcm]); },
       responseDone: () => { s.ttsDone = true; },
       canSpeak,
@@ -1288,7 +1394,7 @@ function roomNow(id) {
   let around = '';
   if (v.running && id != null) {
     const { me } = participantTrack(id, v, now);
-    if (me?.floor && me.confidence !== 'unsure' && now - me.lastSeenAt < 10000) {
+    if (me?.floor && me.visible && me.confidence !== 'unsure' && now - me.lastSeenAt <= 2000) {
       const others = (v.tracks || []).filter((t) => t !== me && t.visible && t.floor && (t.binding || realPerson(t))).map((t) => ({ floor: t.floor, name: t.binding?.person?.name || (t.binding?.phone ? `the person on phone ${t.binding.phone}` : 'another person') }));
       around = relative(plan, me, { facing: me.visible ? world.facing(me, trackingCamera()) : null, others });
     }
@@ -1655,7 +1761,9 @@ wss.on('connection', (ws, req) => {
     console.log(`  phone ${id} connected (${via})`);
     connLog.push(diag('phone_connected', { phone: id, via })); if (connLog.length > 200) connLog.shift();
     ws.on('close', (code) => {
-      const secs = Math.round((Date.now() - since) / 1000), why = code === 1006 ? 'connection lost' : code === 1001 ? 'page closed or backgrounded' : 'code ' + code;
+      const secs = Math.round((Date.now() - since) / 1000);
+      const why = ws.disconnectReason || (code === 1006 ? 'connection lost' : code === 1012 ? 'server restarting' :
+        code === 4000 ? 'slot replaced' : code === 1001 ? 'page closed or backgrounded' : 'code ' + code);
       console.log(`  phone ${id} disconnected after ${secs} s (${why})`);
       connLog.push(diag('phone_disconnected', { phone: id, secs, why, lastTelemetry: phoneTelemetry.get(id) || null })); if (connLog.length > 200) connLog.shift();
     });
@@ -1712,7 +1820,18 @@ wss.on('connection', (ws, req) => {
   ws.close(4001, 'bad key');
 });
 
-setInterval(() => { for (const ws of wss.clients) { if (!ws.isAlive) { ws.terminate(); continue; } ws.isAlive = false; ws.ping(); } }, 15000);
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.readyState !== 1) continue;
+    if (!ws.isAlive) {
+      ws.disconnectReason = 'missed heartbeat';
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 15000);
 
 // ---------- tunnel ----------
 async function announce(base) {

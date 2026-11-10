@@ -10,11 +10,19 @@
   const keyOf = (t) => t.binding?.person?.pid || t.id;
   const nameOf = (t) => t.binding?.person?.name || t.binding?.label || 'Unknown person ' + t.id.replace(/^\D+/, '');
 
-  addEventListener('room-tracking', (e) => { tracks = e.detail?.tracks || []; tracking = !!e.detail?.running; listPeople(); });
+  const camera = $('camera');
+  addEventListener('room-tracking', (e) => {
+    tracking = !!e.detail?.running && e.detail.cameraId === camera.value;
+    tracks = tracking ? e.detail.tracks || [] : [];
+    listPeople();
+  });
+  camera.addEventListener('change', () => {
+    full?.close(); full = null; fullAt = 0; tracks = []; tracking = false; listPeople();
+  });
   function listPeople() {
     const seen = tracks.filter((t) => t.visible && t.box), opts = [['auto', 'Auto']].concat(seen.map((t) => [keyOf(t), nameOf(t)]));
     if (wanted !== 'auto' && !opts.some(([k]) => k === wanted)) opts.push([wanted, 'Chosen person (out of view)']);
-    const html = opts.map(([k, n]) => `<option value="${k}">${n.replace(/</g, '&lt;')}</option>`).join('');
+    const html = opts.map(([k, n]) => `<option value="${Setup.esc(k)}">${Setup.esc(n)}</option>`).join('');
     if (who.dataset.html !== html) { who.innerHTML = html; who.dataset.html = html; }
     who.value = wanted;
   }
@@ -24,15 +32,16 @@
   async function fetchFull() {
     if (loading || !on()) return; loading = true;
     try {
+      const id = camera.value;
       const q = new URLSearchParams(location.search); q.set('after', String(fullAt));
-      const r = await fetch(`/cam/${encodeURIComponent($('camera').value)}/full.jpg?${q}`, { cache: 'no-store' });
+      const r = await fetch(`/cam/${encodeURIComponent(id)}/full.jpg?${q}`, { cache: 'no-store' });
       if (r.status === 200) {
         const bmp = await createImageBitmap(await r.blob());
+        if (camera.value !== id) { bmp.close(); return; }
         if (full?.close) full.close();
         full = bmp; fullAt = Number(r.headers.get('x-frame-at')) || Date.now();
       }
-    } catch {}
-    loading = false;
+    } catch {} finally { loading = false; }
   }
   setInterval(fetchFull, 100);
 
@@ -50,7 +59,7 @@
     const W = src.width || src.naturalWidth, H = src.height || src.naturalHeight;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(src, r.x * W, r.y * H, r.w * W, r.h * H, 0, 0, cv.width, cv.height);
-    note.textContent = !tracking ? 'Start tracking to follow someone.' : focus ? `${nameOf(focus)} · ${sharp ? '4K' : 'preview, not sharp'}` : 'Nobody in view: whole room';
+    note.textContent = !tracking ? 'Start tracking to follow someone.' : focus ? `${nameOf(focus)} · ${sharp ? '4K' : 'preview, not sharp'}` : wanted !== 'auto' ? 'Selected person is out of view.' : 'Nobody in view: whole room';
   }
   requestAnimationFrame(draw);
 })();

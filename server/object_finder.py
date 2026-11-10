@@ -11,6 +11,8 @@ import base64, io, json, os, sys
 os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 import torch
 from PIL import Image
+sys.dont_write_bytecode = True
+from tabletop_lines import tabletop_lines
 from transformers import Owlv2Processor, Owlv2ForObjectDetection
 
 MODEL = os.environ.get('OBJECT_MODEL', 'google/owlv2-base-patch16-ensemble')
@@ -50,6 +52,8 @@ for line in sys.stdin:
         for c in sorted(cands, key=lambda c: -c['score']):
             if any(f['query'] == c['query'] for f in found): continue          # one box per description
             if any(iou(c['box'], t) > 0.6 for t in taken): continue           # one description per box
+            if c['query'] in m.get('rotationQueries', []):
+                c['lines'] = tabletop_lines(img, c['box'])
             found.append(c); taken.append(c['box'])
         reply({'id': m['id'], 'w': w, 'h': h, 'found': found})
     except Exception as e:

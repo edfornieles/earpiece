@@ -12,6 +12,7 @@ test('follows the chosen person, else a recognised one, else the biggest', () =>
   assert.equal(pickFocus(tracks, 'auto').id, 'P2');          // recognised beats bigger
   assert.equal(pickFocus([person('A', far), person('B', near)]).id, 'B');
   assert.equal(pickFocus([], 'auto'), null);
+  assert.equal(pickFocus(tracks, 'missing-person'), null);
 });
 
 test('framing keeps the crop inside the picture with headroom', () => {

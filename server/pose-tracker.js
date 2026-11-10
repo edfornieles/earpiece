@@ -49,15 +49,20 @@ class PoseTracker {
       if (this.on) { this.error = `Pose detector stopped${code ? ` (${err.trim().split('\n').pop() || code})` : ''}. Restarting…`; setTimeout(() => this.on && this.spawn(), 2000); }
     });
   }
+  viewChanged(at) {
+    this.viewStartedAt = at;
+    this.objects = [];
+    this.animals = [];
+  }
   // The newest frame: the full-resolution stream when it is flowing, the preview otherwise.
   frame(now) {
     const cam = this.cameras.find((c) => c.id === this.cameraId); if (!cam) return null;
     const full = this.identity?.fullFrames?.(cam);
-    if (full?.frame && now - full.at < FRESH_FULL_MS) { this.fullAt = now; return { jpeg: full.frame, source: 'full' }; }
+    if (full?.frame && full.at > (this.viewStartedAt || 0) && now - full.at < FRESH_FULL_MS) { this.fullAt = now; return { jpeg: full.frame, source: 'full' }; }
     // Switching picture size restarts the tracker's ids, so stay on the full stream through short gaps
     // and give it a few seconds to start before falling back to the preview.
     if (now - (this.fullAt || 0) < 5000 || now - this.startedAt < 6000) return null;
-    if (cam.frame && now - cam.frameAt < FRESH_PREVIEW_MS) return { jpeg: cam.frame, source: 'preview' };
+    if (cam.frame && cam.frameAt > (this.viewStartedAt || 0) && now - cam.frameAt < FRESH_PREVIEW_MS) return { jpeg: cam.frame, source: 'preview' };
     return null;
   }
   tick(now = Date.now()) {
@@ -70,8 +75,9 @@ class PoseTracker {
   }
   onReply(m) {
     if (m.ready) { this.device = m.device; this.error = ''; this.log(`pose detector ready (${m.device})`); return; }
+    if (m.id != null && m.id !== this.seq) return;
     this.busy = false; clearTimeout(this.stall);
-    if (!this.on) return;
+    if (!this.on || this.paused?.(this.cameraId) || this.sentAt < (this.viewStartedAt || 0)) return;
     if (m.error) { this.error = m.error; return; }
     this.error = '';
     const now = Date.now(), W = m.w, H = m.h, box = (b) => ({ x: b[0] / W, y: b[1] / H, w: b[2] / W, h: b[3] / H });

@@ -15,7 +15,7 @@
     const seen = (tracks || []).filter((t) => t.visible && t.box);
     if (wanted && wanted !== 'auto') {
       const w = seen.find((t) => t.binding?.person?.pid === wanted || t.id === wanted);
-      if (w) return w;
+      return w || null;
     }
     const named = seen.filter((t) => t.binding?.person);
     const pool = named.length ? named : seen;

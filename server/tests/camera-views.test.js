@@ -120,3 +120,47 @@ test('follow turns the camera when the followed person walks out of the picture'
   assert.deepEqual(calls.at(-1), ['goto', views.views('cam2').find((v) => v.id === right.id).token]);
   assert.equal(views.tick(now += 2000), null, 'one turn per disappearance');
 });
+
+test('a directional look pauses projection and restores the saved camera position', async t => {
+  const {room,views,calls}=setup(t);
+  const home=await views.save('cam2','Home');
+  views.grab=async (cam,since)=>{
+    assert.equal(views.moving('cam2'),true);
+    assert.equal(room.cals().cam2,undefined);
+    assert.ok(since>0);
+    return Buffer.from('jpeg');
+  };
+  await views.look('cam2',{direction:'right_down'});
+  assert.deepEqual(calls.slice(-2),[['nudge',.4,.35],['goto',home.token]]);
+  assert.equal(room.activeView().cam2.viewId,home.id);
+  assert.equal(views.moving('cam2'),false);
+});
+
+test('sweep checks calibrated stops and returns to the starting view', async (t) => {
+  const { room, views, calls } = setup(t);
+  const home = await views.save('cam2', 'Home');
+  await views.nudge('cam2', 0.2, 0);
+  const wall = await views.save('cam2', 'Wall');
+  room.config.cameraViews.cam2.find(v => v.id === wall.id).calibration = { H: H() };
+  await views.nudge('cam2', 0.2, 0);
+  await views.save('cam2', 'Uncalibrated');
+  await views.goto('cam2', home.id);
+  calls.length = 0;
+
+  const checked = [];
+  await views.sweep('cam2', async view => {
+    assert.equal(room.activeView().cam2.viewId, view.id);
+    assert.equal(views.moving('cam2'), false);
+    checked.push(view.id);
+  });
+  assert.deepEqual(checked, [home.id, wall.id]);
+  assert.deepEqual(calls, [['goto', home.token], ['goto', wall.token], ['goto', home.token]]);
+  assert.equal(room.activeView().cam2.viewId, home.id);
+  assert.equal(views.status('cam2').sweep.running, false);
+});
+
+test('automatic room sweeps start switched off', () => {
+ const { CameraViews } = require('../camera-views');
+ const views = Object.create(CameraViews.prototype); views.surveys = new Map();
+ assert.equal(views.survey('cam2').enabled, false);
+});

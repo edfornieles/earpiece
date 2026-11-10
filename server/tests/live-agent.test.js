@@ -96,3 +96,19 @@ test('the map goes in as a captioned PNG, and a changed room replaces the instru
   agent.setInstructions('new room');
   assert.deepEqual(sent.at(-1),{type:'session.update',session:{type:'realtime',instructions:'new room'}});
 });
+
+test('a camera tool call supplies the fresh picture before the spoken answer', async t => {
+  const {agent,sent,failures}=setup(t);
+  agent.h.look=async ({direction})=>{
+    assert.equal(direction,'right_down');
+    return {note:'New angle',jpeg:Buffer.from([1,2])};
+  };
+  agent.onEvent({type:'response.done',response:{status:'completed',output:[
+    {type:'function_call',name:'look_around',call_id:'look',arguments:'{"direction":"right_down"}'},
+  ]}});
+  await new Promise(setImmediate);
+  assert.equal(sent[0].item.type,'function_call_output');
+  assert.equal(sent[1].item.content[1].type,'input_image');
+  assert.deepEqual(sent[2],{type:'response.create',response:{tool_choice:'none'}});
+  assert.deepEqual(failures,[]);
+});

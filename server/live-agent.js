@@ -24,6 +24,7 @@ class LiveAgent {
     ws.on('open', () => {
       this.send({ type: 'session.update', session: {
         type: 'realtime', output_modalities: ['audio'], instructions: this.instructions,
+        ...(this.h.tools?.length ? { tools: this.h.tools } : {}),
         audio: {
           input: { format: { type: 'audio/pcm', rate: 24000 }, transcription: { model: 'gpt-4o-transcribe' },
             // Mother decides when to answer, so it can attach what it sees first.
@@ -48,7 +49,7 @@ class LiveAgent {
       this.h.log('live_reconnect', { why: message, attempt: this.reconnects });
       clearTimeout(this.watchdog);
       const old = this.ws; this.ws = null; try { old?.removeAllListeners?.(); old?.close(); } catch {}
-      Object.assign(this, { ready: false, responding: false, busy: false, userSpeaking: false, images: [], contextItem: null, itemId: null, reconnecting: true });
+      Object.assign(this, { ready: false, responding: false, busy: false, userSpeaking: false, images: [], scoutImage: null, contextItem: null, itemId: null, reconnecting: true });
       setTimeout(() => { if (!this.closed) this.open(); }, 500);
       return;
     }
@@ -85,20 +86,57 @@ class LiveAgent {
       case 'input_audio_buffer.committed': if (this.ready && !this.userSpeaking) this.respond('speech'); break;
       case 'conversation.item.input_audio_transcription.completed': if (m.transcript?.trim()) this.h.heard(m.transcript.trim()); break;
       case 'response.created': this.responding = true; this.respondedAt = Date.now(); break;
-      case 'response.output_item.added': this.itemId = m.item?.id || null; break;
+      case 'response.output_item.added': if (m.item?.type === 'message') this.itemId = m.item.id; break;
       case 'response.output_audio.delta': if (m.delta && !this.cancelled) { this.hadAudio = true; clearTimeout(this.watchdog); this.h.audio(Buffer.from(m.delta, 'base64')); } break;
       case 'response.output_audio_transcript.done': if (!this.cancelled && m.transcript?.trim()) this.h.said(m.transcript.trim()); break;
-      case 'response.done':
+      case 'response.done': {
         clearTimeout(this.watchdog);
         this.responding = false; this.doneAt = Date.now();
+        const calls = (m.response?.output || []).filter(item => item.type === 'function_call');
+        if (calls.length && m.response.status === 'completed' && !this.cancelled && this.h.look) {
+          this.h.responseDone();
+          void this.look(calls);
+          break;
+        }
         if (!this.cancelled && !this.hadAudio) { this.fail(m.response?.status_details?.error?.message || 'Realtime reply contained no audio.'); break; }
         this.cancelled = false;
         this.h.responseDone();
         if (m.response?.status && m.response.status !== 'completed') this.h.log('live_response', { status: m.response.status, why: m.response.status_details?.reason || m.response.status_details?.error?.message || '' });
         this.nextTurn();
         break;
+      }
       case 'error': if (!['response_cancel_not_active','item_not_found'].includes(m.error?.code)) this.fail(m.error?.message || 'Realtime voice error.', m.error?.code === 'session_expired'); break;
     }
+  }
+  async look(calls) {
+    const generation = this.generation, ws = this.ws;
+    this.busy = true;
+    try {
+      const [first] = calls;
+      let result = { note: 'No new camera evidence was captured.' };
+      if (first.name === 'look_around' && !this.userSpeaking && this.h.canSpeak?.() !== false) {
+        try { result = await this.h.look(JSON.parse(first.arguments)); }
+        catch { result = { note: 'The camera check failed. The object has not been visually verified.' }; }
+      }
+      if (this.closed || this.ws !== ws) return;
+      const interrupted = this.userSpeaking || generation !== this.generation || this.h.canSpeak?.() === false;
+      for (const call of calls) {
+        const output = interrupted ? 'Camera check interrupted.' : call === first ? result.note : 'Only one camera check is allowed per turn.';
+        this.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ observation: output }) } });
+      }
+      if (interrupted) return;
+      if (result.jpeg) {
+        const id = `img_${++this.seq}`;
+        this.send({ type: 'conversation.item.create', item: { id, type: 'message', role: 'user', content: [
+          { type: 'input_text', text: result.note },
+          { type: 'input_image', image_url: 'data:image/jpeg;base64,' + result.jpeg.toString('base64'), detail: 'high' },
+        ] } });
+        this.scoutImage = id;
+        this.images.push(id);
+        while (this.images.length > KEEP_IMAGES) this.send({ type: 'conversation.item.delete', item_id: this.images.shift() });
+      }
+      this.request({ tool_choice: 'none' });
+    } finally { this.busy = false; this.nextTurn(); }
   }
   // Attach what Mother can see, drop old pictures, then ask for an answer.
   async respond(reason, note = '') {
@@ -112,6 +150,11 @@ class LiveAgent {
     try {
       const seen = await this.h.see().catch(() => null);
       if (this.closed || this.userSpeaking || this.h.canSpeak?.()===false || generation !== this.generation) return;
+      if (this.scoutImage) {
+        this.send({ type: 'conversation.item.delete', item_id: this.scoutImage });
+        this.images = this.images.filter(id => id !== this.scoutImage);
+        this.scoutImage = null;
+      }
       for (const img of seen?.images || []) {
         const id = `img_${++this.seq}`;
         this.send({ type: 'conversation.item.create', item: { id, type: 'message', role: 'user', content: [...(img.caption || img.label ? [{ type: 'input_text', text: img.caption || 'Camera view: ' + img.label }] : []), { type: 'input_image', image_url: `data:${img.mime || 'image/jpeg'};base64,` + Buffer.from(img.data || img.jpeg).toString('base64'), detail: img.detail || 'auto' }] } });
@@ -150,7 +193,7 @@ class LiveAgent {
   say(text) {
     if (!this.ready || this.closed) return;
     if (this.responding || this.busy) { this.pendingSay = text; this.cancel(); return; }
-    this.request({ instructions: `Say exactly this, and nothing else: ${text}` });
+    this.request({ tool_choice: 'none', instructions: `Say exactly this, and nothing else: ${text}` });
   }
   cancel() { this.generation++; if (this.responding) { this.cancelled = true; this.send({ type: 'response.cancel' }); } }
 }

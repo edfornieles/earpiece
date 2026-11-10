@@ -10,6 +10,12 @@
   <button class="rm-btn" id="open-setup" aria-expanded="false" aria-controls="setup">Setup</button>
  </header>
  <div id="notice" class="notice" role="status"></div>
+ <dialog id="tabletop-dialog" style="width:min(90vw,850px);background:#202226;color:#f3f3f3;border:1px solid #52555d;border-radius:12px">
+  <h2>Fit workbench angle</h2>
+  <label><input type="checkbox" id="tabletop-edges"> Rear corners are hidden</label><p id="tabletop-step" role="status">Click the four visible tabletop corners in order around the edge.</p>
+  <canvas id="tabletop-frame" aria-label="Frozen camera frame for marking tabletop corners" style="width:100%;height:auto;display:block;cursor:crosshair"></canvas>
+  <div class="rm-row"><button id="tabletop-save" class="rm-go" disabled>Update workbench on plan</button><button id="tabletop-undo" class="rm-btn">Undo corner</button><button id="tabletop-cancel" class="rm-btn">Cancel</button></div>
+ </dialog>
 
  <div id="calibration-editor" class="rm-calib" hidden>
   <div><strong id="calibration-step"></strong><ol id="calibration-points"></ol><p class="rm-dim">At least four floor points spread across the picture, then one more known point to check accuracy. Floor only, never a table top.</p></div>
@@ -25,12 +31,23 @@
     <span class="rm-spacer"></span>
     <div class="rm-seg" role="group" aria-label="Picture"><button id="view-live" aria-pressed="true">Live</button><button id="view-analysis" aria-pressed="false" disabled>Analysed</button></div>
    </div>
+   <div class="rm-stage-bar" id="camera-controls">
+    <label>Follow person <select id="follow-who"><option value="auto">Auto</option></select></label>
+    <label class="rm-check" hidden><input type="checkbox" id="camera-follow"> Turn camera to follow <span id="camera-follow-note" class="rm-dim"></span></label>
+    <div class="rm-row" id="camera-aim" role="group" aria-label="Pan and tilt" hidden>
+     <button class="rm-btn nudge" data-dir="-1,0" aria-label="Pan left" title="Pan left">◀</button><button class="rm-btn nudge" data-dir="1,0" aria-label="Pan right" title="Pan right">▶</button>
+     <button class="rm-btn nudge" data-dir="0,-1" aria-label="Tilt up" title="Tilt up">▲</button><button class="rm-btn nudge" data-dir="0,1" aria-label="Tilt down" title="Tilt down">▼</button>
+     <label>Step <select id="nudge-size"><option value="small">Small</option><option value="large">Large</option></select></label>
+    </div>
+    <label class="rm-row">Digital zoom <input id="camera-zoom" type="range" min="1" max="3" step=".25" value="1"><output id="camera-zoom-value">1×</output></label>
+    <div class="rm-row" id="camera-sweep" hidden><button class="rm-btn" id="sweep-now">Sweep now</button><label class="rm-check"><input type="checkbox" id="auto-sweep"> Auto sweep between visits</label><span id="sweep-status" class="rm-dim" role="status"></span></div>
+   </div>
    <div class="rm-panes">
     <figure class="rm-pane rm-plan" id="floor-test"><div id="floor-plan"></div>
      <figcaption id="coverage-key" class="rm-key"><span><i class="k-sure"></i>sure</span><span><i class="k-rough"></i>rough</span><span><i class="k-unsure"></i>unsure</span><span class="rm-key-gap"><i class="k-body"></i>body only</span><span><i class="k-blind"></i>not seen</span></figcaption>
     </figure>
     <figure class="rm-pane rm-follow" id="follow"><canvas id="follow-canvas" aria-label="Follow view: the camera picture cropped around one person"></canvas>
-     <figcaption class="rm-follow-bar"><label>Follow <select id="follow-who"><option value="auto">Auto</option></select></label><label class="rm-check" hidden><input type="checkbox" id="camera-follow"> Turn camera to follow <span id="camera-follow-note" class="rm-dim"></span></label><span id="follow-note" class="rm-dim"></span></figcaption>
+     <figcaption class="rm-follow-bar"><span id="follow-note" class="rm-dim"></span></figcaption>
     </figure>
     <figure class="rm-pane rm-cam"><div id="picture"><img id="live-picture" alt="Live camera preview"><img id="analysed-picture" alt="The exact camera frame sent for analysis" hidden><svg id="track-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="People found by live tracking"></svg><svg id="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" hidden aria-label="Approximate object and person regions"></svg><div id="picture-empty" hidden>No live picture. Check the camera on Screens.</div></div></figure>
    </div>
@@ -53,14 +70,12 @@
   <section data-panel="calibration">
    <section id="camera-positions" class="rm-positions" hidden>
     <h3>Camera positions</h3><p id="position-state" class="rm-dim"></p>
-    <div class="rm-aim"><div class="rm-pad" aria-label="Aim the camera"><button class="rm-btn nudge" data-dir="0,1" aria-label="Tilt up">▲</button><button class="rm-btn nudge" data-dir="-1,0" aria-label="Pan left">◀</button><button class="rm-btn nudge" data-dir="1,0" aria-label="Pan right">▶</button><button class="rm-btn nudge" data-dir="0,-1" aria-label="Tilt down">▼</button></div>
-     <label>Step <select id="nudge-size"><option value="small">Small</option><option value="large">Large</option></select></label></div>
     <ul id="position-list" class="rm-pos-list"></ul>
     <div class="rm-row"><input id="position-name" maxlength="40" placeholder="Name this view, e.g. Armchair"><button id="position-save" class="rm-btn">Save this view</button></div>
     <p id="position-calibrate-note" class="rm-warn"></p>
    </section>
    <h3>Floor calibration</h3><div id="calibration-state" class="rm-dim"></div>
-   <button id="calibrate" class="rm-btn rm-wide">Calibrate camera to floor</button>
+   <button id="calibrate" class="rm-btn rm-wide">Calibrate camera to floor</button><button id="fit-tabletop" class="rm-btn rm-wide">Fit workbench angle from camera</button>
    <p class="rm-dim">Click a floor point in the picture, then the same point on the plan. Repeat at least four times.</p>
   </section>
 

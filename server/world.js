@@ -186,16 +186,21 @@ class World {
   // A place named without counting the object itself ("beside the Work bench", not "at the Small stool").
   spot(name, p) { const plan = this.room.config.floorPlan; return areaFor({ ...plan, footprints: (plan.footprints || []).filter((f) => f.name !== name) }, p); }
   confirmed(name, now = Date.now()) { this.mem.confirmed[name] = now; this.save(); }
-  moved({ name, from, to, delta, by = 'desk', now = Date.now() }) {
-    const entry = { id: `${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`, at: now, name, delta, by, distanceM: Math.round(Math.hypot(...delta) * 10) / 10, from: from ? this.spot(name, from) : null, to: this.spot(name, to) };
+  // before: the whole outline ahead of a turn, so an undo can put the angle back too.
+  moved({ name, from, to, delta, by = 'desk', before = null, turnedDeg = 0, now = Date.now() }) {
+    const entry = { id: `${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`, at: now, name, delta, by, distanceM: Math.round(Math.hypot(...delta) * 10) / 10, from: from ? this.spot(name, from) : null, to: this.spot(name, to),
+      ...(before ? { before, turnedDeg: Math.round(turnedDeg) } : {}) };
     this.mem.log = [...this.mem.log, entry].slice(-LOG_MAX); this.mem.confirmed[name] = now; this.save();
     return entry;
   }
   // Put a moved piece back, and stop the camera moving it again for a while (the desk has overruled it).
   undo(id, now = Date.now()) {
-    const e = this.mem.log.find((x) => x.id === id); if (!e || e.undone) throw Error('That change can no longer be undone.');
-    if (!this.room.moveFootprint(e.name, e.delta.map((v) => -v), 'undo')) throw Error(`${e.name} is no longer on the plan.`);
-    e.undone = now; this.holds.set(e.name, now + HOLD_MS); this.save();
+    const e = this.mem.log.find((x) => x.id === id);
+    const latest = e && this.mem.log.findLast((x) => x.name === e.name && !x.undone);
+    if (!e || e !== latest) throw Error('That change can no longer be undone. Undo the most recent move for this item first.');
+    const back = e.before ? this.room.placeFootprint(e.name, e.before, 'undo') : this.room.moveFootprint(e.name, e.delta.map((v) => -v), 'undo');
+    if (!back) throw Error(`${e.name} is no longer on the plan.`);
+    e.undone = now; delete this.mem.confirmed[e.name]; this.holds.set(e.name, now + HOLD_MS); this.save();
     return e;
   }
   held(name, now = Date.now()) { return (this.holds.get(name) || 0) > now; }
@@ -206,7 +211,10 @@ class World {
     const ago = (t) => { const s = Math.round((now - t) / 1000); return s < 90 ? 'just now' : `${Math.round(s / 60)} min ago`; };
     const moved = this.changes(now).slice(-4).map((e) => `${e.name} moved ${e.from ? `from ${e.from} ` : ''}to ${e.to} (${ago(e.at)})`);
     const fresh = this.mem.lastCheckAt && now - this.mem.lastCheckAt < 6 * 3600000 ? `The camera last checked the furniture ${ago(this.mem.lastCheckAt)}.` : 'The furniture has not been checked by the camera lately: positions are from the plan, and something may have moved.';
-    return ` ROOM NOW: ${fresh}${moved.length ? ' Moved recently: ' + moved.join('; ') + '.' : ''}`;
+    const known = new Set((this.room.config.floorPlan?.footprints || []).map(f => f.name));
+    const confirmed = Object.entries(this.mem.confirmed).filter(([name]) => known.has(name))
+      .sort((a,b) => b[1]-a[1]).slice(0,8).map(([name, at]) => `${name} ${ago(at)}`);
+    return ` ROOM NOW: ${fresh}${confirmed.length ? ' Last confirmed at their mapped positions: ' + confirmed.join('; ') + '.' : ''}${moved.length ? ' Moved recently: ' + moved.join('; ') + '.' : ''}`;
   }
   view(now = Date.now()) { return { lastCheckAt: this.mem.lastCheckAt, changes: this.mem.log.slice(-8).reverse().map((e) => ({ ...e, held: this.held(e.name, now) })) }; }
 }

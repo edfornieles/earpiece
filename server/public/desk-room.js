@@ -21,7 +21,12 @@
     svg.setAttribute('viewBox', `-0.15 -0.15 ${W + 0.3} ${D + 0.3}`);
     const shapes = (plan.footprints || []).filter((f) => (f.heightM ?? 1) > 0.05).map((f) => {
       const pts = f.points.map((p) => p.join(',')).join(' '), cx = f.points.reduce((a, p) => a + p[0], 0) / f.points.length, cy = f.points.reduce((a, p) => a + p[1], 0) / f.points.length;
-      return `<polygon class="fp" points="${pts}"/><text class="fpl" x="${cx}" y="${cy}">${esc(f.name)}</text>`;
+      const evidence=state.world?.furniture?.find(item=>item.name===f.name);
+      const stale=evidence && (evidence.blocked || !evidence.confirmedAt || Date.now()-evidence.confirmedAt>10*60000);
+      const status=evidence?.blocked ? 'View blocked' : evidence?.confirmedAt
+        ? `Position checked ${ago(evidence.confirmedAt)}` : evidence?.seen && !evidence.placed
+          ? 'Seen, position unverified' : 'Saved position, no recent confirmation';
+      return `<g><title>${esc(f.name)} · ${esc(status)}</title><polygon class="fp" points="${pts}" ${stale?'style="stroke-dasharray:.07 .05"':''}/><text class="fpl" x="${cx}" y="${cy}">${esc(f.name)}</text></g>`;
     }).join('');
     const people = (state?.people || []).filter((p) => p.floor).map((p) => {
       const c = p.visible ? colour[p.confidence] || colour.unsure : '#888', r = Math.max(0.12, Math.min(1, p.radiusM || 0.3));
@@ -56,8 +61,9 @@
       : !state.tracking ? `Runs while tracking is on.${w.lastCheckAt ? ' Last check ' + ago(w.lastCheckAt) + '.' : ''}`
       : c ? (c.waiting ? `Check ${c.waiting}…` : `Checking the room now (look ${Math.min(c.passes + 1, c.of)} of ${c.of})…`)
       : `${w.lastCheckAt ? 'Last check ' + ago(w.lastCheckAt) : 'Not checked yet'}${f.mode === 'always' ? ' · looking continuously' : f.nextCheckAt ? ` · next in ${Math.max(1, Math.round((f.nextCheckAt - Date.now()) / 60000))} min` : ''}.${f.error ? ' ' + f.error : ''}`);
+    if (w.furniture) $('dr-check').textContent += ' Dashed outlines show positions awaiting confirmation.';
     $('dr-check-now').disabled = !f.ready || !state.tracking || !!c;
-    const rows = (w.changes || []).map((e) => `<li class="${e.undone ? 'undone' : ''}"><span>${esc(e.name)} → ${esc(e.to)} <span class="hint">${esc(e.distanceM)} m · ${e.by === 'camera' ? 'by the camera' : 'from the desk'} · ${ago(e.at)}</span></span>${e.undone ? '' : `<button data-undo="${esc(e.id)}">Undo</button>`}</li>`).join('');
+    const rows = (w.changes || []).map((e) => `<li class="${e.undone ? 'undone' : ''}"><span>${esc(e.name)} → ${esc(e.to)} <span class="hint">${esc(e.distanceM)} m${e.turnedDeg >= 3 ? ` · turned ${esc(e.turnedDeg)}°` : ''} · ${e.by === 'camera' ? 'by the camera' : 'from the desk'} · ${ago(e.at)}</span></span>${e.undone ? '' : `<button data-undo="${esc(e.id)}">Undo</button>`}</li>`).join('');
     if (rows !== changesShown) { changesShown = rows; $('dr-changes').innerHTML = rows || '<li class="hint">No furniture has moved.</li>'; }
   }
   const say = (text) => { note = text; drawWorld(); setTimeout(() => { note = ''; drawWorld(); }, 4000); };

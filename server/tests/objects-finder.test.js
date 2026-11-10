@@ -111,3 +111,45 @@ test('someone stepping away from a movable piece asks for a check',()=>{
  f.watchLeaving(view,now+=5000);
  assert.match(f.wanted.reason,/Armchair/);
 });
+
+test('failed and incomplete furniture checks do not refresh room memory',()=>{
+ const {f,log,view}=checks();const now=1e6;
+ f.request('desk',{force:true,now});
+ assert.equal(f.checking(view,now),true);
+ f.pending={id:1,cameraId:f.tracking.cameraId,calibration:JSON.stringify(f.calibration(f.tracking.cameraId)?.H),people:[]};
+ f.onReply({id:1,error:'worker failed'});
+ assert.equal(f.check.passes,0);
+ assert.equal(f.checking(view,now+250000),false);
+ assert.deepEqual(log,[]);
+ assert.ok(f.wanted.at>now+250000);
+});
+
+test('a camera turn hides old image boxes even when both views are uncalibrated', () => {
+  const { f, room } = setup();
+  room.config.calibrations = {};
+  const now = 1e6;
+  f.place([at(0, 2, 3)], 960, 540, [], now);
+  assert.ok(f.status(now).objects[0].box);
+
+  f.h.paused = () => true;
+  assert.equal(f.status(now + 1).objects[0].box, null);
+  f.viewChanged('cam2', now + 2);
+  f.h.paused = () => false;
+  assert.equal(f.status(now + 3).objects[0].box, null);
+
+  f.place([at(0, 3, 3)], 960, 540, [], now + 4);
+  assert.ok(f.status(now + 4).objects[0].box.x > 0.5);
+});
+
+test('a finder that keeps failing gives up after a few looks and waits the normal interval', () => {
+ const { f, log, view } = checks(); const now = 1e6;
+ f.request('desk', { force: true, now });
+ for (let i = 1; i <= 4; i++) {
+   assert.equal(f.checking(view, now + i), true);
+   f.pending = { id: i, cameraId: f.tracking.cameraId, calibration: JSON.stringify(f.calibration(f.tracking.cameraId)?.H), people: [] };
+   f.onReply({ id: i, error: 'worker failed' });
+ }
+ assert.equal(f.checking(view, now + 10), false);
+ assert.equal(f.check, null); assert.deepEqual(log, [], 'a failed check does not refresh the room memory');
+ assert.ok(f.wanted.at >= now + 5 * 60000, 'and it does not retry within a minute');
+});

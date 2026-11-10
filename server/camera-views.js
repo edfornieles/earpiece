@@ -57,6 +57,7 @@ class CameraViews {
     this.grab = grab || ((cam, since) => this.grabFull(cam, since));
     this.register = register || ((ref, cur) => this.registerPictures(ref, cur));
     this.ptz = new Map(); this.state = new Map(); this.turned = new Set();   // cameras Mother has moved since starting
+    this.surveys = new Map();
     this.follow = { on: false, wanted: 'auto', cameraId: '' }; this.last = null; this.lostHandled = false;
     for (const cam of this.cameras) if (this.controllable(cam)) this.probe(cam.id);
   }
@@ -78,7 +79,7 @@ class CameraViews {
   }
   status(id) {
     const s = this.st(id), a = this.room.activeView?.()[id] || null;
-    return { cameraId: id, available: s.available, busy: s.busy, error: s.error, pos: s.pos, lastMove: s.lastMove, active: a,
+    return { cameraId: id, sweep: { ...this.survey(id), views: this.sweepViews(id).length }, available: s.available, busy: s.busy, settledAt: s.settledAt || 0, error: s.error, pos: s.pos, lastMove: s.lastMove, active: a,
       follow: this.follow.cameraId === id ? { on: this.follow.on, wanted: this.follow.wanted } : { on: false, wanted: 'auto' },
       views: this.views(id).map((v) => ({ id: v.id, name: v.name, calibrated: !!v.calibration, pos: v.pos || null })) };
   }
@@ -86,16 +87,23 @@ class CameraViews {
 
   // Run one camera move at a time; the picture is not trusted for positions until it is done.
   async exclusive(id, label, fn) {
-    const s = this.st(id); if (s.busy) throw Error('The camera is already turning.');
+    const s = this.st(id); if (s.busy || (this.surveys.get(id)?.running && label!=='sweep')) throw Error('The camera is busy.');
     s.busy = label; s.error = ''; const untouched = !this.turned.has(id); this.turned.add(id); this.room.setMoving(id, true);
     try { return await fn(untouched); }
     catch (e) { s.error = e.message; throw e; }
-    finally { s.busy = ''; if (this.room.active?.[id]?.moving) this.room.setMoving(id, false); this.room.notify?.(); }
+    finally {
+      s.settledAt = Date.now();
+      this.onSettled?.(id, label, s.settledAt);
+      s.busy = '';
+      if (this.room.active?.[id]?.moving) this.room.setMoving(id, false);
+      this.room.notify?.();
+    }
   }
   async nudge(id, dx, dy) {
     if (![dx, dy].every(Number.isFinite) || Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) throw Error('Choose a small turn.');
     return this.exclusive(id, 'aiming', async () => {
       this.st(id).pos = await this.ctl(id).nudge(dx, dy, this.nap);
+      if (this.follow.on && this.follow.cameraId === id) this.setFollow(id, { on: false });
       this.room.setActive(id, null);   // aimed by hand: no calibrated position until one is saved or chosen
     });
   }
@@ -115,6 +123,7 @@ class CameraViews {
     });
   }
   async remove(id, vid) {
+    if(this.surveys.get(id)?.running)throw Error('Wait for the room sweep to finish.');
     const v = this.views(id).find((x) => x.id === vid); if (!v) throw Error('That position was already removed.');
     try { await this.ctl(id).removePreset(v.token); } catch {}
     try { fs.unlinkSync(path.join(this.dir, v.ref)); } catch {}
@@ -123,22 +132,60 @@ class CameraViews {
   }
   async goto(id, vid, reason = 'desk') {
     const v = this.views(id).find((x) => x.id === vid); if (!v) throw Error('That position was removed.');
-    return this.exclusive(id, 'turning', async () => {
-      this.st(id).pos = await this.ctl(id).goto(v.token, this.nap);
-      const done = Date.now();
-      let G = null, correction = { ok: false, error: 'no reference picture' };
-      if (v.ref && fs.existsSync(path.join(this.dir, v.ref))) {
-        const frame = await this.grab(this.cam(id), done + 600);
-        const cur = path.join(this.dir, `${id}-now.jpg`); fs.mkdirSync(this.dir, { recursive: true }); fs.writeFileSync(cur, frame);
-        const r = await this.register(path.join(this.dir, v.ref), cur);
-        if (r.ok && Math.hypot(...r.shift) <= MAX_SHIFT) { G = r.G; correction = { ok: true, shift: r.shift, inliers: r.inliers }; }
-        else if (r.ok) correction = { ok: false, bad: true, shift: r.shift, error: 'The camera stopped somewhere else. Go to the position again or recalibrate it.' };
-        else correction = { ok: false, error: r.error || 'Could not compare with the reference picture.' };
+    return this.exclusive(id, reason==='sweep'?'sweep':'turning', () => this.aim(id, v, reason));
+  }
+  async aim(id, v, reason) {
+    const vid = v.id;
+    this.st(id).pos = await this.ctl(id).goto(v.token, this.nap);
+    const done = Date.now();
+    let G = null, correction = { ok: false, bad: !!v.calibration, error: 'no reference picture' };
+    if (v.ref && fs.existsSync(path.join(this.dir, v.ref))) {
+      const cur = path.join(this.dir, `${id}-now.jpg`);
+      fs.mkdirSync(this.dir, { recursive: true });
+      const compare = async since => {
+        const frame = await this.grab(this.cam(id), since);
+        fs.writeFileSync(cur, frame);
+        return this.register(path.join(this.dir, v.ref), cur);
+      };
+      let r = await compare(done + 600);
+      // A frame can still be in the stream buffer while the camera settles.
+      if (!r.ok || Math.hypot(...r.shift) > MAX_SHIFT) r = await compare(Date.now() + 1200);
+      if (r.ok && Math.hypot(...r.shift) <= MAX_SHIFT) { G = r.G; correction = { ok: true, shift: r.shift, inliers: r.inliers }; }
+      else if (r.ok) correction = { ok: false, bad: true, shift: r.shift, error: 'The camera stopped somewhere else. Go to the position again or recalibrate it.' };
+      else correction = { ok: false, bad:true, error: r.error || 'Could not compare with the reference picture.' };
+    }
+    this.room.setActive(id, vid, { G, correction });
+    this.st(id).lastMove = { at: Date.now(), to: v.name, reason };
+    this.log(`camera turned to ${v.name} (${reason})${correction.ok ? `, corrected ${Math.round(Math.hypot(...correction.shift) * 3840)} px` : ': ' + correction.error}`);
+    return correction;
+  }
+  // Hold the camera across the whole look so a second turn cannot capture the wrong view.
+  async look(id, { viewId, direction }) {
+    const views = this.views(id);
+    const v = views.find(view => view.id === viewId);
+    const active = this.room.active?.[id];
+    const home = views.find(view => view.id === active?.viewId) ||
+      (!active && !this.turned.has(id) && views.find(view => view.name.toLowerCase() === 'home'));
+    const offsets = new Map([
+      ['left', [-.4, 0]], ['right', [.4, 0]], ['up', [0, -.35]], ['down', [0, .35]],
+      ['left_down', [-.4, .35]], ['right_down', [.4, .35]],
+    ]);
+    const offset = offsets.get(direction);
+    if ((!v && !offset) || !home) throw Error('The desk must select a saved camera view before Mother can look around.');
+    return this.exclusive(id, 'looking for Mother', async () => {
+      try {
+        const ptz = this.ctl(id);
+        if (v) await ptz.goto(v.token, this.nap);
+        else await ptz.nudge(offset[0], offset[1], this.nap);
+        return await this.grab(this.cam(id), Date.now() + 600);
+      } finally {
+        try {
+          await this.aim(id, home, 'return after look');
+        } catch (error) {
+          this.room.setActive(id, null);
+          throw error;
+        }
       }
-      this.room.setActive(id, vid, { G, correction });
-      this.st(id).lastMove = { at: Date.now(), to: v.name, reason };
-      this.log(`camera turned to ${v.name} (${reason})${correction.ok ? `, corrected ${Math.round(Math.hypot(...correction.shift) * 3840)} px` : ': ' + correction.error}`);
-      return correction;
     });
   }
   // After a position is recalibrated, its reference picture is the picture it was calibrated on.
@@ -176,8 +223,43 @@ class CameraViews {
     });
   }
 
+  sweepViews(id) {
+    return this.views(id).filter(view=>view.calibration && !view.calibration.needsReview && view.ref);
+  }
+  survey(id) {
+    if (!this.surveys.has(id)) this.surveys.set(id, { enabled: false, nextAt: Date.now() + 300000 });
+    return this.surveys.get(id);
+  }
+  setAutoSweep(id, enabled) {
+    if (!this.controllable(this.cam(id))) throw Error('This camera cannot turn.');
+    Object.assign(this.survey(id), { enabled: !!enabled, nextAt: Date.now() + 300000 });
+  }
+  async sweep(id, inspect) {
+    const views=this.sweepViews(id), active=this.room.active?.[id];
+    const home=views.find(v=>v.id===active?.viewId) || (!active && views.find(v=>v.name.toLowerCase()==='home'));
+    const state = this.survey(id);
+    if (views.length<2 || !home) throw Error('Select a calibrated saved position and add a second calibrated view to sweep.');
+    if(state.running || this.moving(id))throw Error('The camera is busy.');
+    if(this.follow.on && this.follow.cameraId===id)throw Error('Pause physical follow to run a room sweep.');
+    Object.assign(state,{running:true,view:'',error:'',nextAt:Date.now()+300000});
+    try {
+      for(const view of views){
+        state.view=view.name;
+        const correction=await this.goto(id,view.id,'sweep');
+        if (correction.ok) await inspect(view);
+        else state.error = `Could not match ${view.name}: ${correction.error}`;
+      }
+    } catch(error){state.error=error.message;}
+    finally {
+      try { if (this.room.active?.[id]?.viewId !== home.id || this.room.active[id].correction?.ok === false) await this.goto(id, home.id, 'sweep'); }
+      catch(error){state.error=error.message;}
+      state.running=false;state.view='';state.nextAt=Date.now()+300000;
+    }
+  }
+
   // ---- follow ----
   setFollow(id, { on, wanted }) {
+    if (on && this.surveys.get(id)?.running) throw Error('Wait for the room sweep to finish.');
     if (on && this.st(id).available === false) throw Error('This camera cannot turn.');
     if (on && this.views(id).length < 2) throw Error('Save at least two camera positions first.');
     this.follow = { on: !!on, wanted: String(wanted || 'auto').slice(0, 40), cameraId: id }; this.last = null; this.lostHandled = false;
@@ -186,7 +268,7 @@ class CameraViews {
   tick(now = Date.now()) {
     const f = this.follow; if (!f.on) return null;
     const id = f.cameraId, t = this.room.tracking, s = this.st(id);
-    if (s.busy || t.cameraId !== id || !t.view(now).running) return null;
+    if (s.busy || this.surveys.get(id)?.running || t.cameraId !== id || !t.view(now).running) return null;
     const focus = pickFocus(t.view(now).tracks, f.wanted);
     if (focus) {
       const prev = this.last, floor = focus.floor || null;

@@ -53,3 +53,23 @@ test('moves are remembered, described, undone, and survive a restart',async()=>{
  assert.equal(again.view(now).lastCheckAt,now);assert.equal(again.view(now).changes[0].undone,now);
  fs.unlinkSync(file);
 });
+
+test('an older furniture move cannot be undone over a newer move',()=>{
+ const room={config:{floorPlan:plan()},moveFootprint(){assert.fail('an older move must not change the plan');}};
+ const w=new World({file:'/nonexistent/memory.json',room});
+ const first=w.moved({name:'Small stool',from:[4,.6],to:[3,1],delta:[-1,.4]});
+ w.moved({name:'Small stool',from:[3,1],to:[2,2],delta:[-1,1]});
+ assert.throws(()=>w.undo(first.id),/most recent move/);
+});
+
+test('undoing a fitted turn puts the whole outline back, angle included', () => {
+ const p = plan(), placed = [];
+ const room = { config: { floorPlan: p }, moveFootprint() { assert.fail('a turn is undone by its outline, not a shift'); },
+   placeFootprint(name, points, by) { placed.push([name, points, by]); return p; } };
+ const w = new World({ file: '/nonexistent/memory.json', room }), now = 1e12;
+ const before = [[1, 1], [3, 1], [3, 2], [1, 2]];
+ const e = w.moved({ name: 'Small stool', from: [2, 1.5], to: [2.1, 1.6], delta: [0.1, 0.1], by: 'camera', before, turnedDeg: 11.6, now });
+ assert.equal(e.turnedDeg, 12);
+ w.undo(e.id, now);
+ assert.deepEqual(placed, [['Small stool', before, 'undo']]);
+});

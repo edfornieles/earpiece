@@ -47,7 +47,7 @@ function floorPlan(input){
     });
     const objectHeight=o.heightM??null;
     if(objectHeight!==null&&(!Number.isFinite(objectHeight)||objectHeight<=0||objectHeight>heightM))throw Error("Object height must fit within the room.");
-    return {name:text(o.name,100),points,heightM:objectHeight,estimated:!!o.estimated,notes:text(o.notes,600),references:text(o.references,250)};
+    return {name:text(o.name,100),points,heightM:objectHeight,estimated:!!o.estimated,...(Number.isFinite(o.seatCheckedAt)&&o.seatCheckedAt>0?{seatCheckedAt:o.seatCheckedAt}:{}),notes:text(o.notes,600),references:text(o.references,250)};
   });
   const wallNames={};for(const k of ['top','right','bottom','left']){const v=text(input.wallNames?.[k],40);if(v)wallNames[k]=v;}
   return {widthM,depthM,heightM,footprints:objects,wallNames,origin:'upper-left corner on the plan; x right, y down, z up from floor',doors:doors.map(d=>{
@@ -176,6 +176,29 @@ class RoomObserver{
     this.bindings.push({observationId:current.id,personId:input.personId,phone,role:text(input.role,100),confirmedAt:Date.now()});this.notify();return this.view();
   }
   track(input){const plan=this.config.floorPlan,animalNames=Object.fromEntries((this.config.animals||[]).map(a=>[a.kind,a.name]));const calibration=this.cals()[input?.cameraId];return this.tracking.update({...input,animalNames},{plan,calibration:calibration?.needsReview?null:calibration||null});}
+  fitTabletop(input) {
+    if(input.revision!==this.config.revision)throw Error('The room changed. Capture the tabletop again.');
+    const cam=this.camera(input.cameraId),cal=this.cals()[cam.id],plan=this.config.floorPlan;
+    if(!cal?.camera || cal.needsReview || JSON.stringify(cal.H)!==input.calibration)throw Error('The camera calibration changed. Capture the tabletop again.');
+    const footprint=plan?.footprints.find(f=>f.name===input.name);
+    if(!footprint?.heightM)throw Error('Choose a mapped tabletop with a measured height.');
+    const {fitTabletop,fitTabletopEdges}=require('./positioning');
+    const fit=input.mode==='edges'?fitTabletopEdges:fitTabletop;
+    const {points,error}=fit(cal,footprint,input.corners,plan);
+    const fitted={...footprint,points:points.map(p=>p.map(v=>Math.round(v*100)/100)),estimated:true,
+      notes:text('Angle and position fitted from reviewed camera corners. '+footprint.notes,600)};
+    this.config={...this.config,revision:this.config.revision+1,
+      floorPlan:{...plan,footprints:plan.footprints.map(f=>f===footprint?fitted:f)}};
+    this.persist();this.notify();
+    return error;
+  }
+  // Put an outline back exactly as it was (undoing a fitted angle and position).
+  placeFootprint(name,points){
+    const plan=this.config.floorPlan,fp=plan?.footprints?.find(f=>f.name===name);if(!fp||!Array.isArray(points)||points.length<3)return null;
+    const placed={...fp,points:points.map(p=>p.map(v=>Math.round(v*100)/100)),seatCheckedAt:undefined};
+    this.config={...this.config,revision:this.config.revision+1,floorPlan:{...plan,footprints:plan.footprints.map(f=>f===fp?placed:f)}};
+    this.persist();this.notify();return this.config.floorPlan;
+  }
   // A tracked object the desk confirmed has settled somewhere new: shift its outline on the plan.
   // Translation only; the camera cannot see rotation reliably. Does not stop the observer.
   moveFootprint(name,delta){
@@ -184,7 +207,7 @@ class RoomObserver{
     const dx=Math.max(0,-Math.min(...xs))-Math.max(0,Math.max(...xs)-plan.widthM),dy=Math.max(0,-Math.min(...ys))-Math.max(0,Math.max(...ys)-plan.depthM);
     const points=fp.points.map(p=>[Math.round((p[0]+delta[0]+dx)*100)/100,Math.round((p[1]+delta[1]+dy)*100)/100]);
     const stamp=new Date().toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
-    const moved={...fp,points,estimated:true,notes:text(`Moved by the camera ${stamp}. `+fp.notes.replace(/^Moved by the camera [^.]*\. /,''),600)};
+    const moved={...fp,points,estimated:true,seatCheckedAt:undefined,notes:text(`Moved by the camera ${stamp}. `+fp.notes.replace(/^Moved by the camera [^.]*\. /,''),600)};
     this.config={...this.config,revision:this.config.revision+1,floorPlan:{...plan,footprints:plan.footprints.map(f=>f.name===name?moved:f)}};
     this.persist();this.notify();return this.config.floorPlan;
   }

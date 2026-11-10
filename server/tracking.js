@@ -150,10 +150,14 @@ class Tracking{
       // with an honest error radius, and the smallest wins (positioning.js).
       let radius=how==='feet'?0.3:how==='seat'?0.25:how==='head'?0.8:null;
       const kp=Array.isArray(t.kp)&&t.kp.length===17&&t.kp.every(q=>Array.isArray(q)&&q.length===3&&q.every(finite))?t.kp:null;
+      if(kp&&calibration&&!seat){
+        seat=require('./positioning').reviewedSeat(calibration,plan,kp,b,now,prev);
+        if(seat){floor=seat.floor;radius=.35;how='seat';}
+      }
       if(kp&&calibration&&!seat){const P=require('./positioning'),best=P.place({H:calibration.H,cam:calibration.camera,plan,kp});if(best){floor=best.floor;radius=best.radius;how=best.how;}}
       // Smoothed over time and weighted by radius; held for a moment through brief blocking.
       if(calibration){
-        const P=require('./positioning');let sm=this.smoothers.get(id);if(!sm){sm=new P.Smoother();this.smoothers.set(id,sm);}
+        const P=require('./positioning');let sm=this.smoothers.get(id);if(!sm || (how==='seat' && prev?.area!==`seated on the ${seat?.name}`)){sm=new P.Smoother();this.smoothers.set(id,sm);}
         const out=sm.step(floor&&radius?{floor,radius,how}:null,now);
         if(out){floor=out.floor;radius=out.radius;how=out.how;}
       }

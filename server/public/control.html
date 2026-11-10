@@ -403,16 +403,19 @@ function micProblem(error) {
   return 'Microphone unavailable: ' + (error?.message || 'unknown problem') + '.';
 }
 function bindHold(btn, target) {
+  let held = false;
   const down = (e) => {
-    e.preventDefault();
-    // First press with the microphone off: ask for it now (this click lets the browser show its permission prompt).
+    e.preventDefault(); held = true;
+    // Microphone not open, or the desk's sound paused: open/resume it now (this press lets the browser show its
+    // permission prompt), then start talking if the button is still held.
     if (!mic || ctx?.state !== 'running') {
-      enableMicrophone().then(() => toast('Microphone on. Hold the button again and speak.'), (error) => { toast('⚠ ' + micProblem(error)); audioStatus(micProblem(error)); });
+      enableMicrophone().then(() => { if (held) { setTalk(target); btn.classList.toggle('on', talkTarget === target); } else toast('Microphone on. Hold the button and speak.'); },
+        (error) => { toast('⚠ ' + micProblem(error)); audioStatus(micProblem(error)); });
       return;
     }
     setTalk(target); btn.classList.toggle('on', talkTarget === target);
   };
-  const up = () => { if (!latched || target !== 0) setTalk(null); btn.classList.remove('on'); };
+  const up = () => { held = false; if (!latched || target !== 0) setTalk(null); btn.classList.remove('on'); };
   btn.addEventListener('pointerdown', down); btn.addEventListener('pointerup', up); btn.addEventListener('pointerleave', up); btn.addEventListener('pointercancel', up);
 }
 function mark() { const t = prompt('Marker label (optional):', '') ; if (t === null) return; ws.send(JSON.stringify({ type: 'mark', text: t || 'Mark' })); }
@@ -724,7 +727,8 @@ async function enableSound() {
   await Promise.all([soundSetup, resumed]); audioStatus();
 }
 async function enableMicrophone() {
-  if (micSetup) return micSetup;
+  // Already open, but the browser may have paused the desk's sound (tab in the background, a reload): resume it.
+  if (micSetup) return micSetup.then(() => enableSound());
   micSetup = (async () => {
     await enableSound();
     mic = await openMic(ctx);

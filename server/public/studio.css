@@ -15,7 +15,7 @@ body.mother-shell .panel{border-radius:7px;box-shadow:none}body.mother-shell hea
 body.mother-shell button.primary,body.mother-shell .button.primary{background:var(--fg);color:var(--bg)}
 body.mother-shell .slot[aria-pressed=true]{background:var(--active);border-color:var(--dim)}body.mother-shell .notice{background:var(--card);border-color:var(--hot)}
 body.live-desk>header{padding:28px 28px 24px;align-items:center}body.live-desk header h1{font-size:25px;letter-spacing:-.04em}body.live-desk .titlebox{min-width:180px}body.live-desk #stitle{width:100%;max-width:350px;background:transparent;border:0;padding:5px 0;color:var(--dim)}
-body.live-desk>main{grid-template-columns:minmax(0,1fr) 270px;padding:24px 28px;gap:24px}body.live-desk main>section{min-width:0}
+body.live-desk>main{grid-template-columns:minmax(0,1fr);padding:24px 28px;gap:24px}body.live-desk>main>aside{display:none}body.live-desk main>section{min-width:0}
 body.live-desk #standbybar{background:var(--card);border:1px solid var(--line);border-radius:6px;color:var(--dim);padding:14px 16px;margin-bottom:12px;font-size:12px}body.live-desk #standbybar b{font-weight:500;color:var(--fg)}
 #audio-status{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--dim);flex-wrap:wrap}#audio-label{flex:1;min-width:160px}#audio-status button{font-size:12px;padding:6px 10px}
 .desk-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:28px 0 14px}.desk-heading h2{font-size:15px;font-weight:500;margin:0}.desk-heading .hint{font-size:11px}

@@ -1261,7 +1261,7 @@ function stopAi(s, why, programInternal = false) {
   }
 }
 
-function beginParticipant(s, name, pid) {
+function beginParticipant(s, name, pid, { quiet = false } = {}) {   // quiet: the director's own words open the visit
   if (STANDBY) {   // nobody starts until the session is recording
     send(s.ws, { type: 'reset' });
     toControls({ type: 'error', id: 0, text: `Phone ${s.id}: not recording yet — press Start session first.` });
@@ -1282,7 +1282,7 @@ function beginParticipant(s, name, pid) {
   session.participants.push({ phone: s.id, name: s.name, pid: who.pid, start: Number(clock()) }); saveSession();
   toControls({ type: 'participants', list: list() }); state(s);
   toControls({ type: 'transcript', id: s.id, who: 'note', text: `— ${s.name || 'new participant'} started —`, t: clock() });
-  if (s.mode === 'auto') {
+  if (s.mode === 'auto' && !quiet) {
     s.history.push({ role: 'user', content: `[A participant has just arrived and put the earpiece in. Their name is ${s.name || 'not given'}. Begin.]` });
     setTimeout(() => aiTurn(s), 1500);
   }
@@ -1597,8 +1597,10 @@ async function talkStop(owner) {
   if (!text) return t.as === 'voice' ? tell('Heard no words. Hold the button, speak, then let go.') : undefined;
   for (const id of t.targets) {
     const s = sessions.get(id);
-    if (!s || s.visitToken !== t.visits.get(id)) { note(id, `Not passed on (the visit changed while you were talking): “${text}”`); continue; }
-    if (s.waiting) { if (t.as === 'voice') note(id, `Not passed on (no visit is running on this phone; press Start visit on its card first): “${text}”`); continue; }
+    // Talking in the AI voice to a waiting phone during a recorded session starts its visit, so the words go through.
+    const started = s && s.waiting && t.as === 'voice' && s.visitToken === t.visits.get(id) && beginParticipant(s, '', null, { quiet: true }) !== false && !s.waiting;
+    if (!s || (!started && s.visitToken !== t.visits.get(id))) { note(id, `Not passed on (the visit changed while you were talking): “${text}”`); continue; }
+    if (s.waiting) { if (t.as === 'voice') note(id, `Not passed on (nothing is being recorded yet; press Start session first): “${text}”`); continue; }
     if(programRunner.manages(id) && programRunner.token(id)!==t.programTokens.get(id))continue;
     if (t.as === 'voice') {
       if(programRunner.manages(id) && programRunner.status==='running'){
@@ -1669,9 +1671,11 @@ wss.on('connection', (ws, req) => {
       if (m.type === 'talk') { logEvent(m.on ? 'talk_start' : 'talk_stop', { target: m.target, as: m.as }); if (m.on) talkStart(m.target, m.as, ws); else talkStop(ws); }
       if (m.type === 'endSession' && !STANDBY) { toControls({ type: 'sessionEnding' }); shutdown(true); }
       if (m.type === 'startSession' && STANDBY) { toControls({ type: 'sessionStarting' }); shutdown('record'); }
-      if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() }); }
+      if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() });
+        if (s.mode === 'auto' && s.waiting && s.ws && !STANDBY) beginParticipant(s, '', null); }   // AI on for a waiting phone: start its visit
       if(m.type==='nudge' && s && programRunner.manages(s.id)){try{programRunner.next(s.id);}catch(e){send(ws,{type:'error',id:0,text:e.message});}return;}
-      if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
+      if (m.type === 'nudge' && s?.ws && s.waiting && !STANDBY) beginParticipant(s, '', null);   // starts the visit; Mother opens it
+      else if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
       if (m.type === 'end' && s) endParticipant(s, 'ended by director');
       if (m.type === 'voice') {   // id 0 = every phone. Any of voice / emotion / pitch / speed.
         const ids = m.id ? [m.id] : Array.from({ length: MAX_PHONES }, (_, i) => i + 1);
@@ -1795,9 +1799,10 @@ wss.on('connection', (ws, req) => {
         if (pcm.length && pcm.length % 2 === 0 && !s.audioReady) { s.audioReady = true; state(s); }
         // The desk starts/ends each visit. A connected phone alone does not enable its microphone feed.
         if (STANDBY || s.waiting || !pcm.length || pcm.length % 2) return;
-        track(`phone${id}-mic`).write(pcm);
-        if (s.live) { s.live.append(pcm); } else s.vad.push(pcm);   // Live mode: the realtime model listens itself
-        const out = Buffer.alloc(pcm.length + 2); out.writeUInt16LE(id, 0); pcm.copy(out, 2);
+        track(`phone${id}-mic`).write(pcm);   // the recording keeps the raw sound
+        const heard = (s.gainIn ||= new ai.Gain()).process(pcm);   // a quiet phone mic, brought up to speaking level
+        if (s.live) { s.live.append(heard); } else s.vad.push(heard);   // Live mode: the realtime model listens itself
+        const out = Buffer.alloc(heard.length + 2); out.writeUInt16LE(id, 0); heard.copy(out, 2);
         for (const c of controls) if (c.readyState === 1) c.send(out);
         return;
       }

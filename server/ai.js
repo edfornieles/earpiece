@@ -13,6 +13,24 @@ const VOICE = () => process.env.POCKET_TTS_VOICE || 'hf://kyutai/tts-voices/vctk
 
 // ---------- speech detection on the participant's mic ----------
 // Feed 20 ms int16 frames; calls onStart() when speech begins and onUtterance(pcmBuffer) when it ends.
+// Automatic gain for a quiet phone microphone. The phone's own mic (no call-mode processing) can arrive 20-30 dB
+// too quiet for speech detection. Boost it towards a speaking level, judged from the loudest recent sound, so
+// background noise is never pushed up past the level speech would reach; loud input passes unchanged.
+class Gain {
+  constructor({ target = 0.08, max = 24 } = {}) { this.target = target; this.max = max; this.env = 0; this.gain = 1; }
+  process(pcm) {
+    const n = pcm.length >> 1; if (!n) return pcm;
+    let s = 0; for (let i = 0; i < n; i++) { const v = pcm.readInt16LE(i * 2) / 32768; s += v * v; }
+    const rms = Math.sqrt(s / n);
+    this.env = rms > this.env ? rms : this.env * 0.9985 + rms * 0.0015;   // rises at once, falls over ~10 s
+    const want = Math.min(this.max, Math.max(1, this.target / Math.max(this.env, 1e-4)));
+    this.gain += (want - this.gain) * (want < this.gain ? 0.5 : 0.02);    // drop fast, recover slowly
+    if (this.gain <= 1.01) return pcm;
+    const out = Buffer.alloc(pcm.length);
+    for (let i = 0; i < n; i++) out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(pcm.readInt16LE(i * 2) * this.gain))), i * 2);
+    return out;
+  }
+}
 class Vad {
   constructor({ onStart, onUtterance }) {
     this.onStart = onStart; this.onUtterance = onUtterance;
@@ -253,4 +271,4 @@ function shaper(pitch, speed, onPcm) {
   return { write: (b) => ff.stdin.write(b), end: () => { ff.stdin.end(); return done; }, kill: () => ff.kill('SIGKILL') };
 }
 
-module.exports = { VOICES, voiceUrl, emotionsOf, shaper, TTS_URL, Vad, transcribe, think, look, speak, WavStreamDecoder, wavBytes, floatToInt16Buf, RATE, MOCK };
+module.exports = { VOICES, voiceUrl, emotionsOf, shaper, TTS_URL, Vad, Gain, transcribe, think, look, speak, WavStreamDecoder, wavBytes, floatToInt16Buf, RATE, MOCK };

@@ -292,3 +292,15 @@ test('recording server connection, visit and audio isolation regressions', { tim
   });
 
 });
+
+test('a quiet phone microphone is brought up to speaking level, and loud input passes unchanged', () => {
+  const { Gain } = require('../ai');
+  const tone = (amp) => { const b = Buffer.alloc(960); for (let i = 0; i < 480; i++) b.writeInt16LE(Math.round(amp * 32767 * Math.sin(i / 5)), i * 2); return b; };
+  const rms = (b) => { let s = 0; for (let i = 0; i < 480; i++) s += (b.readInt16LE(i * 2) / 32768) ** 2; return Math.sqrt(s / 480); };
+  const quiet = new Gain(); let out;
+  for (let i = 0; i < 400; i++) out = quiet.process(tone(0.006));   // about -47 dB: what the phone sent
+  assert.ok(rms(out) > 0.018 * 2, `boosted to ${rms(out).toFixed(3)}, enough for speech detection`);
+  const loud = new Gain(), sample = tone(0.3);
+  for (let i = 0; i < 50; i++) out = loud.process(sample);
+  assert.equal(out, sample, 'already loud: untouched');
+});

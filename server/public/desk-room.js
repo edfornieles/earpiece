@@ -11,7 +11,7 @@
   const view = new FollowCore.Follow(), cv = $('dr-follow'), ctx = cv.getContext('2d');
 
   async function poll() {
-    try { state = await (await fetch(url('/api/desk-room'))).json(); drawPlan(); drawSees(); } catch {}
+    try { state = await (await fetch(url('/api/desk-room'))).json(); drawPlan(); drawSees(); drawWorld(); } catch {}
     setTimeout(poll, 700);
   }
   const colour = { sure: '#3fa35a', rough: '#d08a2a', unsure: '#e0533a' };
@@ -41,6 +41,28 @@
       $('dr-look').innerHTML = look ? `${look.file ? `<img src="${esc(url('/api/look-image?file=' + encodeURIComponent(look.file)))}" alt="Mother's last camera close-up">` : ''}<div><b>“${esc(look.question)}”</b><br>${esc(look.answer)}<br><span class="hint">${new Date(look.at).toLocaleTimeString()}</span></div>` : '<span class="hint">Ask “what am I holding?” and Mother’s close-up appears here.</span>';
     }
   }
+  // The camera's furniture checks: when the last one was, what moved, and a way to put a wrong move back.
+  const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(t).toLocaleDateString(); };
+  async function act(body) {
+    const r = await fetch(url('/api/room'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), d = await r.json().catch(() => ({}));
+    if (!r.ok) throw Error(d.error || 'That did not work.');
+  }
+  let changesShown = '', note = '';
+  function drawWorld() {
+    const w = state?.world; if (!w) return;
+    const f = w.finder || {}, c = f.check;
+    $('dr-check').textContent = note || (!f.ready ? 'The object finder is not set up on this computer.'
+      : f.mode === 'off' ? 'Switched off (Room page → Objects).'
+      : !state.tracking ? `Runs while tracking is on.${w.lastCheckAt ? ' Last check ' + ago(w.lastCheckAt) + '.' : ''}`
+      : c ? (c.waiting ? `Check ${c.waiting}…` : `Checking the room now (look ${Math.min(c.passes + 1, c.of)} of ${c.of})…`)
+      : `${w.lastCheckAt ? 'Last check ' + ago(w.lastCheckAt) : 'Not checked yet'}${f.mode === 'always' ? ' · looking continuously' : f.nextCheckAt ? ` · next in ${Math.max(1, Math.round((f.nextCheckAt - Date.now()) / 60000))} min` : ''}.${f.error ? ' ' + f.error : ''}`);
+    $('dr-check-now').disabled = !f.ready || !state.tracking || !!c;
+    const rows = (w.changes || []).map((e) => `<li class="${e.undone ? 'undone' : ''}"><span>${esc(e.name)} → ${esc(e.to)} <span class="hint">${esc(e.distanceM)} m · ${e.by === 'camera' ? 'by the camera' : 'from the desk'} · ${ago(e.at)}</span></span>${e.undone ? '' : `<button data-undo="${esc(e.id)}">Undo</button>`}</li>`).join('');
+    if (rows !== changesShown) { changesShown = rows; $('dr-changes').innerHTML = rows || '<li class="hint">No furniture has moved.</li>'; }
+  }
+  const say = (text) => { note = text; drawWorld(); setTimeout(() => { note = ''; drawWorld(); }, 4000); };
+  $('dr-check-now').onclick = () => act({ action: 'roomCheck' }).then(() => say('Check asked for…'), (e) => say(e.message));
+  $('dr-changes').onclick = (e) => { const id = e.target.dataset?.undo; if (id) act({ action: 'undoMove', id }).catch((x) => say(x.message)); };
   // The close-up reuses the camera preview this page already shows (no extra downloads or 4K decoding:
   // a small panel does not need 4K, and decoding it here made the Mac too busy for clean audio).
   const preview = () => document.querySelector(`#cams [data-id="${CSS.escape(state?.cameraId || '')}"] img`);

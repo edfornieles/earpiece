@@ -85,3 +85,14 @@ test('a dropped or expired session reconnects quietly instead of falling back', 
   agent.fail('Realtime voice disconnected (1006).', true);
   assert.equal(failures.length, 1, 'after three tries it hands back to the standard voice');
 });
+
+test('the map goes in as a captioned PNG, and a changed room replaces the instructions',async t=>{
+  const {agent,sent}=setup(t,async()=>({images:[{jpeg:Buffer.from('a'),label:'cam2'},{data:Buffer.from('b'),mime:'image/png',caption:'Map of the room from above.'}],note:''}));
+  agent.onEvent({type:'input_audio_buffer.committed'});
+  await new Promise(setImmediate);
+  const items=sent.filter(m=>m.type==='conversation.item.create').map(m=>m.item.content);
+  assert.equal(items[0][0].text,'Camera view: cam2');assert.match(items[0][1].image_url,/^data:image\/jpeg;base64,/);
+  assert.equal(items[1][0].text,'Map of the room from above.');assert.match(items[1][1].image_url,/^data:image\/png;base64,/);
+  agent.setInstructions('new room');
+  assert.deepEqual(sent.at(-1),{type:'session.update',session:{type:'realtime',instructions:'new room'}});
+});

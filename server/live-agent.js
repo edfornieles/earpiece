@@ -6,10 +6,11 @@
 // conversation so it stays small.
 const WebSocket = require('ws');
 
-const KEEP_IMAGES = 4, EVENT_GAP_MS = 8000;
+const KEEP_IMAGES = 5, EVENT_GAP_MS = 8000;
 
 class LiveAgent {
-  // hooks: audio(pcm), responseDone(), speechStarted(), heard(text), said(text), see() → {images:[{jpeg, detail}], note},
+  // hooks: audio(pcm), responseDone(), speechStarted(), heard(text), said(text),
+  //        see() → {images:[{jpeg, detail, label} or {data, mime, caption, detail}], note},
   //        playedMs(), log(type, data)
   constructor({ key, model, voice, instructions, hooks, WS = WebSocket }) {
     Object.assign(this, { key, model: model || 'gpt-realtime', voice: voice || 'marin', instructions, h: hooks, WS });
@@ -64,6 +65,8 @@ class LiveAgent {
     this.watchdog = setTimeout(() => this.fail('Realtime voice did not send audio.'), 12000);
     this.send({ type:'response.create', ...(response ? {response} : {}) });
   }
+  // The room changed (furniture moved): give the conversation the new description.
+  setInstructions(text) { this.instructions = text; if (this.ready) this.send({ type: 'session.update', session: { type: 'realtime', instructions: text } }); }
   append(pcm) { if (this.ready) this.send({ type: 'input_audio_buffer.append', audio: Buffer.from(pcm).toString('base64') }); }
 
   onEvent(m) {
@@ -111,7 +114,7 @@ class LiveAgent {
       if (this.closed || this.userSpeaking || this.h.canSpeak?.()===false || generation !== this.generation) return;
       for (const img of seen?.images || []) {
         const id = `img_${++this.seq}`;
-        this.send({ type: 'conversation.item.create', item: { id, type: 'message', role: 'user', content: [...(img.label ? [{ type: 'input_text', text: 'Camera view: ' + img.label }] : []), { type: 'input_image', image_url: 'data:image/jpeg;base64,' + Buffer.from(img.jpeg).toString('base64'), detail: img.detail || 'auto' }] } });
+        this.send({ type: 'conversation.item.create', item: { id, type: 'message', role: 'user', content: [...(img.caption || img.label ? [{ type: 'input_text', text: img.caption || 'Camera view: ' + img.label }] : []), { type: 'input_image', image_url: `data:${img.mime || 'image/jpeg'};base64,` + Buffer.from(img.data || img.jpeg).toString('base64'), detail: img.detail || 'auto' }] } });
         this.images.push(id);
       }
       while (this.images.length > KEEP_IMAGES) this.send({ type: 'conversation.item.delete', item_id: this.images.shift() });

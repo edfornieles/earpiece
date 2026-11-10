@@ -105,6 +105,10 @@ test('recording server connection, visit and audio isolation regressions', { tim
     assert.equal((await request('room',{action:'save',revision:room.revision,name:'Stale'})).status,400);
     assert.equal((await request('room-frame?observation=missing',undefined,'phone')).status,403);
     assert.equal((await request('room-frame?observation=missing')).status,404);
+    const desk=await(await request('desk-room')).json();
+    assert.ok(Array.isArray(desk.world.changes));assert.ok(['off','checks','always'].includes(desk.world.finder.mode));
+    assert.equal((await request('room',{action:'roomCheck'})).status,400,'no check without tracking or the finder');
+    assert.equal((await request('room',{action:'undoMove',id:'nope'})).status,400);
   });
 
   await t.test('draft generation requires the desk key and rejects invalid briefs without changing preparation', async () => {

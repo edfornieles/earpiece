@@ -11,7 +11,7 @@
   // The object finder switch (Objects section).
   const finderBox = $('finder-on');
   function finderOn(f) { if (finderBox && f && document.activeElement !== finderBox) finderBox.checked = !!f.enabled; }
-  if (finderBox) finderBox.onchange = async () => { try { const v = await api('room', { action: 'objectFinder', on: finderBox.checked }); finderOn(v.finder); toast(finderBox.checked ? 'Looking for furniture while tracking runs' : 'Furniture search off'); } catch (e) { toast(e.message); } };
+  if (finderBox) finderBox.onchange = async () => { try { const v = await api('room', { action: 'objectFinder', on: finderBox.checked }); finderOn(v.finder); toast(finderBox.checked ? 'Furniture checks on' : 'Furniture checks off'); } catch (e) { toast(e.message); } };
   async function refresh() {
     try { const v = await api('room', { action: 'trackingView' }); status = v.cameraControl || {}; finderOn(v.finder); draw(); } catch {}
   }

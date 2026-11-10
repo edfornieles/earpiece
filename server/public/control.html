@@ -24,6 +24,7 @@
   .desk-room #cams { margin:8px 0 0; } .dr-sub { margin-top:16px; }
   .dr-follow { width:100%; aspect-ratio:16/9; background:#000; border-radius:6px; }
   .dr-label { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); } .dr-sees p { margin:6px 0 10px; font-size:13px; line-height:1.45; }
+  .dr-check { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; } .dr-changes { list-style:none; margin:0; padding:0; font-size:12.5px; line-height:1.5; } .dr-changes li { display:flex; gap:8px; align-items:baseline; } .dr-changes .undone { opacity:.55; text-decoration:line-through; } .dr-changes button, .dr-check button { font-size:12px; padding:2px 8px; }
   .dr-look { display:flex; gap:10px; font-size:12.5px; line-height:1.4; } .dr-look img { width:84px; height:110px; object-fit:cover; border-radius:5px; flex:none; }
   @media(max-width:1100px) { .dr-body { grid-template-columns:1fr 1fr; } .dr-sees { grid-column:1/-1; } }
   #cams { display:grid; grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); gap:12px; margin-bottom:16px; }
@@ -150,7 +151,8 @@
       <div class="dr-body">
         <svg id="dr-plan" class="dr-plan" aria-label="Floor plan with people"></svg>
         <canvas id="dr-follow" class="dr-follow" aria-label="Close-up following the person"></canvas>
-        <div class="dr-sees"><div class="dr-label">Mother sees</div><p id="dr-perception"></p><div id="dr-look" class="dr-look"></div></div>
+        <div class="dr-sees"><div class="dr-label">Mother sees</div><p id="dr-perception"></p><div id="dr-look" class="dr-look"></div>
+          <div class="dr-label dr-sub">Furniture check</div><p class="dr-check"><span id="dr-check"></span> <button id="dr-check-now">Check now</button></p><ul id="dr-changes" class="dr-changes"></ul></div>
       </div>
       <div class="dr-label dr-sub">Cameras &amp; room microphones</div>
       <div id="cams"></div><div id="room"></div>

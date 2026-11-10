@@ -92,16 +92,16 @@
   .console .cs-left { display:flex; flex-direction:column; border-right:1px solid var(--line); min-height:100%; }
   .console .cs-everyone { border-top:1px solid var(--line); padding:12px; display:flex; flex-direction:column; gap:10px; margin-top:auto; }
   .console .cs-keys { line-height:1.9; }
-  .tb-voice summary { cursor:pointer; font-size:12px; color:var(--dim); }
-  .tb-voice[open] summary { margin-bottom:10px; }
+  .voicebox { display:flex; flex-direction:column; gap:8px; border:1px solid var(--line); border-radius:7px; padding:10px 12px; }
+  .voicebox .sliders { gap:16px; } .voicebox .sliders label { flex:1; min-width:160px; margin:0; display:flex; align-items:center; gap:8px; }
+  .voicebox input[type=range] { flex:1; width:auto; padding:0; }
+  .cs-label { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
   .phone-row .chip { font-size:10px; border:1px solid var(--line); border-radius:20px; padding:1px 7px; color:var(--dim); white-space:nowrap; }
   .phone-row .chip.on { color:var(--ok); border-color:currentColor; }
   .phone-row.talking { outline:2px solid var(--hot); outline-offset:-2px; }
   .card .switch { text-align:left; } .card .switch[aria-checked=true] b { color:var(--ok); } .card .switch[aria-checked=false] b { color:var(--hot); }
   .card .talk { font-weight:500; padding:12px; }
   .card .startvisit { width:100%; margin:8px 0 4px; }
-  .tb-voice summary { cursor:pointer; font-size:12px; color:var(--dim); }
-  .tb-voice[open] summary { margin-bottom:10px; }
   .phone-row > .face { width:34px; height:34px; border-radius:50%; object-fit:cover; flex:0 0 auto !important; background:var(--line); }
   .phone-row > span:nth-child(3) { flex:1; min-width:0; }
   .phone-row .face.none { display:inline-flex; align-items:center; justify-content:center; font-size:12px; color:var(--dim); }
@@ -212,7 +212,7 @@
           <div id="roster" aria-label="Phones"></div>
           <div class="cs-everyone">
             <input id="speakall" placeholder="Type a line for everyone (AI voice), Enter">
-            <details class="tb-voice"><summary>AI voice for every phone</summary>
+            <div class="tb-voice voicebox"><div class="cs-label">AI voice for every phone</div>
               <div id="globalvoice">
                 <div class="row"><select class="voice" style="flex:1"></select><select class="emotion"></select></div>
                 <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
@@ -221,7 +221,7 @@
               <div class="row"><button id="preview" class="grow">▶ Preview here</button></div>
               <div class="hint">Sets every phone; each phone can then differ on its own card. Emotion is only on the expressive voices. Preview plays on this computer.</div>
               <audio id="previewAudio"></audio>
-            </details>
+            </div>
             <div class="hint cs-keys">Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
           </div>
         </div>
@@ -277,7 +277,7 @@ function paintRoster(p) {
   row.querySelector('small').textContent = p.status?.textContent || 'Connected';
   row.classList.toggle('warning', !!p.status?.classList.contains('hot'));
   const chip = row.querySelector('.chip.ai'); if (chip) { chip.hidden = !p.connected; chip.classList.toggle('on', p.mode === 'auto'); chip.textContent = p.mode === 'auto' ? 'AI on' : 'AI off'; }
-  row.classList.toggle('talking', talkTarget === p.id || talkTarget === 0);
+  row.classList.toggle('talking', holding.has(p.id) || holding.has(0));
   const pad = $('talkpad').querySelector(`[data-phone="${p.id}"]`);
   if (pad) { pad.querySelector('small').textContent = !p.connected ? 'not connected' : p.waiting ? 'waiting' : (who?.name || p.name || 'participant'); pad.classList.toggle('off', !p.connected); }
 }
@@ -366,11 +366,11 @@ function renderGrid(list) {
       </div>
       <input class="speak" placeholder="Type a line → they hear it in the AI voice (Enter)">
       <input class="instruct" placeholder="Private note to the AI (it rephrases it), then Enter">
-      <details class="shape"><summary class="hint">Voice for this phone: <span class="voicename"></span></summary>
+      <div class="shape voicebox"><div class="cs-label">AI voice for this phone</div>
         <div class="row" style="align-items:center"><select class="voice" style="flex:1" title="Voice"></select><select class="emotion" title="Emotion"></select></div>
-        <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
-        <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
-      </details>
+        <div class="row sliders"><label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
+        <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label></div>
+      </div>
       <div class="log"></div>
       <button class="quiet endp">End participant → ready for next</button>`;
     p.el = el; p.meter = el.querySelector('.meter i'); p.log = el.querySelector('.log'); p.status = el.querySelector('.status');
@@ -408,7 +408,7 @@ function paintState(p) {
   b.innerHTML = scripted ? 'Following selected program' : `Auto directing <b>${p.mode === 'auto' ? 'ON' : 'OFF'}</b> <kbd>A</kbd>`;
   b.setAttribute('aria-checked', String(p.mode === 'auto'));
   b.title = p.mode === 'auto' ? 'Mother listens and directs by itself. Click (or A) to stop it and direct by hand.' : 'Mother stays quiet unless you make it speak. Click (or A) to let it direct.';
-  const vn = p.el.querySelector('.voicename'); if (vn) vn.textContent = p.voice || '';
+
   p.el.querySelector('.nudge').textContent=scripted?'Continue program cue':'Next direction';
   b.classList.toggle('aion', p.mode === 'auto');
   const s = p.st; let txt = '', cls = 'status';
@@ -441,19 +441,26 @@ function appendLine(p, l, replay) {
   if (atBottom || replay) p.log.scrollTop = p.log.scrollHeight;
 }
 
-function setTalk(target) {
-  if (target !== null && (!ws || ws.readyState !== 1)) return;
-  if (target !== null && (!mic || ctx?.state !== 'running')) { latched = false; toast('Enable the desk microphone first'); return; }
-  if (talkTarget === target) return;
-  if (talkTarget !== null && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'talk', target: talkTarget, on: false, as: micAs }));
-  talkTarget = target;
-  if (target !== null) ws.send(JSON.stringify({ type: 'talk', target, on: true, as: micAs }));
-  $('all').classList.toggle('on', target === 0);
+// Everything held right now (0 = everyone, else phone numbers): hold 2 and 3 together and both hear you.
+// The server gets the whole set; a new key joining a hold adds its phone without restarting what you are saying.
+const holding = new Set();
+function syncTalk() {
+  const want = [...holding];
+  if (want.length && (!ws || ws.readyState !== 1)) return;
+  if (want.length && (!mic || ctx?.state !== 'running')) { holding.clear(); latched = false; toast('Enable the desk microphone first'); }
+  const was = talkTarget;
+  talkTarget = holding.size ? (holding.has(0) ? 0 : want[0]) : null;
+  if (ws?.readyState === 1) {
+    if (holding.size) ws.send(JSON.stringify({ type: 'talk', target: [...holding], on: true, as: micAs }));
+    else if (was !== null) ws.send(JSON.stringify({ type: 'talk', target: was, on: false, as: micAs }));
+  }
+  for (const b of document.querySelectorAll('.padbtn')) b.classList.toggle('on', holding.has(b.id === 'all' ? 0 : Number(b.dataset.phone)));
+  for (const p of people.values()) paintRoster(p);
 }
-function releaseTalk() {
-  latched = false; setTalk(null);
-  for (const btn of document.querySelectorAll('.padbtn')) btn.classList.remove('on');
-}
+const holdOn = (id) => { holding.add(id); syncTalk(); };
+const holdOff = (id) => { if (id === 0 && latched) return; if (holding.delete(id)) syncTalk(); };
+function setTalk(target) { holding.clear(); if (target !== null) holding.add(target); syncTalk(); }
+function releaseTalk() { latched = false; holding.clear(); syncTalk(); }
 window.addEventListener('blur', releaseTalk);
 window.addEventListener('pagehide', releaseTalk);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') releaseTalk(); });
@@ -470,7 +477,7 @@ function micProblem(error) {
 // Start talking to a phone (0 = everyone). With the microphone not open, or the desk's sound paused, open or
 // resume it first (the press or key lets the browser show its permission prompt), then talk if still held.
 function beginTalk(target, stillHeld, btn) {
-  const go = () => { setTalk(target); btn?.classList.toggle('on', talkTarget === target); };
+  const go = () => holdOn(target);
   if (mic && ctx?.state === 'running') return go();
   enableMicrophone().then(() => stillHeld() ? go() : toast('Microphone on. Hold and speak.'),
     (error) => { toast('⚠ ' + micProblem(error)); audioStatus(micProblem(error)); });
@@ -478,7 +485,7 @@ function beginTalk(target, stillHeld, btn) {
 function bindHold(btn, target) {
   let held = false;
   const down = (e) => { e.preventDefault(); held = true; beginTalk(target, () => held, btn); };
-  const up = () => { held = false; if (!latched || target !== 0) setTalk(null); btn.classList.remove('on'); };
+  const up = () => { if (!held) return; held = false; holdOff(target); };
   btn.addEventListener('pointerdown', down); btn.addEventListener('pointerup', up); btn.addEventListener('pointerleave', up); btn.addEventListener('pointercancel', up);
 }
 function mark() { const t = prompt('Marker label (optional):', '') ; if (t === null) return; ws.send(JSON.stringify({ type: 'mark', text: t || 'Mark' })); }
@@ -842,7 +849,7 @@ document.addEventListener('keydown', (e) => {
   const held = () => keysDown.has(e.code);
   if (e.code === 'Space') { e.preventDefault(); keysDown.add(e.code); beginTalk(0, held, $('all')); }
   if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) { keysDown.add(e.code); beginTalk(Number(e.code.slice(5)), held); }
-  if (e.code === 'KeyL') { latched = !latched; setTalk(latched ? 0 : null); }
+  if (e.code === 'KeyL') { latched = !latched; latched ? holdOn(0) : (holding.delete(0), syncTalk()); }
   if (e.code === 'KeyM') { e.preventDefault(); quickMark(); }
   if (e.code === 'KeyV') setMicAs(micAs === 'voice' ? 'own' : 'voice');
   const sel = people.get(selectedPhone), connected = sel?.el;
@@ -854,7 +861,8 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => {
   keysDown.delete(e.code);
   if (!ws || typing()) return;
-  if (e.code === 'Space' || /^Digit[1-9]$/.test(e.code)) { setTalk(latched ? 0 : null); if (!latched) $('all').classList.remove('on'); }
+  if (e.code === 'Space') holdOff(0);
+  if (/^Digit[1-9]$/.test(e.code)) holdOff(Number(e.code.slice(5)));
 });
 </script>
 <script src="follow-core.js"></script><script src="desk-room.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>

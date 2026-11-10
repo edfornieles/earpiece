@@ -1291,7 +1291,7 @@ function endParticipant(s, why) {
   if (s.waiting) return;
   if (s.live) { s.live.close(); s.live = null; logEvent('live_end', { id: s.id, why }); }
   stopAi(s, why);
-  if (talk) { talk.targets.delete(s.id); talk.visits.delete(s.id); }
+  for (const t of talks.values()) { t.targets.delete(s.id); t.visits.delete(s.id); }
   s.edHold = false;
   logEvent('participant_end', { id: s.id, name: s.name, pid: s.pid, why });
   const rec = [...session.participants].reverse().find((x) => x.phone === s.id && x.end == null);
@@ -1567,25 +1567,34 @@ function speakAs(t, text, who) {
   say(t, text, turn, u);
 }
 
-let talk = null;
-function talkStart(target, as, owner) {
-  if (!Number.isInteger(target) || target < 0 || target > MAX_PHONES) return;
-  if (talk && talk.owner !== owner) return;   // another desk connection owns this talk
-  if (talk) talkStop(owner);
-  talk = { owner, target, targets: new Set(), visits: new Map(), programTokens:new Map(), pcm: [], as: as === 'voice' ? 'voice' : 'own', t0: Date.now() };
+// One hold-to-talk per desk connection, so two directors can talk at once, and one hold can cover several phones
+// (keys 2 and 3 held together). A phone stays held while any director is talking to it.
+const talks = new Map();   // desk connection -> its talk
+const heldByDesk = (id) => [...talks.values()].some((t) => t.targets.has(id));
+function addTargets(t, wanted) {
   for (const s of sessions.values()) {
-    if (!s.ws || (target !== 0 && target !== s.id)) continue;
-    talk.targets.add(s.id); talk.visits.set(s.id, s.visitToken); stopAi(s, 'human director cut in'); talk.programTokens.set(s.id,programRunner.token(s.id)); s.edHold = true; state(s);
+    if (!s.ws || t.targets.has(s.id) || !(wanted.includes(0) || wanted.includes(s.id))) continue;
+    t.targets.add(s.id); t.visits.set(s.id, s.visitToken); stopAi(s, 'human director cut in'); t.programTokens.set(s.id,programRunner.token(s.id)); s.edHold = true; state(s);
   }
 }
+function talkStart(target, as, owner) {
+  const wanted = [...new Set((Array.isArray(target) ? target : [target]).filter((n) => Number.isInteger(n) && n >= 0 && n <= MAX_PHONES))];
+  if (!wanted.length) return;
+  as = as === 'voice' ? 'voice' : 'own';
+  const cur = talks.get(owner);
+  if (cur && cur.as === as) { cur.wanted = [...new Set([...cur.wanted, ...wanted])]; addTargets(cur, cur.wanted); return; }   // another key joined the hold
+  if (cur) talkStop(owner);
+  const t = { owner, wanted, targets: new Set(), visits: new Map(), programTokens:new Map(), pcm: [], as, t0: Date.now() };
+  talks.set(owner, t); addTargets(t, wanted);
+}
 async function talkStop(owner) {
-  if (!talk || talk.owner !== owner) return;
-  const t = talk; talk = null; t.t1 = Date.now();
-  for (const id of t.targets) { const s = sessions.get(id); if (s) { s.edHold = false; s.lastActivity = Date.now(); state(s); } }
+  const t = talks.get(owner); if (!t) return;
+  talks.delete(owner); t.t1 = Date.now();
+  for (const id of t.targets) { const s = sessions.get(id); if (s) { s.edHold = heldByDesk(id); s.lastActivity = Date.now(); state(s); } }
   // The director always hears back what happened: a silent desk reads as a broken button.
   const tell = (text) => send(t.owner, { type: 'error', text });
   const note = (id, text) => toControls({ type: 'transcript', id, who: 'note', text });
-  if (!t.targets.size) return tell(t.target ? `Phone ${t.target} is not connected, so nobody heard that.` : 'No phone is connected, so nobody heard that.');
+  if (!t.targets.size) return tell(t.wanted.includes(0) ? 'No phone is connected, so nobody heard that.' : `Phone ${t.wanted.join(' and ')} ${t.wanted.length > 1 ? 'are' : 'is'} not connected, so nobody heard that.`);
   if (t.as !== 'voice') { if (!t.pcm.length) tell('No sound reached the server from the desk microphone.'); }
   else if (!t.pcm.length) return tell('No sound reached the server: check the desk microphone is on (Enable audio).');
   else if (t.t1 - t.t0 < 400) return tell('Hold the button while you speak, and let go when you have finished.');
@@ -1652,8 +1661,8 @@ wss.on('connection', (ws, req) => {
       if (isBinary) {
         const buf = Buffer.from(data);
         if (buf.length < 4 || buf.length % 2) return;
-        const target = buf.readUInt16LE(0), pcm = buf.subarray(2);
-        if (!talk || talk.owner !== ws || talk.target !== target) return;
+        const pcm = buf.subarray(2), talk = talks.get(ws);   // the first two bytes name a target; this desk's talk decides
+        if (!talk) return;
         talk.pcm.push(pcm);
         track('director-mic').write(pcm);
         if (talk.as === 'voice') return;   // AI-voice mode: they hear it after transcription, in the AI voice

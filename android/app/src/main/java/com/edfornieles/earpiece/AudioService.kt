@@ -280,14 +280,19 @@ class AudioService : Service() {
 
     private fun startAudio() {
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        am.mode = AudioManager.MODE_IN_COMMUNICATION
+        // Normal (media) mode, never call mode: a Bluetooth call link reserves radio time every few
+        // milliseconds, and on phones that share one 2.4 GHz radio between Bluetooth and Wi-Fi it starved the
+        // Wi-Fi until the connection to Mother dropped. Earbuds play as media (A2DP); the phone's own
+        // microphone listens. Clear any call route an earlier version left behind.
+        clearRoute(am)
+        am.mode = AudioManager.MODE_NORMAL
 
         // Playback: what the director / AI says, into the earphones.
         val outRate = WIRE_RATE
         val minOut = AudioTrack.getMinBufferSize(outRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         track = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setAudioFormat(AudioFormat.Builder().setSampleRate(outRate)
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
@@ -324,16 +329,19 @@ class AudioService : Service() {
             }
         }.apply { name = "earpiece-play"; start() }
 
-        // Mic: what the participant says. Voice-communication source gives echo cancelling on most phones.
+        // Mic: what the participant says, from the phone's own microphone. The voice-recognition source is tuned
+        // for speech and, unlike the voice-communication source, does not pull the earbuds into call mode.
         val inRate = listOf(48000, 16000, 44100, 24000).firstOrNull {
             AudioRecord.getMinBufferSize(it, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT) > 0
         } ?: 16000
         val minIn = AudioRecord.getMinBufferSize(inRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = try {
-            AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, inRate,
+            AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, inRate,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(minIn, inRate / 5 * 2))
         } catch (e: SecurityException) { status = "microphone permission missing"; return }
         record = rec
+        am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+            ?.let { rec.preferredDevice = it }
         val sid = rec.audioSessionId
         if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(sid)?.enabled = true
         if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(sid)?.enabled = true
@@ -366,25 +374,17 @@ class AudioService : Service() {
 
     // ---------------- headset: route audio to it, and tell the control room when it comes and goes ----------------
 
-    private val headsetTypes = setOf(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_WIRED_HEADSET,
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_BLE_HEADSET)
+    private val headsetTypes = setOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_BLE_HEADSET)
 
     private fun watchHeadset() {
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val check = Runnable {
             if (stopping) return@Runnable
-            if (Build.VERSION.SDK_INT >= 31) {
-                val devices = am.availableCommunicationDevices.filter { it.type in headsetTypes }
-                val expected = Config.expectedHeadset(this)
-                val device = devices.firstOrNull { it.productName.toString() == expected }
-                    ?: devices.firstOrNull { it.id == am.communicationDevice?.id }
-                    ?: devices.firstOrNull()
-                if (device != null) routeTo(am, device) else clearRoute(am)
-            } else {
-                val bt = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
-                if (bt != null) routeTo(am, bt) else clearRoute(am)
-            }
+            // Android plays media to the connected earbuds (or wired earphones) by itself; nothing to route.
+            // Keep the phone out of call mode if something else switched it.
+            if (am.mode != AudioManager.MODE_NORMAL) { clearRoute(am); am.mode = AudioManager.MODE_NORMAL }
             val routed = track?.routedDevice?.takeIf { it.type in headsetTypes }
             val now = routed != null
             val name = routed?.productName?.toString() ?: ""
@@ -400,7 +400,7 @@ class AudioService : Service() {
         }, main)
         track?.addOnRoutingChangedListener({ main.post(check) }, main)
         main.post(check)
-        // Recover when Android changes the communication route without a device connection event.
+        // Notice route changes that come without a device connection event.
         main.postDelayed(object : Runnable { override fun run() { if (!stopping) { check.run(); main.postDelayed(this, 5000) } } }, 5000)
     }
 
@@ -408,18 +408,6 @@ class AudioService : Service() {
         try {
             if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice()
             else @Suppress("DEPRECATION") run { if (am.isSpeakerphoneOn) am.isSpeakerphoneOn = false; if (am.isBluetoothScoOn) { am.stopBluetoothSco(); am.isBluetoothScoOn = false } }
-        } catch (_: Exception) {}
-    }
-
-    private fun routeTo(am: AudioManager, dev: AudioDeviceInfo) {
-        try {
-            if (Build.VERSION.SDK_INT >= 31) {
-                if (am.communicationDevice?.id != dev.id) am.setCommunicationDevice(dev)
-            } else {
-                @Suppress("DEPRECATION")
-                if (am.isSpeakerphoneOn) am.isSpeakerphoneOn = false
-                if (!am.isBluetoothScoOn) { am.startBluetoothSco(); am.isBluetoothScoOn = true }
-            }
         } catch (_: Exception) {}
     }
 

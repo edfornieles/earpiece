@@ -266,7 +266,7 @@ class ObjectFinder {
   status(now = Date.now()) {
     return { enabled: this.enabled, mode: !this.enabled ? 'off' : this.always ? 'always' : 'checks', ready: this.ready, running: !!this.proc, device: this.device, error: this.error,
       check: this.check ? { reason: this.check.reason, passes: this.check.passes, of: PASSES, waiting: this.waiting } : null, lastCheckAt: this.lastCheckAt, nextCheckAt: this.enabled && !this.always && this.since ? this.nextCheckAt() : 0,
-      objects: [...this.objects.values()].filter((r) => r.cameraId===this.tracking.cameraId && now - r.lastSeenAt < 60000).map((r) => ({ name: r.name, score: r.score, visible: r.visible && now-r.lastSeenAt<this.seenWindow(), box: r.box, floor: r.floor || null, area: r.area || null, blocked: r.blocked, follows: r.follow, proposal: r.visible&&now-r.lastSeenAt<this.seenWindow()&&r.proposal?{at:r.proposal.at,from:r.proposal.from,to:r.proposal.to,distanceM:r.proposal.distanceM}:null, secondsAgo: Math.round((now - r.lastSeenAt) / 1000) })) };
+      objects: [...this.objects.values()].filter((r) => r.cameraId===this.tracking.cameraId && now - r.lastSeenAt < Math.max(60000, this.seenWindow())).map((r) => ({ name: r.name, score: r.score, visible: r.visible && now-r.lastSeenAt<this.seenWindow(), box: r.box, floor: r.floor || null, area: r.area || null, blocked: r.blocked, follows: r.follow, proposal: r.visible&&now-r.lastSeenAt<this.seenWindow()&&r.proposal?{at:r.proposal.at,from:r.proposal.from,to:r.proposal.to,distanceM:r.proposal.distanceM}:null, secondsAgo: Math.round((now - r.lastSeenAt) / 1000) })) };
   }
 }
 module.exports = { ObjectFinder };

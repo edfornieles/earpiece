@@ -68,12 +68,30 @@
   details.shape label, #globalvoice label { display:flex; align-items:center; gap:8px; } details.shape input[type=range], #globalvoice input[type=range] { flex:1; width:auto; padding:0; }
   .row select { width:auto; min-width:0; } .row select.voice { flex:1 1 55%; } .row select.emotion { flex:1 1 45%; }
   .tabs { display:flex; gap:6px; } .tabs button { padding:5px 9px; font-size:12px; } .tabs button.sel { background:var(--fg); color:#000; }
-  .talkbar { border:1px solid var(--line); border-radius:7px; background:var(--card); padding:14px 16px; margin-bottom:12px; display:flex; flex-direction:column; gap:10px; }
-  .talkbar .tb-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .talkbar .tb-label { font-size:12px; color:var(--dim); }
-  .talkbar .tb-meter { flex:1; min-width:80px; }
-  .talkbar #all { flex:0 0 auto; } .talkbar #speakall { flex:1; min-width:220px; }
-  .talkbar .hint { margin:0; }
+  .console { border:1px solid var(--line); border-radius:7px; background:var(--card); overflow:hidden; }
+  .console-strip { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:12px 14px; border-bottom:1px solid var(--line); }
+  .console .cs-group { display:flex; align-items:center; gap:8px; }
+  .console .cs-label { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+  .console .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .console .seg button { border:0; border-radius:0; padding:7px 12px; background:transparent; }
+  .console .seg button.sel { background:var(--fg); color:#000; }
+  .console .cs-all { padding:9px 16px; font-weight:500; }
+  .console .cs-mic { display:flex; align-items:center; gap:8px; flex:1; min-width:140px; }
+  .console .cs-mic .meter { flex:1; }
+  .console .cs-hint { padding:6px 14px 0; margin:0; }
+  .console kbd { font:11px ui-monospace,monospace; border:1px solid var(--line); border-radius:4px; padding:0 4px; color:var(--dim); margin-left:4px; }
+  .console button.on, .console #all.on { background:var(--hot); color:#000; }
+  .console .desk-workspace { border:0; border-radius:0; }
+  .console .cs-left { display:flex; flex-direction:column; border-right:1px solid var(--line); min-height:100%; }
+  .console .cs-everyone { border-top:1px solid var(--line); padding:12px; display:flex; flex-direction:column; gap:10px; margin-top:auto; }
+  .console .cs-keys { line-height:1.9; }
+  .tb-voice summary { cursor:pointer; font-size:12px; color:var(--dim); }
+  .tb-voice[open] summary { margin-bottom:10px; }
+  .phone-row .chip { font-size:10px; border:1px solid var(--line); border-radius:20px; padding:1px 7px; color:var(--dim); white-space:nowrap; }
+  .phone-row .chip.on { color:var(--ok); border-color:currentColor; }
+  .phone-row.talking { outline:2px solid var(--hot); outline-offset:-2px; }
+  .card .switch { text-align:left; } .card .switch[aria-checked=true] b { color:var(--ok); } .card .switch[aria-checked=false] b { color:var(--hot); }
+  .card .talk { font-weight:500; padding:12px; }
   .card .startvisit { width:100%; margin:8px 0 4px; }
   .tb-voice summary { cursor:pointer; font-size:12px; color:var(--dim); }
   .tb-voice[open] summary { margin-bottom:10px; }
@@ -170,27 +188,38 @@
       <div id="cams"></div><div id="room"></div>
     </div>
     <div class="desk-heading"><h2>Participants</h2><span class="hint">Select a phone to direct</span></div>
-    <div id="talkbar" class="talkbar">
-      <div class="tb-row">
-        <span class="tb-label">They hear</span>
-        <div class="tabs" id="micmode"><button data-as="own" class="sel">Your voice</button><button data-as="voice">Your words in the AI voice</button></div>
-        <div class="meter tb-meter" title="Your microphone level"><i id="mymeter"></i></div>
-      </div>
-      <div class="hint" id="micmodehint">They hear you directly, live.</div>
-      <div class="tb-row"><button id="all">Hold to talk to everyone</button><input id="speakall" placeholder="Type a line → every phone hears it in the AI voice (Enter)"></div>
-      <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>9</kbd> = that phone · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
-      <details class="tb-voice"><summary>AI voice for every phone</summary>
-        <div id="globalvoice">
-          <div class="row"><select class="voice" style="flex:1"></select><select class="emotion"></select></div>
-          <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
-          <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
+    <div class="console">
+      <div class="console-strip">
+        <div class="cs-group" title="How the person hears you when you hold to talk. V flips it.">
+          <span class="cs-label">They hear</span>
+          <div class="seg" id="micmode"><button data-as="own" class="sel">Your voice</button><button data-as="voice">AI voice</button></div><kbd>V</kbd>
         </div>
-        <div class="row"><button id="preview" class="grow">▶ Preview here</button></div>
-        <div class="hint">Applies to every phone; each phone can then differ on its own card. Emotion is only on the expressive voices. Preview plays through this computer, not the phones.</div>
-        <audio id="previewAudio"></audio>
-      </details>
+        <button id="all" class="cs-all">Hold to talk to everyone <kbd>space</kbd></button>
+        <button id="cs-mark" title="Drop a marker on the timeline now">Mark <kbd>M</kbd></button>
+        <div class="cs-mic" title="Your microphone"><span class="cs-label">Your mic</span><div class="meter"><i id="mymeter"></i></div></div>
+      </div>
+      <div class="hint cs-hint" id="micmodehint">They hear you directly, live.</div>
+      <div class="desk-workspace">
+        <div class="cs-left">
+          <div id="roster" aria-label="Phones"></div>
+          <div class="cs-everyone">
+            <input id="speakall" placeholder="Type a line for everyone (AI voice), Enter">
+            <details class="tb-voice"><summary>AI voice for every phone</summary>
+              <div id="globalvoice">
+                <div class="row"><select class="voice" style="flex:1"></select><select class="emotion"></select></div>
+                <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
+                <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
+              </div>
+              <div class="row"><button id="preview" class="grow">▶ Preview here</button></div>
+              <div class="hint">Sets every phone; each phone can then differ on its own card. Emotion is only on the expressive voices. Preview plays on this computer.</div>
+              <audio id="previewAudio"></audio>
+            </details>
+            <div class="hint cs-keys">Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
+          </div>
+        </div>
+        <div id="grid"></div>
+      </div>
     </div>
-    <div class="desk-workspace"><div id="roster" aria-label="Phones"></div><div id="grid"></div></div>
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="earpiece_pages" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
       <div id="arrivals"></div>
@@ -239,6 +268,8 @@ function paintRoster(p) {
   if (who?.name && !p.waiting) row.querySelector('strong').textContent = (who.number ? '#' + who.number + ' ' : '') + who.name;
   row.querySelector('small').textContent = p.status?.textContent || 'Connected';
   row.classList.toggle('warning', !!p.status?.classList.contains('hot'));
+  const chip = row.querySelector('.chip.ai'); if (chip) { chip.hidden = !p.connected; chip.classList.toggle('on', p.mode === 'auto'); chip.textContent = p.mode === 'auto' ? 'AI on' : 'AI off'; }
+  row.classList.toggle('talking', talkTarget === p.id || talkTarget === 0);
 }
 let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [], micAs = 'own';
 const people = new Map();
@@ -304,7 +335,7 @@ function renderGrid(list) {
     const el = document.createElement('div'); el.dataset.phone = id; el.hidden = id !== selectedPhone;
     const row = document.createElement('button'); row.className = 'phone-row'; row.dataset.phone = id;
     row.setAttribute('aria-pressed', String(id === selectedPhone));
-    row.innerHTML = `<span class="phone-index">${String(id).padStart(2, '0')}</span><span class="face none"></span><span><strong>Phone ${id}</strong><small>Not connected</small></span><span class="connection-dot"></span>`;
+    row.innerHTML = `<span class="phone-index">${String(id).padStart(2, '0')}</span><span class="face none"></span><span><strong>Phone ${id}</strong><small>Not connected</small></span><span class="chip ai" hidden>AI</span><span class="connection-dot"></span>`;
     row.classList.toggle('connected', !!p?.connected); row.onclick = () => selectPhone(id); $('roster').appendChild(row);
     if (!p || !p.connected) { el.className = 'card empty'; el.textContent = `Phone ${id} — not connected`; grid.appendChild(el); p && (p.el = null); continue; }
     el.className = 'card';
@@ -312,23 +343,23 @@ function renderGrid(list) {
       <h2><span><span class="who"></span><span class="badge relb"></span></span> <small>Phone ${id}</small></h2>
       <div class="status"></div>
       <div class="nextup"></div>
-      <div class="meter"><i></i></div>
+      <div class="meter" title="Their microphone"><i></i></div>
       <button class="startvisit primary" hidden>Start visit</button>
       <div class="row">
-        <button class="grow talk">Hold to talk</button>
-        <button class="listen ${p.listening ? '' : 'muted'}">Listen</button>
+        <button class="grow talk">Hold to talk <kbd>${id <= 9 ? id : ''}</kbd></button>
+        <button class="listen ${p.listening ? '' : 'muted'}" title="Hear this phone's microphone on the desk">🎧 Listen</button>
       </div>
       <div class="row">
-        <button class="grow aimode"></button>
-        <button class="nudge">Next direction</button>
+        <button class="grow aimode switch" role="switch"></button>
+        <button class="nudge" title="Mother gives its next direction now">Next direction <kbd>N</kbd></button>
       </div>
-      <input class="speak" placeholder="Type a line → they hear it in the voice (Enter)">
-      <div class="row" style="align-items:center"><select class="voice" style="flex:1" title="Voice"></select><select class="emotion" title="Emotion"></select></div>
-      <details class="shape"><summary class="hint">Pitch &amp; speed</summary>
+      <input class="speak" placeholder="Type a line → they hear it in the AI voice (Enter)">
+      <input class="instruct" placeholder="Private note to the AI (it rephrases it), then Enter">
+      <details class="shape"><summary class="hint">Voice for this phone: <span class="voicename"></span></summary>
+        <div class="row" style="align-items:center"><select class="voice" style="flex:1" title="Voice"></select><select class="emotion" title="Emotion"></select></div>
         <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
         <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
       </details>
-      <input class="instruct" placeholder="Private note to the AI (it rephrases), then Enter">
       <div class="log"></div>
       <button class="quiet endp">End participant → ready for next</button>`;
     p.el = el; p.meter = el.querySelector('.meter i'); p.log = el.querySelector('.log'); p.status = el.querySelector('.status');
@@ -363,7 +394,12 @@ function paintState(p) {
   const b = p.el.querySelector('.aimode');
   const scripted=programView && Object.values(programView.assignments || {}).includes(p.id);
   b.disabled=!!scripted;
-  b.textContent = scripted ? 'Following selected program' : p.mode === 'auto' ? 'AI directing — on' : 'AI off';
+  b.innerHTML = scripted ? 'Following selected program' : `Auto directing <b>${p.mode === 'auto' ? 'ON' : 'OFF'}</b> <kbd>A</kbd>`;
+  b.setAttribute('aria-checked', String(p.mode === 'auto'));
+  b.title = p.mode === 'auto' ? 'Mother listens and directs by itself. Click (or A) to stop it and direct by hand.' : 'Mother stays quiet unless you make it speak. Click (or A) to let it direct.';
+  const who = p.waiting ? 'them' : (p.name || 'them');
+  p.el.querySelector('.talk').innerHTML = `Hold to talk to ${esc(who)}${p.id <= 9 ? ` <kbd>${p.id}</kbd>` : ''}`;
+  const vn = p.el.querySelector('.voicename'); if (vn) vn.textContent = p.voice || '';
   p.el.querySelector('.nudge').textContent=scripted?'Continue program cue':'Next direction';
   b.classList.toggle('aion', p.mode === 'auto');
   const s = p.st; let txt = '', cls = 'status';
@@ -438,6 +474,9 @@ function bindHold(btn, target) {
 }
 function mark() { const t = prompt('Marker label (optional):', '') ; if (t === null) return; ws.send(JSON.stringify({ type: 'mark', text: t || 'Mark' })); }
 $('mark').onclick = mark;
+// A marker at this moment, no questions asked (the key and the console button): naming it would cost the moment.
+function quickMark() { ws.send(JSON.stringify({ type: 'mark', text: 'Mark' })); toast('Marked ' + new Date().toLocaleTimeString()); }
+$('cs-mark').onclick = quickMark;
 $('endsession').onclick = () => { if (confirm('End this session? Recording stops, everything is saved and exported, and you go back to standby to prepare the next one. Phones reconnect by themselves.')) ws.send(JSON.stringify({ type: 'endSession' })); };
 $('startsession').onclick = () => { if (confirm(`Start recording${$('stitle').value ? ' “' + $('stitle').value + '”' : ''} now?`)) { $('stitle').blur(); ws.send(JSON.stringify({ type: 'startSession' })); } };
 function applyMode() {
@@ -795,7 +834,12 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); keysDown.add(e.code); beginTalk(0, held, $('all')); }
   if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) { keysDown.add(e.code); beginTalk(Number(e.code.slice(5)), held); }
   if (e.code === 'KeyL') { latched = !latched; setTalk(latched ? 0 : null); }
-  if (e.code === 'KeyM') { e.preventDefault(); mark(); }
+  if (e.code === 'KeyM') { e.preventDefault(); quickMark(); }
+  if (e.code === 'KeyV') setMicAs(micAs === 'voice' ? 'own' : 'voice');
+  const sel = people.get(selectedPhone), connected = sel?.el;
+  if (e.code === 'KeyA' && connected) ws.send(JSON.stringify({ type: 'mode', id: selectedPhone, mode: sel.mode === 'auto' ? 'off' : 'auto' }));
+  if (e.code === 'KeyN' && connected) ws.send(JSON.stringify({ type: 'nudge', id: selectedPhone }));
+  if (e.code === 'ArrowDown' || e.code === 'ArrowUp') { e.preventDefault(); selectPhone(((selectedPhone - 1 + (e.code === 'ArrowDown' ? 1 : MAX - 1)) % MAX) + 1); }
   if (e.code === 'Escape') $('zoom').click();
 });
 document.addEventListener('keyup', (e) => {

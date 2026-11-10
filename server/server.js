@@ -1598,7 +1598,7 @@ async function talkStop(owner) {
   for (const id of t.targets) {
     const s = sessions.get(id);
     if (!s || s.visitToken !== t.visits.get(id)) { note(id, `Not passed on (the visit changed while you were talking): “${text}”`); continue; }
-    if (s.waiting) { if (t.as === 'voice') note(id, `Not passed on (no visit is running on this phone; press Play or Run first): “${text}”`); continue; }
+    if (s.waiting) { if (t.as === 'voice') note(id, `Not passed on (no visit is running on this phone; press Start visit on its card first): “${text}”`); continue; }
     if(programRunner.manages(id) && programRunner.token(id)!==t.programTokens.get(id))continue;
     if (t.as === 'voice') {
       if(programRunner.manages(id) && programRunner.status==='running'){
@@ -1744,6 +1744,11 @@ wss.on('connection', (ws, req) => {
         if (x && t && t.ws) {
           beginParticipant(t, x.name, x.pid);   // takes the phone past its start screen
         } else send(ws, { type: 'error', id: Number(m.phone) || 0, text: 'That phone isn\'t connected.' });
+      }
+      if (m.type === 'visitStart') {   // start a visit on a waiting phone with nobody queued for it (practice, walk-ins)
+        const t = sessions.get(Number(m.phone));
+        if (!t?.ws) send(ws, { type: 'error', id: Number(m.phone) || 0, text: 'That phone isn\'t connected.' });
+        else if (t.waiting) beginParticipant(t, '', null);
       }
       if (m.type === 'getBrief') { let b = ''; try { b = fs.readFileSync(BRIEF_FILE, 'utf8'); } catch {} send(ws, { type: 'brief', text: b }); }
       if (m.type === 'saveBrief' && typeof m.text === 'string') {

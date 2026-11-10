@@ -68,7 +68,18 @@
   details.shape label, #globalvoice label { display:flex; align-items:center; gap:8px; } details.shape input[type=range], #globalvoice input[type=range] { flex:1; width:auto; padding:0; }
   .row select { width:auto; min-width:0; } .row select.voice { flex:1 1 55%; } .row select.emotion { flex:1 1 45%; }
   .tabs { display:flex; gap:6px; } .tabs button { padding:5px 9px; font-size:12px; } .tabs button.sel { background:var(--fg); color:#000; }
-  .voiceas { margin-top:8px; } .voiceas button { flex:1; }
+  .talkbar { border:1px solid var(--line); border-radius:7px; background:var(--card); padding:14px 16px; margin-bottom:12px; display:flex; flex-direction:column; gap:10px; }
+  .talkbar .tb-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .talkbar .tb-label { font-size:12px; color:var(--dim); }
+  .talkbar .tb-meter { flex:1; min-width:80px; }
+  .talkbar #all { flex:0 0 auto; } .talkbar #speakall { flex:1; min-width:220px; }
+  .talkbar .hint { margin:0; }
+  .card .startvisit { width:100%; margin:8px 0 4px; }
+  .tb-voice summary { cursor:pointer; font-size:12px; color:var(--dim); }
+  .tb-voice[open] summary { margin-bottom:10px; }
+  .phone-row > .face { width:34px; height:34px; border-radius:50%; object-fit:cover; flex:0 0 auto !important; background:var(--line); }
+  .phone-row > span:nth-child(3) { flex:1; min-width:0; }
+  .phone-row .face.none { display:inline-flex; align-items:center; justify-content:center; font-size:12px; color:var(--dim); }
   kbd { background:#222; border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:11px; }
   .hint { color:var(--dim); font-size:12px; }
   header .titlebox { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
@@ -159,6 +170,26 @@
       <div id="cams"></div><div id="room"></div>
     </div>
     <div class="desk-heading"><h2>Participants</h2><span class="hint">Select a phone to direct</span></div>
+    <div id="talkbar" class="talkbar">
+      <div class="tb-row">
+        <span class="tb-label">They hear</span>
+        <div class="tabs" id="micmode"><button data-as="own" class="sel">Your voice</button><button data-as="voice">Your words in the AI voice</button></div>
+        <div class="meter tb-meter" title="Your microphone level"><i id="mymeter"></i></div>
+      </div>
+      <div class="hint" id="micmodehint">They hear you directly, live.</div>
+      <div class="tb-row"><button id="all">Hold to talk to everyone</button><input id="speakall" placeholder="Type a line → every phone hears it in the AI voice (Enter)"></div>
+      <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>9</kbd> = that phone · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
+      <details class="tb-voice"><summary>AI voice for every phone</summary>
+        <div id="globalvoice">
+          <div class="row"><select class="voice" style="flex:1"></select><select class="emotion"></select></div>
+          <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
+          <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
+        </div>
+        <div class="row"><button id="preview" class="grow">▶ Preview here</button></div>
+        <div class="hint">Applies to every phone; each phone can then differ on its own card. Emotion is only on the expressive voices. Preview plays through this computer, not the phones.</div>
+        <audio id="previewAudio"></audio>
+      </details>
+    </div>
     <div class="desk-workspace"><div id="roster" aria-label="Phones"></div><div id="grid"></div></div>
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="earpiece_pages" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
@@ -169,29 +200,6 @@
     </div>
   </section>
   <aside>
-    <div class="panel">
-      <h3>Your mic</h3>
-      <div class="meter"><i id="mymeter"></i></div>
-      <div class="tabs" id="micmode">
-        <button data-as="own" class="sel">My own voice</button>
-        <button data-as="voice">As the AI voice</button>
-      </div>
-      <div class="hint" id="micmodehint">They hear you directly, live.</div>
-      <button id="all">Hold to talk to everyone</button>
-      <input id="speakall" placeholder="Type a line → every phone hears it in the voice (Enter)">
-      <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>9</kbd> = phones 1–9 · use each card for higher slots · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
-    </div>
-    <div class="panel">
-      <h3>Voice</h3>
-      <div id="globalvoice">
-        <div class="row"><select class="voice" style="flex:1"></select><select class="emotion"></select></div>
-        <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
-        <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
-      </div>
-      <div class="row"><button id="preview" class="grow">▶ Preview here</button></div>
-      <div class="hint">Changes here apply to every phone; each card can then differ. Emotion is only available on the expressive voices. Preview plays through your Mac, not the phones.</div>
-      <audio id="previewAudio"></audio>
-    </div>
     <div class="panel setup-links">
       <h3>Prepare &amp; connect</h3>
       <a data-page="/phones">Phones <span>Connect devices &amp; add slots ↗</span></a>
@@ -223,6 +231,12 @@ function paintRoster(p) {
   const row = $('roster').querySelector(`[data-phone="${p.id}"]`);
   if (!row) return;
   row.querySelector('strong').textContent = p.waiting ? 'Waiting for participant' : (p.name || 'Participant');
+  // The person given this phone: their registration photo and name, so the desk knows who is on which phone.
+  const who = !p.waiting && p.pid && folk.find((x) => x.pid === p.pid), face = row.querySelector('.face');
+  const src = who?.photo ? fileUrl(who.photo) : '';
+  if (src) { if (face.tagName !== 'IMG' || face.dataset.src !== src) face.outerHTML = `<img class="face" alt="" src="${esc(src)}" data-src="${esc(src)}">`; }
+  else if (face.tagName === 'IMG' || face.textContent !== (who?.name || p.name || '').trim().charAt(0).toUpperCase()) face.outerHTML = `<span class="face none">${esc((who?.name || (p.waiting ? '' : p.name) || '').trim().charAt(0).toUpperCase())}</span>`;
+  if (who?.name && !p.waiting) row.querySelector('strong').textContent = (who.number ? '#' + who.number + ' ' : '') + who.name;
   row.querySelector('small').textContent = p.status?.textContent || 'Connected';
   row.classList.toggle('warning', !!p.status?.classList.contains('hot'));
 }
@@ -290,7 +304,7 @@ function renderGrid(list) {
     const el = document.createElement('div'); el.dataset.phone = id; el.hidden = id !== selectedPhone;
     const row = document.createElement('button'); row.className = 'phone-row'; row.dataset.phone = id;
     row.setAttribute('aria-pressed', String(id === selectedPhone));
-    row.innerHTML = `<span class="phone-index">${String(id).padStart(2, '0')}</span><span><strong>Phone ${id}</strong><small>Not connected</small></span><span class="connection-dot"></span>`;
+    row.innerHTML = `<span class="phone-index">${String(id).padStart(2, '0')}</span><span class="face none"></span><span><strong>Phone ${id}</strong><small>Not connected</small></span><span class="connection-dot"></span>`;
     row.classList.toggle('connected', !!p?.connected); row.onclick = () => selectPhone(id); $('roster').appendChild(row);
     if (!p || !p.connected) { el.className = 'card empty'; el.textContent = `Phone ${id} — not connected`; grid.appendChild(el); p && (p.el = null); continue; }
     el.className = 'card';
@@ -299,11 +313,11 @@ function renderGrid(list) {
       <div class="status"></div>
       <div class="nextup"></div>
       <div class="meter"><i></i></div>
+      <button class="startvisit primary" hidden>Start visit</button>
       <div class="row">
         <button class="grow talk">Hold to talk</button>
         <button class="listen ${p.listening ? '' : 'muted'}">Listen</button>
       </div>
-      <div class="tabs voiceas" title="How they hear you when you hold to talk (the same for every phone)"><button data-as="own">They hear your voice</button><button data-as="voice">Your words in the AI voice</button></div>
       <div class="row">
         <button class="grow aimode"></button>
         <button class="nudge">Next direction</button>
@@ -319,6 +333,7 @@ function renderGrid(list) {
       <button class="quiet endp">End participant → ready for next</button>`;
     p.el = el; p.meter = el.querySelector('.meter i'); p.log = el.querySelector('.log'); p.status = el.querySelector('.status');
     bindHold(el.querySelector('.talk'), id); paintMicAs();
+    el.querySelector('.startvisit').onclick = () => ws.send(JSON.stringify({ type: 'visitStart', phone: id }));
     el.querySelector('.listen').onclick = (e) => { p.listening = !p.listening; if (p.gain) p.gain.gain.value = p.listening ? 1 : 0; e.target.classList.toggle('muted', !p.listening); };
     el.querySelector('.aimode').onclick = () => ws.send(JSON.stringify({ type: 'mode', id, mode: p.mode === 'auto' ? 'off' : 'auto' }));
     el.querySelector('.nudge').onclick = () => ws.send(JSON.stringify({ type: 'nudge', id }));
@@ -364,7 +379,9 @@ function paintState(p) {
   else if (s.listening) { txt = 'participant speaking…'; cls += ' ok'; }
   else txt = p.mode === 'auto' ? 'AI listening' : 'AI off — you are directing';
   p.status.textContent = txt; p.status.className = cls; paintRoster(p);
-  for (const v of p.el.querySelectorAll('.voiceas button')) v.classList.toggle('sel', v.dataset.as === micAs);
+  // A waiting phone with nobody queued can still start a visit (practice, a walk-in); in standby, recording comes first.
+  const sv = p.el.querySelector('.startvisit');
+  if (sv) { sv.hidden = !p.waiting || !!nextFor(p.id); sv.disabled = !!info?.standby; sv.textContent = info?.standby ? 'Start visit (press Start session first)' : 'Start visit'; }
 }
 
 function appendLine(p, l, replay) {
@@ -405,19 +422,17 @@ function micProblem(error) {
   if (error?.name === 'NotReadableError') return 'Another app is using the microphone. Close it, then try again.';
   return 'Microphone unavailable: ' + (error?.message || 'unknown problem') + '.';
 }
+// Start talking to a phone (0 = everyone). With the microphone not open, or the desk's sound paused, open or
+// resume it first (the press or key lets the browser show its permission prompt), then talk if still held.
+function beginTalk(target, stillHeld, btn) {
+  const go = () => { setTalk(target); btn?.classList.toggle('on', talkTarget === target); };
+  if (mic && ctx?.state === 'running') return go();
+  enableMicrophone().then(() => stillHeld() ? go() : toast('Microphone on. Hold and speak.'),
+    (error) => { toast('⚠ ' + micProblem(error)); audioStatus(micProblem(error)); });
+}
 function bindHold(btn, target) {
   let held = false;
-  const down = (e) => {
-    e.preventDefault(); held = true;
-    // Microphone not open, or the desk's sound paused: open/resume it now (this press lets the browser show its
-    // permission prompt), then start talking if the button is still held.
-    if (!mic || ctx?.state !== 'running') {
-      enableMicrophone().then(() => { if (held) { setTalk(target); btn.classList.toggle('on', talkTarget === target); } else toast('Microphone on. Hold the button and speak.'); },
-        (error) => { toast('⚠ ' + micProblem(error)); audioStatus(micProblem(error)); });
-      return;
-    }
-    setTalk(target); btn.classList.toggle('on', talkTarget === target);
-  };
+  const down = (e) => { e.preventDefault(); held = true; beginTalk(target, () => held, btn); };
   const up = () => { held = false; if (!latched || target !== 0) setTalk(null); btn.classList.remove('on'); };
   btn.addEventListener('pointerdown', down); btn.addEventListener('pointerup', up); btn.addEventListener('pointerleave', up); btn.addEventListener('pointercancel', up);
 }
@@ -467,7 +482,7 @@ function connect() {
     if(m.type==='program'){programView=m.run;for(const p of people.values())paintState(p);}
     if (m.type === 'phonesChanged') { MAX = m.maxPhones; renderGrid(lastList); renderFolk(); renderArrivals(); }
     if (m.type === 'participants') { renderGrid(m.list); renderFolk(); renderArrivals(); }
-    if (m.type === 'people') { folk = m.list; renderFolk(); for (const p of people.values()) paintNext(p); renderArrivals(); }
+    if (m.type === 'people') { folk = m.list; renderFolk(); for (const p of people.values()) { paintNext(p); paintRoster(p); } renderArrivals(); }
     if (m.type === 'session') renderSession(m);
     if (m.type === 'registry' || m.type === 'people') allRegs = null;   // search reloads the full list next time
     if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, voice: m.voice, style: m.style, st: m }); paintState(p); }
@@ -773,17 +788,20 @@ connect(); loadInfo().catch(() => toast('Could not load desk settings. Reconnect
 })();
 
 const typing = () => ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+const keysDown = new Set();
 document.addEventListener('keydown', (e) => {
   if (e.repeat || !ws || typing()) return;
-  if (e.code === 'Space') { e.preventDefault(); setTalk(0); }
-  if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) setTalk(Number(e.code.slice(5)));
+  const held = () => keysDown.has(e.code);
+  if (e.code === 'Space') { e.preventDefault(); keysDown.add(e.code); beginTalk(0, held, $('all')); }
+  if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) { keysDown.add(e.code); beginTalk(Number(e.code.slice(5)), held); }
   if (e.code === 'KeyL') { latched = !latched; setTalk(latched ? 0 : null); }
   if (e.code === 'KeyM') { e.preventDefault(); mark(); }
   if (e.code === 'Escape') $('zoom').click();
 });
 document.addEventListener('keyup', (e) => {
+  keysDown.delete(e.code);
   if (!ws || typing()) return;
-  if (e.code === 'Space' || /^Digit[1-9]$/.test(e.code)) setTalk(latched ? 0 : null);
+  if (e.code === 'Space' || /^Digit[1-9]$/.test(e.code)) { setTalk(latched ? 0 : null); if (!latched) $('all').classList.remove('on'); }
 });
 </script>
 <script src="follow-core.js"></script><script src="desk-room.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>

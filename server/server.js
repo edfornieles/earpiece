@@ -1622,7 +1622,10 @@ wss.on('connection', (ws, req) => {
   ws.on('error', (err) => { console.error('  ! WebSocket error: ' + err.message); ws.terminate(); });
   const u = new URL(req.url, 'http://x');
   const role = u.searchParams.get('role'), key = u.searchParams.get('k');
-  ws.isAlive = true; ws.on('pong', () => (ws.isAlive = true));
+  // heardAt: the last time anything (data or a pong) arrived from this device, so a drop can say whether
+  // the phone had gone quiet (its network) or the server could not get its audio out (sentQueue).
+  ws.isAlive = true; ws.heardAt = Date.now(); ws.on('pong', () => { ws.isAlive = true; ws.heardAt = Date.now(); });
+  ws.on('message', () => { ws.heardAt = Date.now(); });
 
   if (role === 'control' && key === CONTROL_KEY) {
     controls.add(ws);
@@ -1765,7 +1768,9 @@ wss.on('connection', (ws, req) => {
       const why = ws.disconnectReason || (code === 1006 ? 'connection lost' : code === 1012 ? 'server restarting' :
         code === 4000 ? 'slot replaced' : code === 1001 ? 'page closed or backgrounded' : 'code ' + code);
       console.log(`  phone ${id} disconnected after ${secs} s (${why})`);
-      connLog.push(diag('phone_disconnected', { phone: id, secs, why, lastTelemetry: phoneTelemetry.get(id) || null })); if (connLog.length > 200) connLog.shift();
+      const quietS = Math.round((Date.now() - ws.heardAt) / 1000), queuedKB = Math.round((ws.bufferedAmount || 0) / 1024);
+      if (quietS >= 5 || queuedKB) console.log(`  phone ${id} had been silent ${quietS} s${queuedKB ? `, ${queuedKB} KB still waiting to go out` : ''}`);
+      connLog.push(diag('phone_disconnected', { phone: id, secs, why, quietS, queuedKB, lastTelemetry: phoneTelemetry.get(id) || null })); if (connLog.length > 200) connLog.shift();
     });
     toControls({ type: 'participants', list: list() });
     ws.on('message', (data, isBinary) => {

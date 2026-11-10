@@ -153,3 +153,21 @@ test('a finder that keeps failing gives up after a few looks and waits the norma
  assert.equal(f.check, null); assert.deepEqual(log, [], 'a failed check does not refresh the room memory');
  assert.ok(f.wanted.at >= now + 5 * 60000, 'and it does not retry within a minute');
 });
+
+test('a low stool seen whole, legs and all, is placed from its whole outline', () => {
+ const { apply, invert } = require('../tracking');
+ const H = [4, 0, 0, 0, 4, 0, 0, 0, 1], cal = { H, camera: { x: 0.1, y: 2.3, z: 2.1 } }, Hi = invert(H);
+ const plan = { widthM: 4.77, depthM: 4.5 }, fp = { points: [[1.5, 4.2], [1.8, 4.2], [1.8, 4.5], [1.5, 4.5]], heightM: 0.44 };
+ // the box a stool standing at (2.6, 1.4) would make, from its feet up to its seat
+ const at = [2.6, 1.4], px = [];
+ for (const s of [(2.1 - 0.44) / 2.1, 1]) for (const [dx, dy] of [[-.15, -.15], [.15, -.15], [.15, .15], [-.15, .15]])
+   px.push(apply(Hi, [0.1 + (at[0] + dx - 0.1) / s, 2.3 + (at[1] + dy - 2.3) / s]));
+ const xs = px.map(p => p[0]), ys = px.map(p => p[1]);
+ const box = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+ const src = require('fs').readFileSync(require('path').join(__dirname, '../objects-finder.js'), 'utf8');
+ const overlap = (a, b) => { const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)), y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)); return x * y / (a.w * a.h || 1); };
+ const tabletopCentre = new Function('apply', 'invert', 'overlap', src.match(/function tabletopCentre[\s\S]*?\n}\n/)[0] + ';return tabletopCentre;')(apply, invert, overlap);
+ assert.equal(tabletopCentre(cal, fp, plan, box), null, 'the seat-only fit does not match a whole stool');
+ const p = tabletopCentre(cal, fp, plan, box, true);
+ assert.ok(p && Math.hypot(p[0] - 2.6, p[1] - 1.4) < 0.06, `placed at ${p}`);
+});

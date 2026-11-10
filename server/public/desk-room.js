@@ -36,7 +36,8 @@
   }
   function drawSees() {
     const s = state; if (!s) return;
-    const cam = s.camera?.busy ? ` · camera ${s.camera.busy}` : '';
+    // Aimed by hand (or a turn that failed): no calibrated view, so nobody and nothing gets a floor position.
+    const cam = s.camera?.busy ? ` · camera ${s.camera.busy}` : s.camera?.active && !s.camera.active.viewId ? ' · camera off its saved position: no floor positions (Room → Go to Home)' : '';
     $('dr-state').textContent = s.tracking ? `Tracking on${s.pose?.fps ? ` · ${s.pose.fps} fps` : ''}${cam}` : 'Tracking off';
     const ph = s.phones[0];
     $('dr-perception').textContent = ph ? ph.perception : 'Nobody is on a phone visit yet. Press ▶ Play or ▶ Run.';

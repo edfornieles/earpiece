@@ -26,11 +26,13 @@ const overlap = (a, b) => { const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w)
 
 // Match the projected tabletop outline to a detected tabletop box. The search only
 // translates the known footprint, and rejects views where its outline cannot fit.
-function tabletopCentre(cal, fp, plan, box) {
+// whole: the box holds the whole piece (a stool with its legs in view), so match the outline at the floor
+// and at its height together.
+function tabletopCentre(cal, fp, plan, box, whole = false) {
   const cam = cal.camera, height = fp?.heightM;
   if (!cam || !height || cam.z <= height || !fp.points?.length ||
       box.x <= .01 || box.y <= .01 || box.x+box.w >= .99 || box.y+box.h >= .99) return null;
-  const inverse = invert(cal.H), scale = (cam.z-height)/cam.z;
+  const inverse = invert(cal.H), scales = whole ? [(cam.z-height)/cam.z, 1] : [(cam.z-height)/cam.z];
   if (!inverse) return null;
   const [minX,minY,maxX,maxY] = [Math.min,Math.min,Math.max,Math.max].map((fn,i)=>fn(...fp.points.map(p=>p[i%2])));
   const centre = [(minX+maxX)/2,(minY+maxY)/2];
@@ -38,7 +40,7 @@ function tabletopCentre(cal, fp, plan, box) {
   const search = (x0,x1,y0,y1,step) => {
     for(let dx=x0;dx<=x1;dx+=step)for(let dy=y0;dy<=y1;dy+=step){
       if(minX+dx<0 || minY+dy<0 || maxX+dx>plan.widthM || maxY+dy>plan.depthM) continue;
-      const pixels = fp.points.map(([x,y])=>apply(inverse,[cam.x+(x+dx-cam.x)/scale,cam.y+(y+dy-cam.y)/scale]));
+      const pixels = scales.flatMap(scale=>fp.points.map(([x,y])=>apply(inverse,[cam.x+(x+dx-cam.x)/scale,cam.y+(y+dy-cam.y)/scale])));
       if(pixels.some(p=>!p))continue;
       const xs=pixels.map(p=>p[0]),ys=pixels.map(p=>p[1]),x=Math.min(...xs),y=Math.min(...ys);
       const predicted={x,y,w:Math.max(...xs)-x,h:Math.max(...ys)-y};
@@ -48,7 +50,8 @@ function tabletopCentre(cal, fp, plan, box) {
   };
   search(-minX,plan.widthM-maxX,-minY,plan.depthM-maxY,.12);
   if(best)search(best[0]-.12,best[0]+.12,best[1]-.12,best[1]+.12,.025);
-  return best && score>=.8 ? centre.map((v,i)=>v+best[i]) : null;
+  // A whole piece matches less tightly (wide-angle lens, legs splayed or turned), so it needs a lower bar.
+  return best && score>=(whole ? .65 : .8) ? centre.map((v,i)=>v+best[i]) : null;
 }
 
 class ObjectFinder {
@@ -236,7 +239,8 @@ class ObjectFinder {
       const rotation = o.trackRotation && f.score>=moveScore
         ? detectTabletopPose(cal,fp,f.lines,plan,box,people) : null;
       if (rotation) rec.blocked = false;
-      let centre = rotation?.p || (!o.trackRotation && cal && plan && top && !rec.blocked && f.score>=moveScore ? tabletopCentre(cal,fp,plan,box) : null);
+      let centre = rotation?.p || (!o.trackRotation && cal && plan && top && !rec.blocked && f.score>=moveScore
+        ? tabletopCentre(cal,fp,plan,box) || (o.croppedSeat ? tabletopCentre(cal,fp,plan,box,true) : null) : null);
       const croppedSeat = o.croppedSeat && box.y+box.h>=.985 && box.w>=.04 && box.h>=.1;
       if (!centre && cal && fp && croppedSeat && !rec.blocked && f.score>=.45) {
         // On this low stool the detector can return the whole silhouette even for a seat query.

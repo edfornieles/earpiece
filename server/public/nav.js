@@ -1,5 +1,18 @@
 // The Studio sidebar on each operator page: where you can go, and whether a session is recording.
 // The control room always opens in its own tab (so it keeps listening while you browse the others).
+// Operator pages have no logins: tell password managers (LastPass, 1Password, Bitwarden) to leave every field alone,
+// including the ones added later (each phone's card), so they stop putting their icons in the desk's fields.
+(() => {
+  const quiet = (el) => {
+    if (el.type === 'password' || el.dataset.lpignore === 'true') return;
+    el.dataset.lpignore = 'true'; el.dataset['1pIgnore'] = ''; el.dataset.bwignore = ''; el.dataset.formType = 'other';
+    if (!el.getAttribute('autocomplete')) el.setAttribute('autocomplete', 'off');
+  };
+  const sweep = (root) => { if (root.matches?.('input, textarea')) quiet(root); root.querySelectorAll?.('input, textarea').forEach(quiet); };
+  sweep(document);
+  new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sweep(n); })
+    .observe(document.documentElement, { childList: true, subtree: true });
+})();
 (() => {
   const KEY = new URLSearchParams(location.search).get('k');
   if (!KEY) return;

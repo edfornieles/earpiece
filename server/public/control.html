@@ -88,9 +88,11 @@
   .console .cs-hint { padding:6px 14px 0; margin:0; }
   .console kbd { font:11px ui-monospace,monospace; border:1px solid var(--line); border-radius:4px; padding:0 4px; color:var(--dim); margin-left:4px; }
   .console button.on, .console #all.on { background:var(--hot); color:#000; }
-  .console .desk-workspace { border:0; border-radius:0; }
+  .console .desk-workspace { border:0; border-radius:0; grid-template-columns:minmax(230px,.55fr) minmax(320px,1.45fr); }
   .console .cs-left { display:flex; flex-direction:column; border-right:1px solid var(--line); min-height:100%; }
-  .console .cs-everyone { border-top:1px solid var(--line); padding:12px; display:flex; flex-direction:column; gap:10px; margin-top:auto; }
+  .console #speakall { width:100%; }
+  .voicebox .vb-head { display:flex; align-items:center; gap:8px; } .voicebox .vb-head .cs-label { flex:1; }
+  .voicebox .vb-head button { padding:5px 10px; font-size:12px; }
   .console .cs-keys { line-height:1.9; }
   .voicebox { display:flex; flex-direction:column; gap:8px; border:1px solid var(--line); border-radius:7px; padding:10px 12px; }
   .voicebox .sliders { gap:16px; } .voicebox .sliders label { flex:1; min-width:160px; margin:0; display:flex; align-items:center; gap:8px; }
@@ -205,25 +207,14 @@
         <div class="talkpad" id="talkpad" aria-label="Hold to talk">
           <button id="all" class="padbtn"><b>All</b><small>everyone</small><kbd>space</kbd></button>
         </div>
+        <input id="speakall" placeholder="Type a line for everyone → they hear it in the AI voice (Enter)">
+        <div class="hint cs-keys">Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone (several together) · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
+        <audio id="previewAudio"></audio>
       </div>
       <div class="hint cs-hint" id="micmodehint">They hear you directly, live.</div>
       <div class="desk-workspace">
         <div class="cs-left">
           <div id="roster" aria-label="Phones"></div>
-          <div class="cs-everyone">
-            <input id="speakall" placeholder="Type a line for everyone (AI voice), Enter">
-            <div class="tb-voice voicebox"><div class="cs-label">AI voice for every phone</div>
-              <div id="globalvoice">
-                <div class="row"><select class="voice" style="flex:1"></select><select class="emotion"></select></div>
-                <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
-                <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
-              </div>
-              <div class="row"><button id="preview" class="grow">▶ Preview here</button></div>
-              <div class="hint">Sets every phone; each phone can then differ on its own card. Emotion is only on the expressive voices. Preview plays on this computer.</div>
-              <audio id="previewAudio"></audio>
-            </div>
-            <div class="hint cs-keys">Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
-          </div>
         </div>
         <div id="grid"></div>
       </div>
@@ -366,7 +357,7 @@ function renderGrid(list) {
       </div>
       <input class="speak" placeholder="Type a line → they hear it in the AI voice (Enter)">
       <input class="instruct" placeholder="Private note to the AI (it rephrases it), then Enter">
-      <div class="shape voicebox"><div class="cs-label">AI voice for this phone</div>
+      <div class="shape voicebox"><div class="vb-head"><span class="cs-label">AI voice for this phone</span><button class="vpreview" title="Hear this voice on this computer">▶ Preview</button><button class="vall" title="Give every phone this voice, emotion, pitch and speed">Use for every phone</button></div>
         <div class="row" style="align-items:center"><select class="voice" style="flex:1" title="Voice"></select><select class="emotion" title="Emotion"></select></div>
         <div class="row sliders"><label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
         <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label></div>
@@ -776,14 +767,15 @@ function wireVoice(root, id, p) {
 }
 fetch('/api/voices?k=' + KEY).then((r) => r.json()).then((v) => {
   voices = v.voices;
-  wireVoice($('globalvoice'), 0, { voice: v.byPhone[1] || v.default, style: v.styles[1] });
   for (const p of people.values()) if (p.el) wireVoice(p.el, p.id, p);
 });
-$('preview').onclick = () => {
-  const g = $('globalvoice'), a = $('previewAudio');
-  const q = new URLSearchParams({ k: KEY, voice: g.querySelector('.voice').value, emotion: g.querySelector('.emotion').value || '', pitch: g.querySelector('.pitch').value, speed: g.querySelector('.speed').value, r: Date.now() });
-  a.src = '/api/preview?' + q; a.play();
-};
+// A phone's voice box: hear it here, or give every phone the same voice.
+const voiceOf = (root) => ({ voice: root.querySelector('.voice').value, emotion: root.querySelector('.emotion').value || '', pitch: Number(root.querySelector('.pitch').value), speed: Number(root.querySelector('.speed').value) });
+document.addEventListener('click', (e) => {
+  const box = e.target.closest('.voicebox'); if (!box) return;
+  if (e.target.closest('.vpreview')) { const v = voiceOf(box), a = $('previewAudio'); a.src = '/api/preview?' + new URLSearchParams({ k: KEY, ...v, r: Date.now() }); a.play(); }
+  if (e.target.closest('.vall')) { ws.send(JSON.stringify({ type: 'voice', id: 0, ...voiceOf(box) })); toast('Every phone now uses ' + voiceOf(box).voice); }
+});
 $('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim() })); e.target.value = ''; } e.stopPropagation(); };
 $('speakall').onkeyup = (e) => e.stopPropagation();
 

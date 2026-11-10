@@ -4,10 +4,16 @@
 // including the ones added later (each phone's card), so they stop putting their icons in the desk's fields.
 (() => {
   const quiet = (el) => {
-    if (el.type === 'password' || el.dataset.lpignore === 'true') return;
+    if (el.type === 'password' || el.dataset.quieted) return;
+    el.dataset.quieted = '1';
     el.dataset.lpignore = 'true'; el.dataset['1pIgnore'] = ''; el.dataset.bwignore = ''; el.dataset.formType = 'other';
     if (!el.getAttribute('autocomplete')) el.setAttribute('autocomplete', 'off');
+    // Newer LastPass ignores the markers above but never offers logins in a search box; it behaves like a text field.
+    if (el.tagName === 'INPUT' && (el.getAttribute('type') || 'text') === 'text') el.type = 'search';
   };
+  const style = document.createElement('style');   // no clear (×) button or rounded search look
+  style.textContent = 'input[type=search]{-webkit-appearance:none;appearance:none}input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-search-decoration{-webkit-appearance:none;display:none}';
+  document.head.appendChild(style);
   const sweep = (root) => { if (root.matches?.('input, textarea')) quiet(root); root.querySelectorAll?.('input, textarea').forEach(quiet); };
   sweep(document);
   new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sweep(n); })

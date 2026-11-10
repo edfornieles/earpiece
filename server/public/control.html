@@ -392,8 +392,26 @@ function releaseTalk() {
 window.addEventListener('blur', releaseTalk);
 window.addEventListener('pagehide', releaseTalk);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') releaseTalk(); });
+// Why the browser would not give us the microphone, in words the director can act on.
+function micProblem(error) {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia)
+    return 'This browser only allows the microphone on a secure page: open the https://earpiece.edfornieles.com link (or localhost on this Mac).';
+  if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError')
+    return 'The browser has blocked the microphone for this page. Click the icon at the left of the address bar, set Microphone to Allow, then reload.';
+  if (error?.name === 'NotFoundError' || error?.name === 'OverconstrainedError') return 'No microphone was found. Plug one in, or pick one in your computer’s sound settings.';
+  if (error?.name === 'NotReadableError') return 'Another app is using the microphone. Close it, then try again.';
+  return 'Microphone unavailable: ' + (error?.message || 'unknown problem') + '.';
+}
 function bindHold(btn, target) {
-  const down = (e) => { e.preventDefault(); setTalk(target); btn.classList.toggle('on', talkTarget === target); };
+  const down = (e) => {
+    e.preventDefault();
+    // First press with the microphone off: ask for it now (this click lets the browser show its permission prompt).
+    if (!mic || ctx?.state !== 'running') {
+      enableMicrophone().then(() => toast('Microphone on. Hold the button again and speak.'), (error) => { toast('⚠ ' + micProblem(error)); audioStatus(micProblem(error)); });
+      return;
+    }
+    setTalk(target); btn.classList.toggle('on', talkTarget === target);
+  };
   const up = () => { if (!latched || target !== 0) setTalk(null); btn.classList.remove('on'); };
   btn.addEventListener('pointerdown', down); btn.addEventListener('pointerup', up); btn.addEventListener('pointerleave', up); btn.addEventListener('pointercancel', up);
 }
@@ -725,7 +743,7 @@ async function enableMicrophone() {
   try { await micSetup; } catch (error) { micSetup = null; throw error; }
 }
 $('enable-sound').onclick = () => enableSound().catch(() => audioStatus('Sound could not start. Try enabling sound again.'));
-$('enable-mic').onclick = () => enableMicrophone().catch(() => audioStatus('Microphone unavailable. Allow microphone access in your browser, then try again.'));
+$('enable-mic').onclick = () => enableMicrophone().catch((error) => audioStatus(micProblem(error)));
 bindHold($('all'), 0);
 connect(); loadInfo().catch(() => toast('Could not load desk settings. Reconnecting…'));
 (function draw() {

@@ -12,7 +12,7 @@ const { spawn } = require('child_process');
 const { Ptz } = require('./ptz');
 const { pickFocus } = require('./public/follow-core');
 
-const LOST_MS = 1200, RECENT_MS = 6000, COOLDOWN_MS = 5000, EDGE = 0.05, MAX_SHIFT = 0.06, AHEAD_S = 1.0;
+const FRESH_CAL_MS = 10 * 60000, FIXED_SHIFT = 0.03, LOST_MS = 1200, RECENT_MS = 6000, COOLDOWN_MS = 5000, EDGE = 0.05, MAX_SHIFT = 0.06, AHEAD_S = 1.0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 20) || 'view';
 
@@ -75,6 +75,12 @@ class CameraViews {
     const s = this.st(id);
     try { s.pos = await this.ctl(id).position(); s.available = !!s.pos; s.error = s.pos ? '' : 'The camera does not report a position.'; }
     catch (e) { s.available = false; s.error = e.message; }
+    // After a restart the camera is often still resting on a saved position: recognise it, so room checks
+    // and follow know where it is without turning it first.
+    if (s.pos && !this.room.active?.[id] && !s.busy) {
+      const v = this.views(id).find((x) => x.pos && Math.hypot(x.pos[0] - s.pos[0], x.pos[1] - s.pos[1]) < 0.004);
+      if (v) { this.room.setActive(id, v.id, { correction: { ok: true, fresh: true, resting: true } }); this.log(`camera is resting on ${v.name}`); }
+    }
     this.room.notify?.();
   }
   status(id) {
@@ -221,6 +227,37 @@ class CameraViews {
       p.on('exit', () => { clearTimeout(t); try { res(JSON.parse(out)); } catch { res({ ok: false, error: 'picture comparison failed' }); } });
       p.on('error', () => res({ ok: false, error: 'picture comparison is not set up' }));
     });
+  }
+
+  // A camera that cannot turn (the Mac's own webcam) can still be knocked, or the laptop moved. Its floor
+  // calibration keeps a reference picture taken just after calibrating; when the picture stops matching it
+  // for three checks running, floor positions from that camera are paused until it is recalibrated.
+  // An older calibration with no reference picture is left alone: Mother cannot tell what it looked like.
+  async checkFixed(now = Date.now()) {
+    this.fixedMiss ||= new Map(); this.fixedNoted ||= new Set();
+    for (const cam of this.cameras) {
+      if (this.controllable(cam) || !cam.frame || now - (cam.frameAt || 0) > 5000) continue;
+      const cal = this.room.config.calibrations?.[cam.id]; if (!cal || cal.needsReview) continue;
+      const ref = path.join(this.dir, `${cam.id}-calref.jpg`), meta = ref.replace(/\.jpg$/, '.json'), stamp = String(cal.savedAt || '');
+      let saved = null; try { saved = JSON.parse(fs.readFileSync(meta, 'utf8')).savedAt; } catch {}
+      if (!fs.existsSync(ref) || saved !== stamp) {
+        if (now - Date.parse(cal.savedAt || 0) > FRESH_CAL_MS) {
+          if (!this.fixedNoted.has(cam.id + stamp)) { this.fixedNoted.add(cam.id + stamp); this.log(`${cam.name || cam.id}: no reference picture for its floor calibration, so a moved camera cannot be noticed. Recalibrate it to add one.`); }
+          continue;
+        }
+        fs.mkdirSync(this.dir, { recursive: true }); fs.writeFileSync(ref, cam.frame); fs.writeFileSync(meta, JSON.stringify({ savedAt: stamp }));
+        this.fixedMiss.delete(cam.id); continue;
+      }
+      const cur = path.join(this.dir, `${cam.id}-now.jpg`); fs.writeFileSync(cur, cam.frame);
+      const r = await this.register(ref, cur);
+      if (r.ok && Math.hypot(...r.shift) <= FIXED_SHIFT) { this.fixedMiss.delete(cam.id); continue; }
+      const misses = (this.fixedMiss.get(cam.id) || 0) + 1; this.fixedMiss.set(cam.id, misses);
+      if (misses >= 3) {
+        this.fixedMiss.delete(cam.id);
+        this.room.pauseCalibration(cam.id, 'The picture no longer matches the one taken when this camera was calibrated: it has probably been moved.');
+        this.log(`${cam.name || cam.id} seems to have moved: floor positions from it are paused until it is recalibrated`);
+      }
+    }
   }
 
   sweepViews(id) {

@@ -201,3 +201,28 @@ test('activity uses recent positions and clears after observation stops',()=>{
  assert.equal(tr.view(now+1100).tracks[0].activity,null);
  assert.equal(send(2.1,1400).activity,null);
 });
+test('a person briefly hidden keeps their number when the detector renumbers them',()=>{
+ const tr=new Tracking(),opts=t=>({calibration:null,plan,now:t}),box={x:0.4,y:0.2,w:0.1,h:0.6};
+ tr.update({tracker:'a',cameraId:'c',tracks:[{id:'P1',box}]},opts(1000));
+ tr.bindings.set('P1',{phone:2});
+ tr.update({tracker:'a',cameraId:'c',tracks:[{id:'P7',box:{...box,x:0.43}}]},opts(4000));
+ const ids=tr.view(4000).tracks.map(t=>t.id);
+ assert.deepEqual(ids,['P1'],'rejoined, not a new person');assert.equal(tr.bindings.get('P1').phone,2);
+ tr.update({tracker:'a',cameraId:'c',tracks:[{id:'P7',box:{...box,x:0.45}}]},opts(4500));
+ assert.deepEqual(tr.view(4500).tracks.map(t=>t.id),['P1'],'the new number keeps mapping');
+ // Someone appearing far away, or two people at once, is not merged into the lost one.
+ tr.update({tracker:'a',cameraId:'c',tracks:[{id:'P7',box:{...box,x:0.45}},{id:'P9',box:{...box,x:0.9}}]},opts(5000));
+ assert.deepEqual(tr.view(5000).tracks.map(t=>t.id).sort(),['P1','P9']);
+});
+test('furniture is only suggested for a plan item of the same kind',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mother-kind-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const cam={id:'cam1',name:'Studio',frame:null,frameAt:0,status(){return{id:'cam1',name:'Studio',live:true};}};
+ const r=new RoomObserver(path.join(dir,'.room.json'),{cameras:()=>[cam],maxPhones:()=>4});
+ const stool={name:'Tall stool',heightM:0.75,points:[[3.9,1.6],[4.3,1.6],[4.3,2.0],[3.9,2.0]]};
+ r.save({revision:0,floorPlan:{...plan,footprints:[...plan.footprints,stool]}});
+ r.save({revision:1,calibration:{cameraId:'cam1',points:pairsFor([[0.5,0.5],[4,0.6],[4.2,4],[0.6,4.2]])}});
+ const objAt=(cls,f,w=0.06)=>{const [u,v]=toImage(f);return {cls,score:0.5,box:{x:u-w/2,y:v-0.1,w,h:0.1}};};
+ // A chair right against the Work bench, but 0.4 m from the Tall stool: it is the stool, not the bench.
+ for(let i=0;i<6;i++)r.track({tracker:'desk',cameraId:'cam1',tracks:[],objects:[objAt('chair',[3.75,1.8])]});
+ assert.deepEqual(r.tracking.view().objectSuggestions.map(s=>s.footprint),['Tall stool']);
+});

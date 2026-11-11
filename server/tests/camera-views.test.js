@@ -164,3 +164,35 @@ test('automatic room sweeps start switched off', () => {
  const views = Object.create(CameraViews.prototype); views.surveys = new Map();
  assert.equal(views.survey('cam2').enabled, false);
 });
+
+test('after a restart, a camera still resting on a saved position is recognised', async (t) => {
+  const { room, views } = setup(t);
+  const home = await views.save('cam2', 'Home');
+  room.clearActive('cam2'); views.turned.clear();   // as if the server had just started
+  await views.probe('cam2');
+  assert.equal(room.activeView().cam2.viewId, home.id);
+  room.clearActive('cam2'); views.st('cam2').busy = ''; views.ctl('cam2').position = async () => [0.2, 0];
+  await views.probe('cam2');
+  assert.equal(room.activeView().cam2, undefined, 'aimed elsewhere: not on a saved position');
+});
+
+test('a fixed camera that has been moved stops placing people until recalibrated', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mother-fixed-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const cam = { id: 'cam1', name: 'Mac camera', main: 'mac', frame: Buffer.from('jpeg'), frameAt: Date.now(), status() { return { id: 'cam1' }; } };
+  const room = new RoomObserver(path.join(dir, '.room.json'), { cameras: () => [cam], maxPhones: () => 4 });
+  room.config.floorPlan = plan; room.config.calibrations = { cam1: { H: H(0), savedAt: new Date().toISOString() } };
+  let shift = [0, 0];
+  const views = new CameraViews({ root: dir, cameras: [cam], room, nap, register: async () => ({ ok: true, shift, G: null }) });
+  await views.checkFixed();
+  assert.ok(fs.existsSync(path.join(dir, '.camera-views', 'cam1-calref.jpg')), 'a fresh calibration keeps a reference picture');
+  await views.checkFixed(); assert.ok(room.cals().cam1 && !room.cals().cam1.needsReview, 'still in place');
+  shift = [0, 0.3];
+  for (let i = 0; i < 2; i++) { cam.frameAt = Date.now(); await views.checkFixed(); }
+  assert.ok(!room.cals().cam1.needsReview, 'one or two odd pictures (someone in front) are not enough');
+  cam.frameAt = Date.now(); await views.checkFixed();
+  assert.equal(room.cals().cam1.needsReview, true); assert.match(room.cals().cam1.pausedReason, /moved/);
+  // An old calibration without a reference picture is not judged.
+  room.config.calibrations = { cam1: { H: H(0), savedAt: '2026-01-01T00:00:00Z' } }; fs.rmSync(path.join(dir, '.camera-views'), { recursive: true });
+  cam.frameAt = Date.now(); for (let i = 0; i < 4; i++) await views.checkFixed();
+  assert.ok(!room.cals().cam1.needsReview); assert.ok(!fs.existsSync(path.join(dir, '.camera-views', 'cam1-calref.jpg')));
+});

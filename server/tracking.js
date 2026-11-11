@@ -103,7 +103,7 @@ const centroid=pts=>[pts.reduce((a,p)=>a+p[0],0)/pts.length,pts.reduce((a,p)=>a+
 const overlap=(a,b)=>{const x=Math.max(0,Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x)),y=Math.max(0,Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y));return x*y/(a.w*a.h||1);};
 // Animals (Yuri the studio dog): one track per named animal, followed like a person but never matched to a phone.
 const ANIMAL_CLASSES=new Set(['dog','cat']),ANIMAL_LOST_MS=2500,ANIMAL_MIN_SCORE=0.35;
-const LOST_AFTER_MS=1500,FORGET_AFTER_MS=60000,SUGGEST_WITHIN_MS=15000,SUGGEST_WITHIN_M=1.2,FRESH_MS=5000;
+const LOST_AFTER_MS=1500,FORGET_AFTER_MS=60000,REJOIN_MS=4000,REJOIN_GAP=0.15,SUGGEST_WITHIN_MS=15000,SUGGEST_WITHIN_M=1.2,FRESH_MS=5000;
 // Compare a short history of fresh floor positions. Require motion to exceed the position error.
 function activityFor(samples,now){
   const first=samples[0], last=samples.at(-1);
@@ -117,7 +117,7 @@ function activityFor(samples,now){
 }
 class Tracking{
   constructor(hooks={}){this.h=hooks;this.reset();}
-  reset(){this.owner='';this.cameraId='';this.at=0;this.tracks=new Map();this.bindings=new Map();this.movement=[];this.serial=0;this.objects=this.objects||new Map();this.nextObject=this.nextObject||1;this.animals=this.animals||new Map();this.smoothers=new Map();this.activitySamples=new Map();}
+  reset(){this.owner='';this.cameraId='';this.at=0;this.tracks=new Map();this.bindings=new Map();this.movement=[];this.serial=0;this.objects=this.objects||new Map();this.nextObject=this.nextObject||1;this.animals=this.animals||new Map();this.smoothers=new Map();this.activitySamples=new Map();this.alias=new Map();}
   // Positions: feet-on-floor estimate from the calibration; null when uncalibrated, feet hidden, or off the plan.
   update(input,{calibration,plan,now=Date.now()}){
     const tracker=text(input?.tracker,64);if(!tracker)throw Error('Tracking needs a tracker id.');
@@ -125,10 +125,22 @@ class Tracking{
     const cameraId=text(input.cameraId,40);
     if(this.owner!==tracker||this.cameraId!==cameraId){this.reset();this.owner=tracker;this.cameraId=cameraId;}
     const list=Array.isArray(input.tracks)?input.tracks.slice(0,12):[];
-    const seen=new Set();
+    const seen=new Set(),present=new Set(list.map(t=>{const r=text(t?.id,24);return this.alias.get(r)||r;})),claimed=new Set();
     for(const t of list){
-      const id=text(t?.id,24),b=t?.box;
-      if(!id||!b||![b.x,b.y,b.w,b.h].every(finite))continue;
+      const raw=text(t?.id,24),b=t?.box;
+      if(!raw||!b||![b.x,b.y,b.w,b.h].every(finite))continue;
+      // The detector gives someone a new number after they are briefly hidden. Someone appearing where a
+      // person was just lost, at a similar size, is that person: keep their number, phone and name.
+      let id=this.alias.get(raw)||raw;
+      if(!this.tracks.has(id)){
+        const cx=b.x+b.w/2,cy=b.y+b.h/2;let best=null;
+        for(const [oid,o] of this.tracks){
+          if(present.has(oid)||claimed.has(oid)||!o.box||now-o.lastSeenAt>REJOIN_MS||now-o.lastSeenAt<200||/door/i.test(o.area||''))continue;   // at a door it may be someone new: the desk is asked instead
+          const d=Math.hypot(o.box.x+o.box.w/2-cx,o.box.y+o.box.h/2-cy),size=b.h/Math.max(0.01,o.box.h);
+          if(d<=REJOIN_GAP&&size>0.6&&size<1.6&&(!best||d<best.d))best={oid,d};
+        }
+        if(best){this.alias.set(raw,best.oid);id=best.oid;claimed.add(id);this.h.event?.('room_track_rejoined',{from:raw,to:id});}
+      }
       seen.add(id);
       const prev=this.tracks.get(id),feetVisible=!!t.feetVisible,foot=[b.x+b.w/2,b.y+b.h];
       let floor=calibration?apply(calibration.H,foot):null,how=feetVisible?'feet':'';
@@ -189,7 +201,7 @@ class Tracking{
     for(const [id,t] of this.tracks){
       if(seen.has(id))continue;
       if(t.visible&&now-t.lastSeenAt>LOST_AFTER_MS){t.visible=false;this.moved(id,t.area,'out of sight',now);}
-      if(now-t.lastSeenAt>FORGET_AFTER_MS){this.tracks.delete(id);this.bindings.delete(id);this.smoothers.delete(id);this.activitySamples.delete(id);}
+      if(now-t.lastSeenAt>FORGET_AFTER_MS){for(const [r,a] of this.alias)if(a===id)this.alias.delete(r);this.tracks.delete(id);this.bindings.delete(id);this.smoothers.delete(id);this.activitySamples.delete(id);}
     }
     this.plan=plan;
     this.updateAnimals(Array.isArray(input.animals)?input.animals.slice(0,6):[],input.animalNames||{},{calibration,plan,now});
@@ -292,10 +304,13 @@ class Tracking{
     o.binding={footprint:name,ref:o.floor.slice(),boxW:o.boxW,confirmedAt:Date.now()};o.samples=[];
   }
   objectSuggestions(plan){
+    // Only suggest like for like: a detected chair can be a stool or the Armchair, never the Work bench; a TV never the Shelves.
+    const kind=(t)=>/tv|screen|monitor|laptop/i.test(t)?'screen':/stool|chair|sofa|couch|seat|bench(?!.*work)|armchair/i.test(t)&&!/work ?bench/i.test(t)?'seat':/table|desk|bench/i.test(t)?'table':/shel|cabinet|cupboard|drawer|book/i.test(t)?'storage':/bed/i.test(t)?'bed':null;
+    const fits=(cls,name)=>{const a=kind(cls),b=kind(name);return !a||!b||a===b;};
     const bound=new Set([...this.objects.values()].filter(o=>o.binding).map(o=>o.binding.footprint)),out=[];
     for(const o of this.objects.values()){
       if(o.binding||o.sightings<OBJECT_CONFIRM)continue;
-      let best=null;for(const f of plan?.footprints||[]){if(bound.has(f.name)||(f.heightM!=null&&f.heightM<0.05))continue;const d=polyDist(o.floor,f.points);if(d<=SUGGEST_OBJECT_M&&(!best||d<best.d))best={f,d};}
+      let best=null;for(const f of plan?.footprints||[]){if(bound.has(f.name)||(f.heightM!=null&&f.heightM<0.05)||!fits(o.cls,f.name))continue;const d=polyDist(o.floor,f.points);if(d<=SUGGEST_OBJECT_M&&(!best||d<best.d))best={f,d};}
       if(best)out.push({objectId:o.id,cls:o.cls,footprint:best.f.name,distanceM:Math.round(best.d*10)/10});
     }
     return out;

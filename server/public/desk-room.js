@@ -19,7 +19,12 @@
     const svg = $('dr-plan'), plan = state?.floorPlan; if (!plan || !svg) return;
     const W = plan.widthM, D = plan.depthM;
     svg.setAttribute('viewBox', `-0.15 -0.15 ${W + 0.3} ${D + 0.3}`);
-    const shapes = (plan.footprints || []).filter((f) => (f.heightM ?? 1) > 0.05).map((f) => {
+    // Floor-level things (a rug) underneath, so people can be seen standing on them.
+    const rugs = (plan.footprints || []).filter((f) => (f.heightM ?? 1) <= 0.05).map((f) => {
+      const pts = f.points.map((p) => p.join(',')).join(' '), x = Math.min(...f.points.map((p) => p[0])) + 0.06, y = Math.max(...f.points.map((p) => p[1])) - 0.08;
+      return `<g><title>${esc(f.name)} (on the floor)</title><polygon class="rug" points="${pts}"/><text class="rugl" x="${x}" y="${y}">${esc(f.name)}</text></g>`;
+    }).join('');
+    const shapes = rugs + (plan.footprints || []).filter((f) => (f.heightM ?? 1) > 0.05).map((f) => {
       const pts = f.points.map((p) => p.join(',')).join(' '), cx = f.points.reduce((a, p) => a + p[0], 0) / f.points.length, cy = f.points.reduce((a, p) => a + p[1], 0) / f.points.length;
       const evidence=state.world?.furniture?.find(item=>item.name===f.name);
       const stale=evidence && (evidence.blocked || !evidence.confirmedAt || Date.now()-evidence.confirmedAt>10*60000);
@@ -64,7 +69,7 @@
       : `${w.lastCheckAt ? 'Last check ' + ago(w.lastCheckAt) : 'Not checked yet'}${f.mode === 'always' ? ' · looking continuously' : f.nextCheckAt ? ` · next in ${Math.max(1, Math.round((f.nextCheckAt - Date.now()) / 60000))} min` : ''}.${f.error ? ' ' + f.error : ''}`);
     if (w.furniture) $('dr-check').textContent += ' Dashed outlines show positions awaiting confirmation.';
     $('dr-check-now').disabled = !f.ready || !state.tracking || !!c;
-    const rows = (w.changes || []).map((e) => `<li class="${e.undone ? 'undone' : ''}"><span>${esc(e.name)} → ${esc(e.to)} <span class="hint">${esc(e.distanceM)} m${e.turnedDeg >= 3 ? ` · turned ${esc(e.turnedDeg)}°` : ''} · ${e.by === 'camera' ? 'by the camera' : 'from the desk'} · ${ago(e.at)}</span></span>${e.undone ? '' : `<button data-undo="${esc(e.id)}">Undo</button>`}</li>`).join('');
+    const rows = (w.changes || []).map((e) => `<li class="${e.undone ? 'undone' : ''}"><span>${esc(e.name)} → ${esc(e.to)} <span class="hint">${esc(e.distanceM)} m${e.way ? ' ' + esc(e.way) : ''}${e.turnedDeg >= 3 ? ` · turned ${esc(e.turnedDeg)}°` : ''} · ${e.by === 'camera' ? 'by the camera' : 'from the desk'} · ${ago(e.at)}</span></span>${e.undone ? '' : `<button data-undo="${esc(e.id)}">Undo</button>`}</li>`).join('');
     if (rows !== changesShown) { changesShown = rows; $('dr-changes').innerHTML = rows || '<li class="hint">No furniture has moved.</li>'; }
   }
   const say = (text) => { note = text; drawWorld(); setTimeout(() => { note = ''; drawWorld(); }, 4000); };

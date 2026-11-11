@@ -188,7 +188,7 @@ class World {
   confirmed(name, now = Date.now()) { this.mem.confirmed[name] = now; this.save(); }
   // before: the whole outline ahead of a turn, so an undo can put the angle back too.
   moved({ name, from, to, delta, by = 'desk', before = null, turnedDeg = 0, now = Date.now() }) {
-    const entry = { id: `${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`, at: now, name, delta, by, distanceM: Math.round(Math.hypot(...delta) * 10) / 10, from: from ? this.spot(name, from) : null, to: this.spot(name, to),
+    const entry = { id: `${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`, at: now, name, delta, by, distanceM: Math.round(Math.hypot(...delta) * 10) / 10, way: Math.hypot(...delta) >= 0.05 ? towards(this.room.config.floorPlan || {}, delta) : '', from: from ? this.spot(name, from) : null, to: this.spot(name, to),
       ...(before ? { before, turnedDeg: Math.round(turnedDeg) } : {}) };
     this.mem.log = [...this.mem.log, entry].slice(-LOG_MAX); this.mem.confirmed[name] = now; this.save();
     return entry;
@@ -208,8 +208,8 @@ class World {
   changes(now = Date.now(), within = 30 * 60000) { return this.mem.log.filter((e) => !e.undone && now - e.at <= within); }
   // For Mother: how fresh the furniture positions are, and what has moved lately.
   note(now = Date.now()) {
-    const ago = (t) => { const s = Math.round((now - t) / 1000); return s < 90 ? 'just now' : `${Math.round(s / 60)} min ago`; };
-    const moved = this.changes(now).slice(-4).map((e) => `${e.name} moved ${e.from ? `from ${e.from} ` : ''}to ${e.to} (${ago(e.at)})`);
+    const ago = (t) => { const s = Math.round((now - t) / 1000); return s < 90 ? 'just now' : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`; };
+    const moved = this.changes(now).slice(-4).map((e) => `${e.name} moved ${e.distanceM} m${e.way ? ' ' + e.way : ''}${e.from && e.from !== e.to ? ` from ${e.from}` : ''}, now ${e.to} (${ago(e.at)})`);
     const fresh = this.mem.lastCheckAt && now - this.mem.lastCheckAt < 6 * 3600000 ? `The camera last checked the furniture ${ago(this.mem.lastCheckAt)}.` : 'The furniture has not been checked by the camera lately: positions are from the plan, and something may have moved.';
     const known = new Set((this.room.config.floorPlan?.footprints || []).map(f => f.name));
     const confirmed = Object.entries(this.mem.confirmed).filter(([name]) => known.has(name))

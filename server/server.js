@@ -383,7 +383,7 @@ roomObserver.moveFootprint = (name, delta, by = 'desk') => {
   else {
     const e = world.moved({ name, from, to, delta: [to[0] - from[0], to[1] - from[1]], by });
     logEvent('room_memory', e);
-    roomChanged(`${name} has been moved ${e.distanceM} m: it is now ${e.to}${e.from && e.from !== e.to ? ` (it was ${e.from})` : ''}. Your map is updated.`);
+    roomChanged(`${name} has been moved ${e.distanceM} m${e.way ? ' ' + e.way : ''}: it is now ${e.to}${e.from && e.from !== e.to ? ` (it was ${e.from})` : ''}. Your map is updated.`);
   }
   return plan;
 };
@@ -397,7 +397,7 @@ roomObserver.fitTabletop = (input, by = 'desk') => {
   const from = planCentre(before), to = planCentre(after), turnedDeg = angleDifference(tabletopAngle(after.points), tabletopAngle(before.points)) * 180 / Math.PI;
   const e = world.moved({ name: input.name, from, to, delta: [to[0] - from[0], to[1] - from[1]], by, before: before.points, turnedDeg });
   logEvent('room_memory', { ...e, fitError: error });
-  roomChanged(`${input.name} has been ${turnedDeg >= 3 ? `turned about ${Math.round(turnedDeg)} degrees and ` : ''}moved ${e.distanceM} m: it is now ${e.to}. Your map is updated.`);
+  roomChanged(`${input.name} has been ${turnedDeg >= 3 ? `turned about ${Math.round(turnedDeg)} degrees and ` : ''}moved ${e.distanceM} m${e.way ? ' ' + e.way : ''}: it is now ${e.to}. Your map is updated.`);
   return error;
 };
 roomObserver.placeFootprint = (name, points, by) => {
@@ -434,6 +434,7 @@ const pose = new PoseTracker({ root: __dirname, cameras, room: roomObserver, ide
 roomObserver.tracking.poseStatus = () => pose.status();
 const { CameraViews } = require('./camera-views');
 const cameraViews = new CameraViews({ root: __dirname, cameras, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
+setInterval(() => { cameraViews.checkFixed().catch((e) => console.log('  camera check: ' + e.message)); }, 60000).unref();
 finder.h.paused = id => cameraViews.moving(id);
 // A camera that comes to rest on a different saved view is worth a furniture check. A quick look for Mother
 // (it returns to where it was), a follow turn or a hand nudge is not: each would reload the 7 GB finder.

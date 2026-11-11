@@ -73,3 +73,13 @@ test('undoing a fitted turn puts the whole outline back, angle included', () => 
  w.undo(e.id, now);
  assert.deepEqual(placed, [['Small stool', before, 'undo']]);
 });
+
+test('a move says which way it went, and old checks read in hours', () => {
+  const p = plan(), room = { config: { floorPlan: p } };
+  const w = new World({ file: '/nonexistent/memory.json', room }), now = 1e12;
+  const e = w.moved({ name: 'Small stool', from: [2, 1.5], to: [2, 1.8], delta: [0, 0.3], now });
+  assert.match(e.way, /^towards the /);
+  w.confirmed('Work bench', now - 21.6 * 3600000);
+  assert.match(w.note(now), /22 h ago/);
+  assert.match(w.note(now), new RegExp(`Small stool moved 0.3 m ${e.way}`));
+});

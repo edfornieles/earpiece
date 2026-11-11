@@ -19,7 +19,7 @@
   .dr-head { display:flex; align-items:baseline; gap:12px; margin-bottom:10px; } .dr-head h2 { font-size:15px; margin:0; } .dr-head a { margin-left:auto; font-size:12px; color:var(--dim); }
   .dr-body { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1.3fr) minmax(0,1.2fr); gap:14px; align-items:start; }
   .dr-plan { width:100%; aspect-ratio:1/1; max-height:300px; } .dr-plan .room { fill:none; stroke:var(--dim); stroke-width:.03; }
-  .dr-plan .fp { fill:rgba(127,127,127,.18); stroke:rgba(127,127,127,.5); stroke-width:.015; } .dr-plan .fpl { font-size:.16px; fill:var(--dim); text-anchor:middle; dominant-baseline:middle; }
+  .dr-plan .fp { fill:rgba(127,127,127,.18); stroke:rgba(127,127,127,.5); stroke-width:.015; } .dr-plan .fpl { font-size:.16px; fill:var(--dim); text-anchor:middle; dominant-baseline:middle; } .dr-plan .rug { fill:rgba(160,120,80,.10); stroke:rgba(160,120,80,.45); stroke-width:.012; stroke-dasharray:.05 .04; } .dr-plan .rugl { font-size:.13px; fill:var(--dim); opacity:.8; text-anchor:start; }
   .dr-plan .pl { font-size:.2px; fill:var(--fg); }
   .desk-room #cams { margin:8px 0 0; } .dr-sub { margin-top:16px; }
   .dr-follow { width:100%; aspect-ratio:16/9; background:#000; border-radius:6px; }
@@ -184,18 +184,6 @@
   <section>
     <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
     <div id="audio-status" role="status"><span id="audio-label">Desk sound is off. Enable it to listen to participants.</span><button id="enable-sound">Enable sound</button><button id="enable-mic">Enable microphone</button></div>
-    <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
-    <div id="desk-room" class="desk-room">
-      <div class="dr-head"><h2>Room</h2><span class="hint">plan · close-up · cameras · mics</span><span id="dr-state" class="hint"></span><a id="dr-open" target="earpiece_pages">Open Room ↗</a></div>
-      <div class="dr-body">
-        <svg id="dr-plan" class="dr-plan" aria-label="Floor plan with people"></svg>
-        <canvas id="dr-follow" class="dr-follow" aria-label="Close-up following the person"></canvas>
-        <div class="dr-sees"><div class="dr-label">Mother sees</div><p id="dr-perception"></p><div id="dr-look" class="dr-look"></div>
-          <div class="dr-label dr-sub">Furniture check</div><p class="dr-check"><span id="dr-check"></span> <button id="dr-check-now">Check now</button></p><ul id="dr-changes" class="dr-changes"></ul></div>
-      </div>
-      <div class="dr-label dr-sub">Cameras &amp; room microphones</div>
-      <div id="cams"></div><div id="room"></div>
-    </div>
     <div class="desk-heading"><h2>Participants</h2><span class="hint">Select a phone to direct</span></div>
     <div class="console">
       <div class="console-strip">
@@ -218,6 +206,18 @@
         </div>
         <div id="grid"></div>
       </div>
+    </div>
+    <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
+    <div id="desk-room" class="desk-room">
+      <div class="dr-head"><h2>Room</h2><span class="hint">plan · close-up · cameras · mics</span><span id="dr-state" class="hint"></span><a id="dr-open" target="earpiece_pages">Open Room ↗</a></div>
+      <div class="dr-body">
+        <svg id="dr-plan" class="dr-plan" aria-label="Floor plan with people"></svg>
+        <canvas id="dr-follow" class="dr-follow" aria-label="Close-up following the person"></canvas>
+        <div class="dr-sees"><div class="dr-label">Mother sees</div><p id="dr-perception"></p><div id="dr-look" class="dr-look"></div>
+          <div class="dr-label dr-sub">Furniture check</div><p class="dr-check"><span id="dr-check"></span> <button id="dr-check-now">Check now</button></p><ul id="dr-changes" class="dr-changes"></ul></div>
+      </div>
+      <div class="dr-label dr-sub">Cameras &amp; room microphones</div>
+      <div id="cams"></div><div id="room"></div>
     </div>
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="earpiece_pages" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>

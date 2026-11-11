@@ -193,6 +193,12 @@ class RoomObserver{
     return error;
   }
   // Put an outline back exactly as it was (undoing a fitted angle and position).
+  // The camera seems to have moved: stop placing people from it; the anchors are kept for recalibrating.
+  pauseCalibration(id,reason=''){
+    const saved=this.config.calibrations?.[id];if(!saved||saved.needsReview)return;
+    this.config={...this.config,revision:this.config.revision+1,calibrations:{...this.config.calibrations,[id]:{...saved,needsReview:true,pausedReason:text(reason,200)}}};
+    this.persist();this.notify();
+  }
   placeFootprint(name,points){
     const plan=this.config.floorPlan,fp=plan?.footprints?.find(f=>f.name===name);if(!fp||!Array.isArray(points)||points.length<3)return null;
     const placed={...fp,points:points.map(p=>p.map(v=>Math.round(v*100)/100)),seatCheckedAt:undefined};

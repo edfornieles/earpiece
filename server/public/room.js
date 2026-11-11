@@ -4,7 +4,8 @@ const age=ms=>Math.max(0,Math.round((Date.now()-ms)/1000));
 const roleFor=phone=>selection?.snapshot.roles.find(r=>selection.assignments[r.id]===phone)?.name||'';
 function selectedObservation(){return room?.latest?.cameraId===$('camera').value?room.latest:null;}
 function imgUrl(id){return url('/api/room-frame?observation='+encodeURIComponent(id));}
-async function load(){try{const [data,p,r]=await Promise.all([api('room',undefined,{allowStatusError:true}),api('phones'),api('program-run')]);room=data;phones=p.devices;selection=r.selection;render();}catch(e){$('notice').textContent=e.message;}}
+// The room (and its map) is shown even when the phone list or program status cannot be read.
+async function load(){try{const [data,p,r]=await Promise.allSettled([api('room',undefined,{allowStatusError:true}),api('phones'),api('program-run')]);if(data.status!=='fulfilled')throw data.reason;room=data.value;if(p.status==='fulfilled')phones=p.value.devices;if(r.status==='fulfilled')selection=r.value.selection;render();}catch(e){$('notice').textContent=e.message;}}
 const dimensionIds=['floor-width','floor-depth','floor-height'];
 let testPlanKey='', testPosition=null, testEvents=[];
 function showTestMarker(){

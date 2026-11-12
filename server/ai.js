@@ -231,7 +231,8 @@ const VOICES = [
   { name: 'Expressive 3', emotions: {
     neutral: 'ex01-ex02_default_001_channel1_168s', whisper: 'ex01-ex02_whisper_001_channel1_579s', fast: 'ex01-ex02_fast_001_channel1_104s',
     projected: 'ex01-ex02_projected_001_channel1_46s', enunciated: 'ex01-ex02_enunciated_001_channel1_432s' } },
-  { name: 'Narrator', url: 'hf://kyutai/tts-voices/unmute-prod-website/ex04_narration_longform_00001.wav' },
+  // The same actor reading narration. (The longform recording is 32-bit, which Pocket-TTS reads as noise: every line was static.)
+  { name: 'Narrator', url: X + 'ex04-ex01_narration_001_channel1_605s.wav' },
   { name: 'Alba', url: 'hf://kyutai/tts-voices/alba-mackenna/casual.wav' },
   { name: 'Marius', url: 'hf://kyutai/tts-voices/voice-donations/Selfie.wav' },
   { name: 'Javert', url: 'hf://kyutai/tts-voices/voice-donations/Butter.wav' },

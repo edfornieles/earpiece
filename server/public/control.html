@@ -219,7 +219,7 @@
     <button id="startsession" title="Start recording: cameras, room mics, phones — with everything you've prepared">● Start session</button>
     <button id="endsession" title="Stop recording and save; go back to standby to prepare the next session">End session</button>
     <span id="outside" class="outside" title="People using Mother from outside the studio"></span>
-    <button id="privacy" class="privacy" hidden title="Shut out everyone outside the studio (only from this studio computer)">Private: off</button>
+    <button id="privacy" class="privacy" hidden title="Shut out everyone outside the studio except owners">Private: off</button>
     <span class="rec" id="recstate">REC</span>
   </nav>
 </header>
@@ -618,17 +618,18 @@ function connect() {
     wall.style.display = 'none'; setTimeout(connect, 1000);
   };
 }
-// Privacy mode and who is here from outside the studio. Only the studio's own desk can switch privacy.
+// Privacy mode and who is here from outside the studio. The studio's own desk and owners can switch privacy.
 function paintAccess(a) {
   $('privatewall').style.display = 'none';
-  const btn = $('privacy'); btn.hidden = !a.local;
+  const btn = $('privacy'); btn.hidden = !a.canPrivacy;
   btn.classList.toggle('on', a.privacy); btn.textContent = a.privacy ? 'Private: ON' : 'Private: off';
   btn.onclick = () => {
-    if (!a.privacy && a.people.length && !confirm(`Shut out ${a.people.map((p) => p.name).join(', ')} and everyone else outside the studio?`)) return;
+    const others = a.people.filter((p) => !p.owner).map((p) => p.name);
+    if (!a.privacy && others.length && !confirm(`Shut out ${others.join(', ')} and everyone else outside the studio?`)) return;
     ws.send(JSON.stringify({ type: 'privacy', on: !a.privacy }));
   };
-  const names = a.people.map((p) => p.name);
-  $('outside').innerHTML = a.privacy ? 'Nobody outside can get in' : names.length ? 'Outside: <b>' + names.map((n) => n.replace(/[&<>]/g, '')).join(', ') + '</b>' : '';
+  const names = a.people.map((p) => p.name + (p.owner ? ' (owner)' : ''));
+  $('outside').innerHTML = a.privacy ? 'Nobody outside can get in' + (names.length ? ' · here: <b>' + names.map((n) => n.replace(/[&<>]/g, '')).join(', ') + '</b>' : '') : names.length ? 'Outside: <b>' + names.map((n) => n.replace(/[&<>]/g, '')).join(', ') + '</b>' : '';
 }
 
 async function loadInfo() {

@@ -9,10 +9,11 @@
 // email inside. A plain email header is never trusted: it could be sent by anyone to the other address.
 //
 // Privacy mode shuts out everyone outside the studio: open connections are closed and nothing new gets in.
-// It can only be switched from the studio, and it survives a restart.
+// It is switched from the studio, or by an owner from anywhere; owners are the one exception it lets in
+// (so the owner can always switch it off). It survives a restart.
 //
 // Settings live in .access.json (not in git):
-//   { "users": [{ "email": "...", "name": "..." }], "requireLogin": false, "privacy": false,
+//   { "users": [{ "email": "...", "name": "...", "role": "owner" | "director" }], "requireLogin": false, "privacy": false,
 //     "teamDomain": "yourteam.cloudflareaccess.com", "aud": "<application audience tag>" }
 const fs = require('fs');
 const crypto = require('crypto');
@@ -24,7 +25,7 @@ class Access {
     this.file = file; this.fetch = fetchImpl; this.now = now;
     this.cfg = { users: [], requireLogin: false, privacy: false, teamDomain: '', aud: '' };
     try { Object.assign(this.cfg, JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
-    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim() })).filter((u) => u.email);
+    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director' })).filter((u) => u.email);
     this.keys = new Map(); this.keysAt = 0;
     this.onPrivacy = null;
   }
@@ -69,13 +70,12 @@ class Access {
   check(req) {
     const remote = !!req.headers['cf-connecting-ip'];
     if (!remote) return { remote: false };
-    if (this.privacy) return { remote, blocked: 'private' };
     const email = this.verify(req.headers['cf-access-jwt-assertion']);
-    if (email) {
-      const user = this.cfg.users.find((u) => u.email === email);
-      if (!user) return { remote, blocked: 'not-listed', email };
-      return { remote, director: true, email, name: user.name };
-    }
+    const user = email && this.cfg.users.find((u) => u.email === email);
+    const owner = user?.role === 'owner';
+    if (this.privacy && !owner) return { remote, blocked: 'private' };
+    if (email && !user) return { remote, blocked: 'not-listed', email };
+    if (user) return { remote, director: true, owner, email, name: user.name };
     return { remote, needsLogin: !!this.cfg.requireLogin };
   }
   page(why, email = '') {

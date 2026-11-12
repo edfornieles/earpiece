@@ -53,7 +53,7 @@ const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control, MONITOR_KEY = keys.mon
 // Who may come in from outside the studio (logins through Cloudflare Access), and privacy mode. See access.js.
 const { Access } = require('./access');
 const access = new Access(path.join(__dirname, '.access.json')); access.start();
-const remoteStreams = new Set();   // camera streams being watched from outside the studio
+const remoteStreams = new Map();   // camera streams watched from outside the studio -> watched by an owner?
 
 // Voice choices persist between runs.
 const SETTINGS_FILE = path.join(__dirname, '.settings.json');
@@ -607,7 +607,7 @@ const server = http.createServer(async (req, res) => {
     if (!mon) { res.writeHead(403); return res.end(); }
     const cam = cameras.find((c) => c.id === p.slice(5).replace('.mjpg', ''));
     if (!cam) { res.writeHead(404); return res.end(); }
-    if (who.remote) { remoteStreams.add(res); res.on('close', () => remoteStreams.delete(res)); }
+    if (who.remote) { remoteStreams.set(res, !!who.owner); res.on('close', () => remoteStreams.delete(res)); }
     return cam.serve(res);
   }
   if (p.startsWith('/api/')) {
@@ -1643,15 +1643,15 @@ async function talkStop(owner) {
 const wss = new WebSocketServer({ server, path: '/ws' });
 // Who is using Mother from outside the studio, for the desk; privacy mode closes all of them at once.
 function remotePeople() {
-  return [...wss.clients].filter((c) => c.remote && c.readyState === 1 && controls.has(c)).map((c) => ({ name: c.who?.name || 'Desk link (no login)', email: c.who?.email || '', since: c.since }));
+  return [...wss.clients].filter((c) => c.remote && c.readyState === 1 && controls.has(c)).map((c) => ({ name: c.who?.name || 'Desk link (no login)', email: c.who?.email || '', owner: !!c.owner, since: c.since }));
 }
-function accessState(ws) { return { type: 'access', ...access.view(), local: !ws.remote, people: remotePeople() }; }
+// The studio's own desk and an owner (from anywhere) may switch privacy mode.
+function accessState(ws) { return { type: 'access', ...access.view(), local: !ws.remote, canPrivacy: !ws.remote || !!ws.owner, people: remotePeople() }; }
 function accessChanged() { for (const c of controls) send(c, accessState(c)); }
 access.onPrivacy = (on) => {
   if (on) {
-    for (const c of wss.clients) if (c.remote) c.close(4003, 'private');
-    for (const r of remoteStreams) r.destroy();
-    remoteStreams.clear();
+    for (const c of wss.clients) if (c.remote && !c.owner) c.close(4003, 'private');   // owners stay
+    for (const [r, owner] of remoteStreams) if (!owner) { r.destroy(); remoteStreams.delete(r); }
   }
   logEvent('privacy', { on });
   console.log(`  privacy mode ${on ? 'ON: everyone outside the studio is shut out' : 'off'}`);
@@ -1678,7 +1678,7 @@ wss.on('connection', (ws, req) => {
 
   const who = access.check(req);
   if (who.blocked) { ws.close(4003, who.blocked); return; }
-  ws.remote = !!who.remote; ws.who = who.director ? { email: who.email, name: who.name } : null; ws.since = Date.now();
+  ws.remote = !!who.remote; ws.owner = !!who.owner; ws.who = who.director ? { email: who.email, name: who.name, owner: !!who.owner } : null; ws.since = Date.now();
   const keyed = !who.needsLogin;
   if (role === 'control' && (who.director || (keyed && key === CONTROL_KEY))) {
     controls.add(ws);
@@ -1736,8 +1736,8 @@ wss.on('connection', (ws, req) => {
         const text = String(m.text).trim().slice(0, 600);
         for (const t of (m.id ? [sessions.get(m.id)] : [...sessions.values()])) speakAs(t, text, 'typed');
       }
-      // Privacy mode is switched only from inside the studio (a remote desk would shut itself out).
-      if (m.type === 'privacy') { if (ws.remote) send(ws, { type: 'error', text: 'Privacy mode can only be switched from the studio.' }); else access.setPrivacy(!!m.on); }
+      // Privacy mode is switched from inside the studio or by an owner (who stays connected through it).
+      if (m.type === 'privacy') { if (ws.remote && !ws.owner) send(ws, { type: 'error', text: 'Only the studio or an owner can switch privacy mode.' }); else access.setPrivacy(!!m.on); }
       if (m.type === 'mark') { logEvent('mark', { text: String(m.text || 'Mark').slice(0, 200) }); toControls({ type: 'marked', t: clock(), text: m.text || 'Mark' }); }
       if (m.type === 'instruct' && s && m.text && !s.waiting) {
         logEvent('instruct', { id: s.id, text: m.text });

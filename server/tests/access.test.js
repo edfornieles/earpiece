@@ -7,7 +7,7 @@ const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 function setup(t, cfg = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mother-access-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, '.access.json');
-  fs.writeFileSync(file, JSON.stringify({ users: [{ email: 'Nina@Example.com', name: 'Nina' }], teamDomain: 'team.cloudflareaccess.com', aud: 'AUD1', ...cfg }));
+  fs.writeFileSync(file, JSON.stringify({ users: [{ email: 'Nina@Example.com', name: 'Nina' }, { email: 'ed@example.com', name: 'Ed', role: 'owner' }], teamDomain: 'team.cloudflareaccess.com', aud: 'AUD1', ...cfg }));
   const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   const now = 1_800_000_000_000;
   const a = new Access(file, { fetchImpl: null, now: () => now });
@@ -47,4 +47,17 @@ test('privacy mode shuts out everyone outside the studio, is announced, and surv
   assert.deepEqual(a.check(req({})), { remote: false }, 'the studio itself is never shut out');
   assert.equal(new Access(file, { fetchImpl: null }).privacy, true);
   assert.match(a.page('private'), /private/);
+});
+
+test('an owner has the desk from anywhere and is the one person privacy mode lets in', (t) => {
+  const { a, token, req } = setup(t);
+  const remote = { 'cf-connecting-ip': '1.2.3.4' };
+  const ed = a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email: 'ed@example.com' }) }));
+  assert.equal(ed.director, true); assert.equal(ed.owner, true);
+  const nina = a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email: 'nina@example.com' }) }));
+  assert.equal(nina.owner, false);
+  a.setPrivacy(true);
+  assert.equal(a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email: 'ed@example.com' }) })).owner, true, 'the owner still gets in');
+  assert.equal(a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email: 'nina@example.com' }) })).blocked, 'private');
+  assert.equal(a.check(req(remote)).blocked, 'private', 'no login, no way in');
 });

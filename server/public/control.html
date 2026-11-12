@@ -173,6 +173,10 @@
   .arr .row button, .arr .row select { padding:6px 9px; font-size:13px; white-space:nowrap; }
   #startsession { background:var(--hot); border-color:var(--hot); font-weight:600; }
   .rec.standby { color:var(--dim); } .rec.standby::before { content:'○'; }
+  .outside { font-size:12px; color:var(--dim); max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .outside b { color:var(--fg); font-weight:500; }
+  .privacy.on { background:var(--hot); border-color:var(--hot); color:#fff; }
+  #privatewall { position:fixed; inset:0; z-index:50; display:none; place-items:center; background:var(--bg); color:var(--fg); font-size:16px; text-align:center; padding:16px; }
   #standbybar { display:none; background:#1b1a14; border:1px solid #4a4220; border-radius:12px; padding:12px 16px; margin-bottom:16px; color:#e8dcb0; font-size:13px; }
   #standbybar b { color:#fff; font-weight:600; }
   body.standby #standbybar { display:block; }
@@ -207,12 +211,15 @@
 </style>
 </head>
 <body class="live-desk">
+<div id="privatewall"></div>
 <header>
   <div class="titlebox"><h1>Live desk <span id="mock" class="hint"></span></h1>
     <input id="stitle" placeholder="Name this session…" title="Session name — saved with the recordings"></div>
   <nav>
     <button id="startsession" title="Start recording: cameras, room mics, phones — with everything you've prepared">● Start session</button>
     <button id="endsession" title="Stop recording and save; go back to standby to prepare the next session">End session</button>
+    <span id="outside" class="outside" title="People using Mother from outside the studio"></span>
+    <button id="privacy" class="privacy" hidden title="Shut out everyone outside the studio (only from this studio computer)">Private: off</button>
     <span class="rec" id="recstate">REC</span>
   </nav>
 </header>
@@ -600,9 +607,28 @@ function connect() {
     if (m.type === 'sessionStarting') toast('Starting the session — recording in a few seconds…');
     if (m.type === 'sessionEnding') { toast('Saving this session — a new one starts in a few seconds…'); for (const p of people.values()) { p.lines = []; } }
     if (m.type === 'marked') toast(`Marker at ${m.t}s: ${m.text}`);
+    if (m.type === 'access') paintAccess(m);
 
   };
-  ws.onclose = () => { releaseTalk(); setTimeout(connect, 1000); };
+  ws.onclose = (e) => {
+    releaseTalk();
+    // Shut out by privacy mode (or not on the list): say so, and look again now and then.
+    const wall = $('privatewall');
+    if (e.code === 4003) { wall.textContent = e.reason === 'private' ? 'Mother is private right now. This page will reconnect when Ed opens it again.' : 'You are not on the list of people who can use Mother.'; wall.style.display = 'grid'; return setTimeout(connect, 15000); }
+    wall.style.display = 'none'; setTimeout(connect, 1000);
+  };
+}
+// Privacy mode and who is here from outside the studio. Only the studio's own desk can switch privacy.
+function paintAccess(a) {
+  $('privatewall').style.display = 'none';
+  const btn = $('privacy'); btn.hidden = !a.local;
+  btn.classList.toggle('on', a.privacy); btn.textContent = a.privacy ? 'Private: ON' : 'Private: off';
+  btn.onclick = () => {
+    if (!a.privacy && a.people.length && !confirm(`Shut out ${a.people.map((p) => p.name).join(', ')} and everyone else outside the studio?`)) return;
+    ws.send(JSON.stringify({ type: 'privacy', on: !a.privacy }));
+  };
+  const names = a.people.map((p) => p.name);
+  $('outside').innerHTML = a.privacy ? 'Nobody outside can get in' : names.length ? 'Outside: <b>' + names.map((n) => n.replace(/[&<>]/g, '')).join(', ') + '</b>' : '';
 }
 
 async function loadInfo() {

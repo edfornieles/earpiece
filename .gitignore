@@ -31,3 +31,7 @@ server/programs/
 .room.json.tmp
 .room-memory.json
 __pycache__/
+
+# Who may log in from outside the studio
+server/.access.json
+server/.access.json.tmp

@@ -50,6 +50,10 @@ keys.monitor = process.env.MONITOR_KEY || keys.monitor || crypto.randomBytes(4).
 keys.join = process.env.JOIN_KEY || keys.join || crypto.randomBytes(4).toString('hex');            // registration: can only sign up
 if (!process.env.PHONE_KEY) fs.writeFileSync(KEYS_FILE, JSON.stringify({ phone: keys.phone, control: keys.control, monitor: keys.monitor, join: keys.join }));
 const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control, MONITOR_KEY = keys.monitor, JOIN_KEY = keys.join;
+// Who may come in from outside the studio (logins through Cloudflare Access), and privacy mode. See access.js.
+const { Access } = require('./access');
+const access = new Access(path.join(__dirname, '.access.json')); access.start();
+const remoteStreams = new Set();   // camera streams being watched from outside the studio
 
 // Voice choices persist between runs.
 const SETTINGS_FILE = path.join(__dirname, '.settings.json');
@@ -518,8 +522,14 @@ async function readSetupBody(req) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   let p = u.pathname;
-  const ctl = u.searchParams.get('k') === CONTROL_KEY;
-  const mon = ctl || u.searchParams.get('k') === MONITOR_KEY;
+  const who = access.check(req);
+  if (who.blocked) { res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return res.end(access.page(who.blocked, who.email)); }
+  // Outside the studio, once logins are required, only a logged-in director gets the desk: a link key is not enough.
+  const keyed = !who.needsLogin;
+  const ctl = !!who.director || (keyed && u.searchParams.get('k') === CONTROL_KEY);
+  const mon = ctl || (keyed && u.searchParams.get('k') === MONITOR_KEY);
+  // The director address opens on the desk.
+  if (who.director && p === '/') { res.writeHead(302, { location: '/control' }); return res.end(); }
 
   if (p === '/manifest.webmanifest') {   // makes the phone page installable as a full-screen app
     const dev = u.searchParams.get('device');
@@ -597,6 +607,7 @@ const server = http.createServer(async (req, res) => {
     if (!mon) { res.writeHead(403); return res.end(); }
     const cam = cameras.find((c) => c.id === p.slice(5).replace('.mjpg', ''));
     if (!cam) { res.writeHead(404); return res.end(); }
+    if (who.remote) { remoteStreams.add(res); res.on('close', () => remoteStreams.delete(res)); }
     return cam.serve(res);
   }
   if (p.startsWith('/api/')) {
@@ -1630,6 +1641,22 @@ async function talkStop(owner) {
 
 // ---------- websocket ----------
 const wss = new WebSocketServer({ server, path: '/ws' });
+// Who is using Mother from outside the studio, for the desk; privacy mode closes all of them at once.
+function remotePeople() {
+  return [...wss.clients].filter((c) => c.remote && c.readyState === 1 && controls.has(c)).map((c) => ({ name: c.who?.name || 'Desk link (no login)', email: c.who?.email || '', since: c.since }));
+}
+function accessState(ws) { return { type: 'access', ...access.view(), local: !ws.remote, people: remotePeople() }; }
+function accessChanged() { for (const c of controls) send(c, accessState(c)); }
+access.onPrivacy = (on) => {
+  if (on) {
+    for (const c of wss.clients) if (c.remote) c.close(4003, 'private');
+    for (const r of remoteStreams) r.destroy();
+    remoteStreams.clear();
+  }
+  logEvent('privacy', { on });
+  console.log(`  privacy mode ${on ? 'ON: everyone outside the studio is shut out' : 'off'}`);
+  accessChanged();
+};
 const freeId = (w) => {
   if (w && (!Number.isInteger(w) || w < 1 || w > MAX_PHONES)) return 0;
   const busy = (i) => sessions.get(i)?.ws;
@@ -1649,8 +1676,13 @@ wss.on('connection', (ws, req) => {
   ws.isAlive = true; ws.heardAt = Date.now(); ws.on('pong', () => { ws.isAlive = true; ws.heardAt = Date.now(); });
   ws.on('message', () => { ws.heardAt = Date.now(); });
 
-  if (role === 'control' && key === CONTROL_KEY) {
+  const who = access.check(req);
+  if (who.blocked) { ws.close(4003, who.blocked); return; }
+  ws.remote = !!who.remote; ws.who = who.director ? { email: who.email, name: who.name } : null; ws.since = Date.now();
+  const keyed = !who.needsLogin;
+  if (role === 'control' && (who.director || (keyed && key === CONTROL_KEY))) {
     controls.add(ws);
+    accessChanged();
     send(ws, { type: 'phonesChanged', maxPhones: MAX_PHONES });
     send(ws,{type:'program',run:programRunner.view()});
     send(ws, { type: 'participants', list: list() });
@@ -1704,6 +1736,8 @@ wss.on('connection', (ws, req) => {
         const text = String(m.text).trim().slice(0, 600);
         for (const t of (m.id ? [sessions.get(m.id)] : [...sessions.values()])) speakAs(t, text, 'typed');
       }
+      // Privacy mode is switched only from inside the studio (a remote desk would shut itself out).
+      if (m.type === 'privacy') { if (ws.remote) send(ws, { type: 'error', text: 'Privacy mode can only be switched from the studio.' }); else access.setPrivacy(!!m.on); }
       if (m.type === 'mark') { logEvent('mark', { text: String(m.text || 'Mark').slice(0, 200) }); toControls({ type: 'marked', t: clock(), text: m.text || 'Mark' }); }
       if (m.type === 'instruct' && s && m.text && !s.waiting) {
         logEvent('instruct', { id: s.id, text: m.text });
@@ -1769,11 +1803,11 @@ wss.on('connection', (ws, req) => {
         saveBriefText(m.text);
       }
     });
-    ws.on('close', () => { controls.delete(ws); talkStop(ws); });
+    ws.on('close', () => { controls.delete(ws); talkStop(ws); if (ws.remote) accessChanged(); });
     return;
   }
 
-  if (role === 'monitor' && (key === MONITOR_KEY || key === CONTROL_KEY)) {
+  if (role === 'monitor' && (who.director || (keyed && (key === MONITOR_KEY || key === CONTROL_KEY)))) {
     monitors.add(ws);
     send(ws, { type: 'cameras', list: cameras.map((c) => c.status()) });
     send(ws, { type: 'participants', list: list() });

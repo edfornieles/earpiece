@@ -178,17 +178,6 @@
   .outside { font-size:12px; color:var(--dim); max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .outside b { color:var(--fg); font-weight:500; }
   .privacy.on { background:var(--hot); border-color:var(--hot); color:#fff; }
-  .peopledlg { max-width:620px; width:calc(100% - 32px); border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--fg); padding:18px 20px; }
-  .peopledlg::backdrop { background:rgba(0,0,0,.45); }
-  .peopledlg header { display:flex; align-items:center; justify-content:space-between; padding:0; border:0; background:none; }
-  .peopledlg h2 { font-size:17px; font-weight:500; margin:0; }
-  #peoplelist { list-style:none; margin:14px 0; padding:0; display:flex; flex-direction:column; gap:6px; }
-  #peoplelist li { display:grid; grid-template-columns:10px 1fr auto auto; gap:10px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:8px; }
-  #peoplelist .dot { width:8px; height:8px; border-radius:50%; background:var(--line); } #peoplelist .dot.on { background:var(--ok); }
-  #peoplelist .who { min-width:0; } #peoplelist .who b { font-weight:500; } #peoplelist .who small { display:block; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #peoplelist select, #peoplelist button { padding:5px 8px; font-size:12px; }
-  #peopleadd { display:flex; gap:6px; flex-wrap:wrap; } #peopleadd input { flex:1 1 180px; min-width:0; } #peopleadd select, #peopleadd button { flex:0 0 auto; }
-  .pl-require { display:flex; gap:10px; align-items:flex-start; margin-top:14px; font-size:13px; color:var(--dim); } .pl-require b { color:var(--fg); font-weight:500; }
   #privatewall { position:fixed; inset:0; z-index:50; display:none; place-items:center; background:var(--bg); color:var(--fg); font-size:16px; text-align:center; padding:16px; }
   #standbybar { display:none; background:#1b1a14; border:1px solid #4a4220; border-radius:12px; padding:12px 16px; margin-bottom:16px; color:#e8dcb0; font-size:13px; }
   #standbybar b { color:#fff; font-weight:600; }
@@ -225,18 +214,6 @@
 </head>
 <body class="live-desk">
 <div id="privatewall"></div>
-<dialog id="peopledlg" class="peopledlg">
-  <header><h2>People</h2><button id="peopleclose" class="cs-small">Close</button></header>
-  <p class="hint">Who can sign in from outside the studio with Google, at mother.edfornieles.com. <b>Directors</b> get the desk. <b>Owners</b> also manage this list and switch privacy mode. Removing someone closes their desk at once.</p>
-  <ul id="peoplelist"></ul>
-  <form id="peopleadd">
-    <input id="pa-email" type="search" placeholder="their.gmail@gmail.com" autocomplete="off" required>
-    <input id="pa-name" type="search" placeholder="Name (optional)" autocomplete="off">
-    <select id="pa-role"><option value="director">Director</option><option value="owner">Owner</option></select>
-    <button type="submit">Add</button>
-  </form>
-  <label class="pl-require"><input type="checkbox" id="pa-require"> <span><b>Logins required.</b> Outside the studio, only people on this list get in. Old desk links with a key stop working.</span></label>
-</dialog>
 <header>
   <div class="titlebox"><h1>Live desk <span id="mock" class="hint"></span></h1>
     <input id="stitle" placeholder="Name this session…" title="Session name — saved with the recordings"></div>
@@ -244,7 +221,7 @@
     <button id="startsession" title="Start recording: cameras, room mics, phones — with everything you've prepared">● Start session</button>
     <button id="endsession" title="Stop recording and save; go back to standby to prepare the next session">End session</button>
     <span id="outside" class="outside" title="People using Mother from outside the studio"></span>
-    <button id="peoplebtn" hidden title="Who can use Mother from outside the studio">People</button>
+    <button id="peoplebtn" hidden title="Team: who can direct Mother from outside the studio">People</button>
     <button id="privacy" class="privacy" hidden title="Shut out everyone outside the studio except owners">Private: off</button>
     <span class="rec" id="recstate">REC</span>
   </nav>
@@ -253,6 +230,18 @@
   <section>
     <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
     <div id="audio-status" role="status"><span id="audio-label">Desk sound is off. Enable it to listen to participants.</span><button id="enable-sound">Enable sound</button><button id="enable-mic">Enable microphone</button></div>
+    <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
+    <div id="desk-room" class="desk-room">
+      <div class="dr-head"><h2>Room</h2><span class="hint">plan · close-up · cameras · mics</span><span id="dr-state" class="hint"></span><a id="dr-open" target="earpiece_pages">Open Room ↗</a></div>
+      <div class="dr-body">
+        <svg id="dr-plan" class="dr-plan" aria-label="Floor plan with people"></svg>
+        <canvas id="dr-follow" class="dr-follow" aria-label="Close-up following the person"></canvas>
+        <div class="dr-sees"><div class="dr-label">Mother sees</div><p id="dr-perception"></p><div id="dr-look" class="dr-look"></div>
+          <div class="dr-label dr-sub">Furniture check</div><p class="dr-check"><span id="dr-check"></span> <button id="dr-check-now">Check now</button></p><ul id="dr-changes" class="dr-changes"></ul></div>
+      </div>
+      <div class="dr-label dr-sub">Cameras &amp; room microphones</div>
+      <div id="cams"></div><div id="room"></div>
+    </div>
     <div class="desk-heading"><h2>Participants</h2></div>
     <div class="console">
       <div class="console-strip">
@@ -291,18 +280,6 @@
         </div>
         <div id="grid"></div>
       </div>
-    </div>
-    <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
-    <div id="desk-room" class="desk-room">
-      <div class="dr-head"><h2>Room</h2><span class="hint">plan · close-up · cameras · mics</span><span id="dr-state" class="hint"></span><a id="dr-open" target="earpiece_pages">Open Room ↗</a></div>
-      <div class="dr-body">
-        <svg id="dr-plan" class="dr-plan" aria-label="Floor plan with people"></svg>
-        <canvas id="dr-follow" class="dr-follow" aria-label="Close-up following the person"></canvas>
-        <div class="dr-sees"><div class="dr-label">Mother sees</div><p id="dr-perception"></p><div id="dr-look" class="dr-look"></div>
-          <div class="dr-label dr-sub">Furniture check</div><p class="dr-check"><span id="dr-check"></span> <button id="dr-check-now">Check now</button></p><ul id="dr-changes" class="dr-changes"></ul></div>
-      </div>
-      <div class="dr-label dr-sub">Cameras &amp; room microphones</div>
-      <div id="cams"></div><div id="room"></div>
     </div>
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="earpiece_pages" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
@@ -644,29 +621,9 @@ function connect() {
     wall.style.display = 'none'; setTimeout(connect, 1000);
   };
 }
-// The People panel (owners and the studio desk): who may sign in from outside, their role, add / remove.
-let lastAccess = null;
-function paintPeople(a) {
-  lastAccess = a;
-  $('peoplebtn').hidden = !a.canManage;
-  if (!a.canManage) { if ($('peopledlg').open) $('peopledlg').close(); return; }
-  const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const when = (t) => { if (!t) return 'never signed in'; const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 2 ? 'here just now' : m < 90 ? `last here ${m} min ago` : m < 2880 ? `last here ${Math.round(m / 60)} h ago` : 'last here ' + new Date(t).toLocaleDateString(); };
-  $('peoplelist').innerHTML = (a.users || []).map((u) => `<li data-email="${esc(u.email)}">
-    <span class="dot${u.online ? ' on' : ''}" title="${u.online ? 'Connected now' : 'Not connected'}"></span>
-    <span class="who"><b>${esc(u.name)}</b>${u.email === a.me ? ' (you)' : ''}<small>${esc(u.email)} · ${u.online ? 'connected now' : when(u.lastSeenAt)}</small></span>
-    <select class="pl-role"><option value="director"${u.role === 'director' ? ' selected' : ''}>Director</option><option value="owner"${u.role === 'owner' ? ' selected' : ''}>Owner</option></select>
-    <button class="pl-remove">Remove</button></li>`).join('') || '<li class="hint">Nobody yet.</li>';
-  $('pa-require').checked = !!a.requireLogin;
-}
-$('peoplebtn').onclick = () => { if (lastAccess) paintPeople(lastAccess); $('peopledlg').showModal(); };
-$('peopleclose').onclick = () => $('peopledlg').close();
-$('peopledlg').addEventListener('keydown', (e) => e.stopPropagation());   // typing here never triggers desk keys
-$('peopledlg').addEventListener('keyup', (e) => e.stopPropagation());
-$('peopleadd').onsubmit = (e) => { e.preventDefault(); ws.send(JSON.stringify({ type: 'people', op: 'add', email: $('pa-email').value, name: $('pa-name').value, role: $('pa-role').value })); $('pa-email').value = ''; $('pa-name').value = ''; };
-$('peoplelist').addEventListener('change', (e) => { const li = e.target.closest('li[data-email]'); if (li && e.target.matches('.pl-role')) ws.send(JSON.stringify({ type: 'people', op: 'role', email: li.dataset.email, role: e.target.value })); });
-$('peoplelist').addEventListener('click', (e) => { const li = e.target.closest('li[data-email]'); if (li && e.target.matches('.pl-remove') && confirm(`Remove ${li.dataset.email}? Their desk closes now and they can no longer sign in.`)) ws.send(JSON.stringify({ type: 'people', op: 'remove', email: li.dataset.email })); });
-$('pa-require').onchange = (e) => ws.send(JSON.stringify({ type: 'people', op: 'requireLogin', on: e.target.checked }));
+// Team: owners and the studio desk get a People button that opens the Team page.
+function paintPeople(a) { $('peoplebtn').hidden = !a.canManage; }
+$('peoplebtn').onclick = () => window.open('/team' + (KEY ? '?k=' + KEY : ''), 'earpiece_pages');
 // Privacy mode and who is here from outside the studio. The studio's own desk and owners can switch privacy.
 function paintAccess(a) {
   $('privatewall').style.display = 'none';

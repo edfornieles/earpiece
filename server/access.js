@@ -27,6 +27,7 @@ class Access {
     try { Object.assign(this.cfg, JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
     this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director', ...(u.addedAt ? { addedAt: u.addedAt } : {}), ...(u.lastSeenAt ? { lastSeenAt: u.lastSeenAt } : {}) })).filter((u) => u.email);
     this.keys = new Map(); this.keysAt = 0;
+    this.kicked = new Map();   // email -> until: disconnected by an owner, kept out for a while
     this.onPrivacy = null;
   }
   save() { const tmp = this.file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(this.cfg, null, 2)); fs.renameSync(tmp, this.file); }
@@ -56,6 +57,18 @@ class Access {
     if (user.role === 'owner' && role !== 'owner' && this.cfg.users.filter((u) => u.role === 'owner').length === 1) throw Error('Keep at least one owner.');
     user.role = role; this.save(); return user;
   }
+  setName(email, name) {
+    const user = this.cfg.users.find((u) => u.email === String(email || '').trim().toLowerCase()); if (!user) throw Error('That person is not on the list.');
+    name = String(name || '').trim().slice(0, 60); if (!name) throw Error('Enter a name.');
+    user.name = name; this.save(); return user;
+  }
+  // Disconnect someone for a while without taking them off the list (removeUser is permanent).
+  kick(email, ms = 15 * 60e3) {
+    const user = this.cfg.users.find((u) => u.email === String(email || '').trim().toLowerCase()); if (!user) throw Error('That person is not on the list.');
+    this.kicked.set(user.email, this.now() + ms); return user;
+  }
+  unkick(email) { this.kicked.delete(String(email || '').trim().toLowerCase()); }
+  kickedUntil(email) { const t = this.kicked.get(email) || 0; return t > this.now() ? t : 0; }
   seen(email) {
     const user = this.cfg.users.find((u) => u.email === email); if (!user) return;
     user.lastSeenAt = new Date(this.now()).toISOString(); this.save();
@@ -100,11 +113,13 @@ class Access {
     const owner = user?.role === 'owner';
     if (this.privacy && !owner) return { remote, blocked: 'private' };
     if (email && !user) return { remote, blocked: 'not-listed', email };
+    if (user && !owner && this.kickedUntil(user.email)) return { remote, blocked: 'kicked', email };
     if (user) return { remote, director: true, owner, email, name: user.name };
     return { remote, needsLogin: !!this.cfg.requireLogin };
   }
   page(why, email = '') {
     const msg = why === 'private' ? 'Mother is private right now. Please try again later.'
+      : why === 'kicked' ? 'You have been disconnected from Mother for now. Please try again later.'
       : `${email ? String(email).replace(/[&<>"']/g, '') + ' is' : 'You are'} not on the list of people who can use Mother. Ask Ed to add you.`;
     return `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mother</title>
 <body style="font:16px system-ui;background:#0e0e0e;color:#e8e6e1;display:grid;place-items:center;min-height:90vh;margin:0;padding:16px"><p>${msg}</p></body>`;

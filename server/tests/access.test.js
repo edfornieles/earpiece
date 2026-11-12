@@ -77,3 +77,17 @@ test('the owner adds, re-roles and removes people; there is always one owner', (
   assert.throws(() => a.setRole('ed@example.com', 'director'), /one owner/);
   assert.equal(new Access(file, { fetchImpl: null }).cfg.users.length, 2, 'saved');
 });
+
+test('disconnecting someone keeps them out for a while, never an owner, and names can change', (t) => {
+  const { a, token, req } = setup(t);
+  const remote = { 'cf-connecting-ip': '1.2.3.4' }, as = (email) => a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email }) }));
+  a.kick('nina@example.com');
+  assert.equal(as('nina@example.com').blocked, 'kicked');
+  a.unkick('nina@example.com');
+  assert.equal(as('nina@example.com').director, true);
+  a.kick('ed@example.com');
+  assert.equal(as('ed@example.com').owner, true, 'an owner cannot be locked out');
+  a.setName('nina@example.com', 'Nina E.');
+  assert.equal(as('nina@example.com').name, 'Nina E.');
+  assert.throws(() => a.setName('nina@example.com', '  '), /name/);
+});

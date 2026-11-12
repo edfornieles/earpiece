@@ -613,6 +613,21 @@ const server = http.createServer(async (req, res) => {
   }
   if (p.startsWith('/api/')) {
     if (!ctl) { res.writeHead(403); return res.end(); }
+    // Your own profile (anyone signed in), and the team (owners, and the studio itself).
+    if (p === '/api/me') {
+      if (req.method === 'POST') {
+        if (!who.director) return json(res, { error: 'The studio computer has no personal profile. Sign in with Google to have one.' }, 400);
+        const d = await readSetupBody(req), error = teamAction({ op: 'name', email: who.email, name: d.name }, who.email);
+        if (error) return json(res, { error }, 400);
+      }
+      const u = who.director ? access.cfg.users.find((x) => x.email === who.email) : null;
+      return json(res, { studio: !who.remote, email: who.email || '', name: u?.name || '', role: u?.role || (who.remote ? 'link' : 'studio'), lastSeenAt: u?.lastSeenAt || null, canManage: !who.remote || !!who.owner, logout: who.director ? '/cdn-cgi/access/logout' : '' });
+    }
+    if (p === '/api/team') {
+      if (who.remote && !who.owner) return json(res, { error: 'Only owners can manage the team.' }, 403);
+      if (req.method === 'POST') { const error = teamAction(await readSetupBody(req), who.email || 'studio'); if (error) return json(res, { error }, 400); }
+      return json(res, teamView());
+    }
     if(p==='/api/room-frame') {
       const frame=roomObserver.frames.get(u.searchParams.get('observation'));
       if(!frame){res.writeHead(404);return res.end('Analysed frame expired. Analyse again.');}
@@ -987,6 +1002,7 @@ const server = http.createServer(async (req, res) => {
 
   if (p === '/' || p === '/p') p = '/phone.html';
   if (p === '/control') p = '/control.html';
+  if (p === '/team') p = '/team.html';
   if (p === '/library') p = '/library.html';
   if (p === '/monitor') p = '/monitor.html';
   if (p === '/files') p = '/files.html';
@@ -1651,17 +1667,31 @@ function accessState(ws) {
   const manage = !ws.remote || !!ws.owner, here = new Set(remotePeople().map((p) => p.email).filter(Boolean)), v = access.view();
   return { type: 'access', ...v, users: manage ? v.users.map((u) => ({ ...u, online: here.has(u.email) })) : [], local: !ws.remote, canPrivacy: manage, canManage: manage, me: ws.who?.email || '', people: remotePeople() };
 }
-// The People panel: add, remove, change role, require logins. Removing someone closes their desk at once.
+// Team: add, remove, change role, disconnect for a while, require logins. Shared by the Team page (HTTP) and
+// the desk. Removing or disconnecting someone closes their desk at once. Returns an error message or ''.
+function teamAction(m, by) {
+  try {
+    const close = (email, why) => { for (const c of wss.clients) if (c.who?.email === email) c.close(4003, why); };
+    if (m.op === 'add') access.addUser(m);
+    else if (m.op === 'remove') close(access.removeUser(m.email).email, 'not-listed');
+    else if (m.op === 'kick') close(access.kick(m.email).email, 'kicked');
+    else if (m.op === 'unkick') access.unkick(m.email);
+    else if (m.op === 'role') { const u = access.setRole(m.email, m.role); for (const c of wss.clients) if (c.who?.email === u.email) { c.owner = u.role === 'owner'; c.who.owner = c.owner; if (access.privacy && !c.owner) c.close(4003, 'private'); } }
+    else if (m.op === 'name') access.setName(m.email, m.name);
+    else if (m.op === 'requireLogin') { access.setRequireLogin(m.on); if (m.on) for (const c of wss.clients) if (c.remote && !c.who && (c.role === 'control' || c.role === 'monitor')) c.close(4003, 'login'); }   // old key links stop working
+    else if (m.op === 'privacy') access.setPrivacy(!!m.on);
+    else return 'Choose a team action.';
+    logEvent('team', { op: m.op, email: m.email || '', role: m.role || '', on: m.on, by });
+    return '';
+  } catch (e) { return e.message; } finally { accessChanged(); }
+}
+function teamView() {
+  const here = new Set(remotePeople().map((p) => p.email).filter(Boolean)), v = access.view();
+  return { users: v.users.map((u) => ({ ...u, online: here.has(u.email), kickedUntil: access.kickedUntil(u.email) || null })), requireLogin: v.requireLogin, privacy: v.privacy, configured: v.configured };
+}
 function managePeople(ws, m) {
   if (ws.remote && !ws.owner) return send(ws, { type: 'error', text: 'Only the studio or an owner can manage people.' });
-  try {
-    if (m.op === 'add') access.addUser(m);
-    else if (m.op === 'remove') { const gone = access.removeUser(m.email); for (const c of wss.clients) if (c.who?.email === gone.email) c.close(4003, 'not-listed'); }
-    else if (m.op === 'role') { const u = access.setRole(m.email, m.role); for (const c of wss.clients) if (c.who?.email === u.email) { c.owner = u.role === 'owner'; c.who.owner = c.owner; if (access.privacy && !c.owner) c.close(4003, 'private'); } }
-    else if (m.op === 'requireLogin') { access.setRequireLogin(m.on); if (m.on) for (const c of wss.clients) if (c.remote && !c.who && (c.role === 'control' || c.role === 'monitor')) c.close(4003, 'login'); }   // old key links stop working
-    logEvent('people', { op: m.op, email: m.email || '', role: m.role || '', on: m.on, by: ws.who?.email || 'studio' });
-  } catch (e) { send(ws, { type: 'error', text: e.message }); }
-  accessChanged();
+  const error = teamAction(m, ws.who?.email || 'studio'); if (error) send(ws, { type: 'error', text: error });
 }
 function accessChanged() { for (const c of controls) send(c, accessState(c)); }
 access.onPrivacy = (on) => {

@@ -25,13 +25,14 @@
   const Q = KEY ? '?k=' + KEY : '';
   const here = location.pathname.replace(/\.html$/, '').replace(/^\/$/, '/control');
   const inControl = here === '/control';
-  // Five sections. The section you are in lists its pages underneath.
+  // Six sections. The section you are in lists its pages underneath.
   const sections = [
     ['Perform', [['/control', 'Live desk'], ['/session', 'Brief & notes']]],
     ['Programs', [['/programs', 'Programs']]],
     ['Room', [['/room', 'Room']]],
     ['Setup', [['/phones', 'Phones'], ['/screens', 'Screens'], ['/people', 'Registrations']]],
     ['Archive', [['/library', 'Library'], ['/files', 'Files'], ['/trash', 'Trash']]],
+    ['Team', [['/team', 'Team']]],
   ];
   const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/studio.css';
   document.head.appendChild(css); document.body.classList.add('mother-shell');

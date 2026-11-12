@@ -102,7 +102,7 @@ class Camera {
       this.recording = false;
       if (isLocal(this.main)) this.previewing = false;
       if (this.stopped) return;
-      this.log('camera_dropped', { cam: this.id, name: this.name, code, detail: err.trim().split('\n').slice(-2).join(' ') }, true);
+      this.log('camera_dropped', { cam: this.id, name: this.name, code, detail: err.trim().split('\n').slice(-2).join(' ').replace(/([a-z]+:\/\/)[^@\s/]*@/gi, '$1***@') }, true);   // never log camera passwords
       setTimeout(() => this.startRecorder(), 3000);
     });
   }

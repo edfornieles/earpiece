@@ -21,7 +21,8 @@
 })();
 (() => {
   const KEY = new URLSearchParams(location.search).get('k');
-  if (!KEY) return;
+  // Signed in with Google at the director address there is no link key: the login itself is the key.
+  const Q = KEY ? '?k=' + KEY : '';
   const here = location.pathname.replace(/\.html$/, '').replace(/^\/$/, '/control');
   const inControl = here === '/control';
   // Five sections. The section you are in lists its pages underneath.
@@ -38,7 +39,7 @@
   bar.id = 'sitenav';
   const link = (href, label, cls = '') => {
     const a = document.createElement('a');
-    a.href = `${href}?k=${KEY}`; a.textContent = label; a.className = cls + (href === here ? ' on' : '');
+    a.href = href + Q; a.textContent = label; a.className = cls + (href === here ? ' on' : '');
     // the control room keeps one tab; from the control room, the other pages open in one shared tab beside it
     if (href === '/control' && !inControl) a.target = 'earpiece_control';
     else if (href !== '/control' && inControl) a.target = 'earpiece_pages';
@@ -61,7 +62,7 @@
   async function status() {
     const st = document.getElementById('navstate');
     try {
-      const s = await (await fetch('/api/status?k=' + KEY)).json();
+      const s = await (await fetch('/api/status' + Q)).json();
       const phones = s.phonesConnected || [], prog = s.program, launch = s.launch;
       st.className = 'st' + (s.standby ? '' : ' rec');
       const lines = [s.standby ? '○ Not recording' : '● Recording' + (s.title ? ' — ' + s.title : '')];

@@ -304,3 +304,20 @@ test('a quiet phone microphone is brought up to speaking level, and loud input p
   for (let i = 0; i < 50; i++) out = loud.process(sample);
   assert.equal(out, sample, 'already loud: untouched');
 });
+
+test('while Mother talks, only sustained speech cuts her off; a breath or a quick "yes" does not', () => {
+  const { Vad } = require('../ai');
+  const frame = (amp) => { const b = Buffer.alloc(960); for (let i = 0; i < 480; i++) b.writeInt16LE(Math.round(amp * 32767 * Math.sin(i / 3)), i * 2); return b; };
+  let starts = 0; const v = new Vad({ onStart: () => starts++, onUtterance: () => {} });
+  for (let i = 0; i < 50; i++) v.push(frame(0.002));          // a quiet room
+  v.strict = true;                                             // Mother is speaking
+  for (let i = 0; i < 12; i++) v.push(frame(0.2));             // 0.24 s: a breath, a "yes"
+  for (let i = 0; i < 50; i++) v.push(frame(0.002));
+  assert.equal(starts, 0, 'short sounds do not cut her off');
+  for (let i = 0; i < 40; i++) v.push(frame(0.2));             // 0.8 s of real talking
+  assert.equal(starts, 1, 'sustained speech does');
+  for (let i = 0; i < 50; i++) v.push(frame(0.002));
+  v.strict = false;                                            // Mother is quiet: speech is noticed at once
+  for (let i = 0; i < 4; i++) v.push(frame(0.2));
+  assert.equal(starts, 2);
+});

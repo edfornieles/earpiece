@@ -31,6 +31,7 @@ class Gain {
     return out;
   }
 }
+const BARGE_FRAMES = 35;   // 0.7 s of voiced 20 ms frames before speech cuts Mother off
 class Vad {
   constructor({ onStart, onUtterance }) {
     this.onStart = onStart; this.onUtterance = onUtterance;
@@ -38,8 +39,9 @@ class Vad {
   }
   reset() {
     this.floor = 0.01; this.speaking = false; this.run = 0; this.silence = 0;
-    this.pre = []; this.buf = []; this.len = 0; this.strict = false;
+    this.pre = []; this.buf = []; this.len = 0; this.strict = false; this.voiced = 0; this.announced = false;
   }
+  announce() { this.announced = true; this.onStart && this.onStart(); }
   push(pcm) {
     const n = pcm.length >> 1; let s = 0;
     for (let i = 0; i < n; i++) { const v = pcm.readInt16LE(i * 2) / 32768; s += v * v; }
@@ -53,12 +55,17 @@ class Vad {
       if (this.run >= 3) {
         this.speaking = true; this.silence = 0;
         this.buf = this.pre.slice(); this.len = this.buf.reduce((a, b) => a + b.length, 0); this.pre = [];
-        this.onStart && this.onStart();
+        this.voiced = this.run; this.announced = false;
+        // While Mother is talking (strict), only sustained speech counts as talking over her: a breath,
+        // a footstep or a quick "yes" must not cut her off mid-sentence.
+        if (!this.strict) this.announce();
       }
       return;
     }
     this.buf.push(pcm); this.len += pcm.length;
     this.silence = loud ? 0 : this.silence + 1;
+    if (loud) this.voiced++;
+    if (!this.announced && (!this.strict || this.voiced >= BARGE_FRAMES)) this.announce();
     const secs = this.len / 2 / RATE;
     if (this.silence >= 40 || secs > 30) {             // 800 ms of quiet ends a turn
       this.speaking = false; this.run = 0;

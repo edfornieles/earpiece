@@ -99,6 +99,17 @@
   .voicebox { display:flex; flex-direction:column; gap:8px; border:1px solid var(--line); border-radius:7px; padding:10px 12px; }
   .voicebox .sliders { gap:16px; } .voicebox .sliders label { flex:1; min-width:160px; margin:0; display:flex; align-items:center; gap:8px; }
   .voicebox input[type=range] { flex:1; width:auto; padding:0; }
+  .cam-strip { display:grid; grid-template-columns:minmax(220px,340px) 1fr; gap:14px; align-items:start; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+  .cam-strip[hidden] { display:none; }
+  .cam-strip img { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:8px; cursor:zoom-in; display:block; }
+  .cs-camctl { display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .cs-views, .cs-aim { display:flex; flex-wrap:wrap; gap:6px; }
+  .cam-strip button { -webkit-user-select:none; user-select:none; touch-action:manipulation; }
+  .cs-aim button[data-dir] { min-width:44px; font-size:16px; }
+  .cs-view.here { border-color:var(--ok); color:var(--ok); }
+  .cs-view kbd { margin-left:6px; }
+  .cs-follow.on { border-color:var(--ok); color:var(--ok); }
+  @media (max-width:700px) { .cam-strip { grid-template-columns:1fr; } }
   /* Narrower screens (an iPad upright): the phones become a row of tabs above the selected phone. */
   @media (max-width:1250px) {
     .console .desk-workspace { grid-template-columns:1fr; }
@@ -214,7 +225,20 @@
           <button id="all" class="padbtn"><b>All</b><small>everyone</small><kbd>space</kbd></button>
         </div>
         <input id="speakall" placeholder="Type a line for everyone → they hear it in the AI voice (Enter)">
-        <div class="hint cs-keys">Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone (several together) · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
+        <div class="hint cs-keys">Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone (several together) · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>⇧</kbd>+arrows move the camera · <kbd>⇧</kbd>+<kbd>1</kbd>… camera positions · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
+        <div class="cam-strip" id="camstrip" hidden>
+          <img id="cs-cam" alt="Turning camera, live" title="Click to enlarge">
+          <div class="cs-camctl">
+            <div class="cs-label">Camera <span id="cs-camstate" class="hint"></span></div>
+            <div class="cs-views" id="cs-views"></div>
+            <div class="cs-aim">
+              <button data-dir="-1,0" title="Pan left (Shift+←)">◀</button><button data-dir="1,0" title="Pan right (Shift+→)">▶</button>
+              <button data-dir="0,-1" title="Tilt up (Shift+↑)">▲</button><button data-dir="0,1" title="Tilt down (Shift+↓)">▼</button>
+              <button id="cs-step" title="How far each nudge turns">Small steps</button>
+              <button id="cs-follow" class="cs-follow">Follow person</button>
+            </div>
+          </div>
+        </div>
         <audio id="previewAudio"></audio>
       </div>
       <div class="hint cs-hint" id="micmodehint">They hear you directly, live.</div>
@@ -860,6 +884,7 @@ const typing = () => ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagN
 const keysDown = new Set();
 document.addEventListener('keydown', (e) => {
   if (e.repeat || !ws || typing()) return;
+  if (e.shiftKey && window.deskCamera?.key(e)) return;   // Shift + arrows / 1–9: the camera (desk-camera.js)
   const held = () => keysDown.has(e.code);
   if (e.code === 'Space') { e.preventDefault(); keysDown.add(e.code); beginTalk(0, held, $('all')); }
   if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) { keysDown.add(e.code); beginTalk(Number(e.code.slice(5)), held); }
@@ -879,7 +904,7 @@ document.addEventListener('keyup', (e) => {
   if (/^Digit[1-9]$/.test(e.code)) holdOff(Number(e.code.slice(5)));
 });
 </script>
-<script src="follow-core.js"></script><script src="desk-room.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>
+<script src="follow-core.js"></script><script src="desk-room.js"></script><script src="desk-camera.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>
 <script src="nav.js"></script>
 </body>
 </html>

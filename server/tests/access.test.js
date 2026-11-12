@@ -61,3 +61,19 @@ test('an owner has the desk from anywhere and is the one person privacy mode let
   assert.equal(a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email: 'nina@example.com' }) })).blocked, 'private');
   assert.equal(a.check(req(remote)).blocked, 'private', 'no login, no way in');
 });
+
+test('the owner adds, re-roles and removes people; there is always one owner', (t) => {
+  const { a, token, req, file } = setup(t);
+  a.addUser({ email: ' New.Person@Gmail.com ', name: 'New', role: 'director' });
+  assert.throws(() => a.addUser({ email: 'new.person@gmail.com' }), /already/);
+  assert.throws(() => a.addUser({ email: 'not-an-email' }), /valid email/);
+  const remote = { 'cf-connecting-ip': '1.2.3.4' };
+  assert.equal(a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email: 'new.person@gmail.com' }) })).director, true, 'in at once, no restart');
+  a.setRole('new.person@gmail.com', 'owner');
+  assert.equal(a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email: 'new.person@gmail.com' }) })).owner, true);
+  a.removeUser('new.person@gmail.com');
+  assert.equal(a.check(req({ ...remote, 'cf-access-jwt-assertion': token({ email: 'new.person@gmail.com' }) })).blocked, 'not-listed');
+  assert.throws(() => a.removeUser('ed@example.com'), /one owner/);
+  assert.throws(() => a.setRole('ed@example.com', 'director'), /one owner/);
+  assert.equal(new Access(file, { fetchImpl: null }).cfg.users.length, 2, 'saved');
+});

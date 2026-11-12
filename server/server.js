@@ -522,6 +522,7 @@ async function readSetupBody(req) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   let p = u.pathname;
+  if (p === '/privacy') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(PUB, 'privacy.html')).pipe(res); }
   const who = access.check(req);
   if (who.blocked) { res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return res.end(access.page(who.blocked, who.email)); }
   // Outside the studio, once logins are required, only a logged-in director gets the desk: a link key is not enough.
@@ -1646,7 +1647,22 @@ function remotePeople() {
   return [...wss.clients].filter((c) => c.remote && c.readyState === 1 && controls.has(c)).map((c) => ({ name: c.who?.name || 'Desk link (no login)', email: c.who?.email || '', owner: !!c.owner, since: c.since }));
 }
 // The studio's own desk and an owner (from anywhere) may switch privacy mode.
-function accessState(ws) { return { type: 'access', ...access.view(), local: !ws.remote, canPrivacy: !ws.remote || !!ws.owner, people: remotePeople() }; }
+function accessState(ws) {
+  const manage = !ws.remote || !!ws.owner, here = new Set(remotePeople().map((p) => p.email).filter(Boolean)), v = access.view();
+  return { type: 'access', ...v, users: manage ? v.users.map((u) => ({ ...u, online: here.has(u.email) })) : [], local: !ws.remote, canPrivacy: manage, canManage: manage, me: ws.who?.email || '', people: remotePeople() };
+}
+// The People panel: add, remove, change role, require logins. Removing someone closes their desk at once.
+function managePeople(ws, m) {
+  if (ws.remote && !ws.owner) return send(ws, { type: 'error', text: 'Only the studio or an owner can manage people.' });
+  try {
+    if (m.op === 'add') access.addUser(m);
+    else if (m.op === 'remove') { const gone = access.removeUser(m.email); for (const c of wss.clients) if (c.who?.email === gone.email) c.close(4003, 'not-listed'); }
+    else if (m.op === 'role') { const u = access.setRole(m.email, m.role); for (const c of wss.clients) if (c.who?.email === u.email) { c.owner = u.role === 'owner'; c.who.owner = c.owner; if (access.privacy && !c.owner) c.close(4003, 'private'); } }
+    else if (m.op === 'requireLogin') { access.setRequireLogin(m.on); if (m.on) for (const c of wss.clients) if (c.remote && !c.who && (c.role === 'control' || c.role === 'monitor')) c.close(4003, 'login'); }   // old key links stop working
+    logEvent('people', { op: m.op, email: m.email || '', role: m.role || '', on: m.on, by: ws.who?.email || 'studio' });
+  } catch (e) { send(ws, { type: 'error', text: e.message }); }
+  accessChanged();
+}
 function accessChanged() { for (const c of controls) send(c, accessState(c)); }
 access.onPrivacy = (on) => {
   if (on) {
@@ -1678,10 +1694,11 @@ wss.on('connection', (ws, req) => {
 
   const who = access.check(req);
   if (who.blocked) { ws.close(4003, who.blocked); return; }
-  ws.remote = !!who.remote; ws.owner = !!who.owner; ws.who = who.director ? { email: who.email, name: who.name, owner: !!who.owner } : null; ws.since = Date.now();
+  ws.remote = !!who.remote; ws.role = role; ws.owner = !!who.owner; ws.who = who.director ? { email: who.email, name: who.name, owner: !!who.owner } : null; ws.since = Date.now();
   const keyed = !who.needsLogin;
   if (role === 'control' && (who.director || (keyed && key === CONTROL_KEY))) {
     controls.add(ws);
+    if (who.director) access.seen(who.email);
     accessChanged();
     send(ws, { type: 'phonesChanged', maxPhones: MAX_PHONES });
     send(ws,{type:'program',run:programRunner.view()});
@@ -1738,6 +1755,7 @@ wss.on('connection', (ws, req) => {
       }
       // Privacy mode is switched from inside the studio or by an owner (who stays connected through it).
       if (m.type === 'privacy') { if (ws.remote && !ws.owner) send(ws, { type: 'error', text: 'Only the studio or an owner can switch privacy mode.' }); else access.setPrivacy(!!m.on); }
+      if (m.type === 'people') managePeople(ws, m);
       if (m.type === 'mark') { logEvent('mark', { text: String(m.text || 'Mark').slice(0, 200) }); toControls({ type: 'marked', t: clock(), text: m.text || 'Mark' }); }
       if (m.type === 'instruct' && s && m.text && !s.waiting) {
         logEvent('instruct', { id: s.id, text: m.text });

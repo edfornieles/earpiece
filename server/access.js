@@ -25,7 +25,7 @@ class Access {
     this.file = file; this.fetch = fetchImpl; this.now = now;
     this.cfg = { users: [], requireLogin: false, privacy: false, teamDomain: '', aud: '' };
     try { Object.assign(this.cfg, JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
-    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director' })).filter((u) => u.email);
+    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director', ...(u.addedAt ? { addedAt: u.addedAt } : {}), ...(u.lastSeenAt ? { lastSeenAt: u.lastSeenAt } : {}) })).filter((u) => u.email);
     this.keys = new Map(); this.keysAt = 0;
     this.onPrivacy = null;
   }
@@ -36,6 +36,31 @@ class Access {
     this.cfg.privacy = !!on; this.save();
     this.onPrivacy?.(this.cfg.privacy);
   }
+  // People: the owner manages who may come in from outside (the desk's People panel). There is always one owner.
+  addUser({ email, name = '', role = 'director' }) {
+    email = String(email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw Error('Enter a valid email address.');
+    if (this.cfg.users.some((u) => u.email === email)) throw Error(email + ' is already on the list.');
+    const user = { email, name: String(name || '').trim().slice(0, 60) || email.split('@')[0], role: role === 'owner' ? 'owner' : 'director', addedAt: new Date(this.now()).toISOString() };
+    this.cfg.users.push(user); this.save(); return user;
+  }
+  removeUser(email) {
+    email = String(email || '').trim().toLowerCase();
+    const user = this.cfg.users.find((u) => u.email === email); if (!user) throw Error('That person is not on the list.');
+    if (user.role === 'owner' && this.cfg.users.filter((u) => u.role === 'owner').length === 1) throw Error('Keep at least one owner.');
+    this.cfg.users = this.cfg.users.filter((u) => u !== user); this.save(); return user;
+  }
+  setRole(email, role) {
+    const user = this.cfg.users.find((u) => u.email === String(email || '').trim().toLowerCase()); if (!user) throw Error('That person is not on the list.');
+    role = role === 'owner' ? 'owner' : 'director';
+    if (user.role === 'owner' && role !== 'owner' && this.cfg.users.filter((u) => u.role === 'owner').length === 1) throw Error('Keep at least one owner.');
+    user.role = role; this.save(); return user;
+  }
+  seen(email) {
+    const user = this.cfg.users.find((u) => u.email === email); if (!user) return;
+    user.lastSeenAt = new Date(this.now()).toISOString(); this.save();
+  }
+  setRequireLogin(on) { this.cfg.requireLogin = !!on; this.save(); }
   // Cloudflare's signing keys for this team, refreshed hourly (and on an unknown key id).
   async refreshKeys() {
     if (!this.configured || !this.fetch) return;

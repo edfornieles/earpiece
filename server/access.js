@@ -1,0 +1,130 @@
+// Who may use Mother from outside the studio, and privacy mode.
+//
+// Everything arriving through the Cloudflare tunnel carries a cf-connecting-ip header; anything without it
+// came from this Mac or the studio network and is trusted as before (link keys).
+//
+// Directors log in with an emailed code through Cloudflare Access on the director address
+// (mother.edfornieles.com). Cloudflare then sends a signed token (Cf-Access-Jwt-Assertion). Mother checks
+// its signature against Cloudflare's published keys, its audience and its expiry, and only then believes the
+// email inside. A plain email header is never trusted: it could be sent by anyone to the other address.
+//
+// Privacy mode shuts out everyone outside the studio: open connections are closed and nothing new gets in.
+// It is switched from the studio, or by an owner from anywhere; owners are the one exception it lets in
+// (so the owner can always switch it off). It survives a restart.
+//
+// Settings live in .access.json (not in git):
+//   { "users": [{ "email": "...", "name": "...", "role": "owner" | "director" }], "requireLogin": false, "privacy": false,
+//     "teamDomain": "yourteam.cloudflareaccess.com", "aud": "<application audience tag>" }
+const fs = require('fs');
+const crypto = require('crypto');
+
+const b64url = (s) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+
+class Access {
+  constructor(file, { fetchImpl = globalThis.fetch, now = () => Date.now() } = {}) {
+    this.file = file; this.fetch = fetchImpl; this.now = now;
+    this.cfg = { users: [], requireLogin: false, privacy: false, teamDomain: '', aud: '' };
+    try { Object.assign(this.cfg, JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
+    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director', ...(u.addedAt ? { addedAt: u.addedAt } : {}), ...(u.lastSeenAt ? { lastSeenAt: u.lastSeenAt } : {}) })).filter((u) => u.email);
+    this.keys = new Map(); this.keysAt = 0;
+    this.kicked = new Map();   // email -> until: disconnected by an owner, kept out for a while
+    this.onPrivacy = null;
+  }
+  save() { const tmp = this.file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(this.cfg, null, 2)); fs.renameSync(tmp, this.file); }
+  get privacy() { return !!this.cfg.privacy; }
+  get configured() { return !!(this.cfg.teamDomain && this.cfg.aud); }
+  setPrivacy(on) {
+    this.cfg.privacy = !!on; this.save();
+    this.onPrivacy?.(this.cfg.privacy);
+  }
+  // People: the owner manages who may come in from outside (the desk's People panel). There is always one owner.
+  addUser({ email, name = '', role = 'director' }) {
+    email = String(email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw Error('Enter a valid email address.');
+    if (this.cfg.users.some((u) => u.email === email)) throw Error(email + ' is already on the list.');
+    const user = { email, name: String(name || '').trim().slice(0, 60) || email.split('@')[0], role: role === 'owner' ? 'owner' : 'director', addedAt: new Date(this.now()).toISOString() };
+    this.cfg.users.push(user); this.save(); return user;
+  }
+  removeUser(email) {
+    email = String(email || '').trim().toLowerCase();
+    const user = this.cfg.users.find((u) => u.email === email); if (!user) throw Error('That person is not on the list.');
+    if (user.role === 'owner' && this.cfg.users.filter((u) => u.role === 'owner').length === 1) throw Error('Keep at least one owner.');
+    this.cfg.users = this.cfg.users.filter((u) => u !== user); this.save(); return user;
+  }
+  setRole(email, role) {
+    const user = this.cfg.users.find((u) => u.email === String(email || '').trim().toLowerCase()); if (!user) throw Error('That person is not on the list.');
+    role = role === 'owner' ? 'owner' : 'director';
+    if (user.role === 'owner' && role !== 'owner' && this.cfg.users.filter((u) => u.role === 'owner').length === 1) throw Error('Keep at least one owner.');
+    user.role = role; this.save(); return user;
+  }
+  setName(email, name) {
+    const user = this.cfg.users.find((u) => u.email === String(email || '').trim().toLowerCase()); if (!user) throw Error('That person is not on the list.');
+    name = String(name || '').trim().slice(0, 60); if (!name) throw Error('Enter a name.');
+    user.name = name; this.save(); return user;
+  }
+  // Disconnect someone for a while without taking them off the list (removeUser is permanent).
+  kick(email, ms = 15 * 60e3) {
+    const user = this.cfg.users.find((u) => u.email === String(email || '').trim().toLowerCase()); if (!user) throw Error('That person is not on the list.');
+    this.kicked.set(user.email, this.now() + ms); return user;
+  }
+  unkick(email) { this.kicked.delete(String(email || '').trim().toLowerCase()); }
+  kickedUntil(email) { const t = this.kicked.get(email) || 0; return t > this.now() ? t : 0; }
+  seen(email) {
+    const user = this.cfg.users.find((u) => u.email === email); if (!user) return;
+    user.lastSeenAt = new Date(this.now()).toISOString(); this.save();
+  }
+  setRequireLogin(on) { this.cfg.requireLogin = !!on; this.save(); }
+  // Cloudflare's signing keys for this team, refreshed hourly (and on an unknown key id).
+  async refreshKeys() {
+    if (!this.configured || !this.fetch) return;
+    const r = await this.fetch(`https://${this.cfg.teamDomain}/cdn-cgi/access/certs`);
+    if (!r.ok) throw Error('Cloudflare Access keys: ' + r.status);
+    const { keys = [] } = await r.json();
+    this.keys = new Map(keys.map((k) => [k.kid, crypto.createPublicKey({ key: k, format: 'jwk' })]));
+    this.keysAt = this.now();
+  }
+  start() {
+    const go = () => this.refreshKeys().catch((e) => console.log('  ! ' + e.message));
+    go(); setInterval(go, 3600e3).unref?.();
+  }
+  // The verified email in a Cloudflare Access token, or ''.
+  verify(token) {
+    if (!token || !this.configured) return '';
+    const parts = String(token).split('.'); if (parts.length !== 3) return '';
+    let head, body;
+    try { head = JSON.parse(b64url(parts[0])); body = JSON.parse(b64url(parts[1])); } catch { return ''; }
+    if (head.alg !== 'RS256') return '';
+    const key = this.keys.get(head.kid);
+    if (!key) { if (this.now() - this.keysAt > 60e3) this.refreshKeys().catch(() => {}); return ''; }
+    if (!crypto.verify('RSA-SHA256', Buffer.from(parts[0] + '.' + parts[1]), key, b64url(parts[2]))) return '';
+    const aud = Array.isArray(body.aud) ? body.aud : [body.aud];
+    const t = this.now() / 1000;
+    if (!aud.includes(this.cfg.aud) || !(body.exp > t) || (body.nbf && body.nbf > t + 60)) return '';
+    if (body.iss && body.iss !== `https://${this.cfg.teamDomain}`) return '';
+    return String(body.email || '').toLowerCase();
+  }
+  // What this request may do. remote: it came through the tunnel. director: a logged-in, listed person.
+  // needsLogin: remote, not logged in, and link keys no longer count for the desk.
+  check(req) {
+    const remote = !!req.headers['cf-connecting-ip'];
+    if (!remote) return { remote: false };
+    const email = this.verify(req.headers['cf-access-jwt-assertion']);
+    const user = email && this.cfg.users.find((u) => u.email === email);
+    const owner = user?.role === 'owner';
+    if (this.privacy && !owner) return { remote, blocked: 'private' };
+    if (email && !user) return { remote, blocked: 'not-listed', email };
+    if (user && !owner && this.kickedUntil(user.email)) return { remote, blocked: 'kicked', email };
+    if (user) return { remote, director: true, owner, email, name: user.name };
+    return { remote, needsLogin: !!this.cfg.requireLogin };
+  }
+  page(why, email = '') {
+    const msg = why === 'private' ? 'Mother is private right now. Please try again later.'
+      : why === 'kicked' ? 'You have been disconnected from Mother for now. Please try again later.'
+      : `${email ? String(email).replace(/[&<>"']/g, '') + ' is' : 'You are'} not on the list of people who can use Mother. Ask Ed to add you.`;
+    return `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mother</title>
+<body style="font:16px system-ui;background:#0e0e0e;color:#e8e6e1;display:grid;place-items:center;min-height:90vh;margin:0;padding:16px"><p>${msg}</p></body>`;
+  }
+  view() { return { privacy: this.privacy, requireLogin: !!this.cfg.requireLogin, configured: this.configured, users: this.cfg.users }; }
+}
+
+module.exports = { Access };

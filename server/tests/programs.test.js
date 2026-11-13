@@ -52,3 +52,21 @@ test('silence is scheduled only after the preceding passage has finished',async(
 test('reserved object keys cannot be used as score identifiers',()=>{
  const p=score();p.roles[0].id='__proto__';assert.throws(()=>validateProgram(p),/identifiers/);
 });
+test('a phone that drops and comes back on the same visit repeats its cue without the desk',async()=>{
+ const {runner:r,pending,ready,events}=rig();r.start();r.tick();ready[1]=false;r.tick();assert.equal(r.roles[0].status,'paused');
+ ready[1]=true;r.tick();assert.ok(events.some(e=>e[0]==='program_auto_resume'));r.tick();assert.equal(r.roles[0].status,'speaking');assert.equal(r.roles[0].cue,0);
+ assert.equal(pending.filter(p=>p.id===1).length,2,'the interrupted line is spoken again');
+});
+test('speaking during a timed pause gets a short answer, or moves on when they are done',async()=>{
+ const program=score({a:[passage('a1','pause',{seconds:30}),passage('a2')],b:[]});
+ const {runner:r,pending}=rig(program);r.h.decide=async(id,text)=>/done/.test(text)?{action:'resume'}:{action:'respond',text:'I can hear you.'};
+ r.start();r.tick();assert.equal(r.roles[0].status,'silence');
+ r.reply(1,'can you hear me?');await settle();assert.equal(pending.at(-1).cue.text,'I can hear you.');pending.at(-1).resolve();await settle();await settle();
+ assert.equal(r.roles[0].status,'silence','the pause carries on');assert.equal(r.roles[0].cue,0);
+ r.reply(1,"I've done that");await settle();await settle();assert.equal(r.roles[0].cue,1,'moved on to the next cue');
+});
+test('a noise that cuts Mother off without any words carries on after a few seconds; a director cut-in does not',async()=>{
+ const {runner:r,events}=rig();r.start();r.tick();r.hold(1,'participant interrupted',true);assert.equal(r.roles[0].status,'interrupted');
+ r.roles[0].heldAt=Date.now()-9000;r.tick();r.tick();assert.equal(r.roles[0].status,'speaking');assert.ok(events.some(e=>e[0]==='program_auto_resume'&&e[1].why));
+ r.hold(1,'human director cut in',true);r.roles[0].heldAt;r.tick();assert.equal(r.roles[0].status,'interrupted');
+});

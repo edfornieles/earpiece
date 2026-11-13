@@ -4,7 +4,7 @@
  const $=id=>document.getElementById(id), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const url=route=>route+(route.includes('?')?'&':'?')+'k='+encodeURIComponent(key);
  async function api(route,body){const res=await fetch(url('/api/'+route),body===undefined?{}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const value=await res.json();if(!res.ok||value.error)throw Error(value.error||'Request failed');return value;}
- let state=null,library=[],chosen=null,assignments={},dirty=false,busy=false,loaded=false;
+ let libraryAt=0,pickId='',state=null,library=[],chosen=null,assignments={},dirty=false,busy=false,loaded=false;
  const selection=$('program-select'), live=$('program-live');
  if(selection){
   $('program-edit-link').href=url('/programs');
@@ -45,10 +45,13 @@
  const names={prepared:'Prepared',ready:'Next cue',speaking:'Speaking',thinking:'Mother deciding',reply:'Waiting for a reply',silence:'Silence',waiting:'Waiting for desk',dependency:'Waiting for another role',sceneWait:'Waiting at scene boundary',complete:'Finished',paused:'Paused',attention:'Needs attention',interrupted:'Live interruption',interventionReply:'Conversation after interruption'};
  function renderLive(){
   const {selection:sel,run}=state;
-  const heading=sel?`${sel.snapshot.title} · v${sel.snapshot.revision}`:'No performance program selected';
-  let markup=`<div class="row between"><h2>${esc(heading)}</h2><a href="${url('/session')}" target="earpiece_pages">${sel?'Session setup ↗':'Choose a program ↗'}</a></div>`;
-  if(sel){markup+=`<p class="hint">${esc(run.status)} · ${sel.timing==='shared'?'Shared scene timing':'Independent role timing'}. Start each assigned participant visit before starting the score.</p><div class="row program-controls">`;
-   if(['prepared','stopped','completed'].includes(run.status))markup+=`<button data-action="start" ${state.standby?'disabled':''}>${run.status==='completed'?'Restart program':'Start program'}</button>`;
+  const active=sel&&['running','paused'].includes(run.status), launch=state.launch;
+  const pick=`<div class="row program-pick"><select id="run-pick" aria-label="Program">${library.map(p=>`<option value="${esc(p.id)}" ${p.id===(pickId||sel?.snapshot.id)?'selected':''}>${esc(p.title)}</option>`).join('')||'<option value="">No saved programs</option>'}</select><button class="primary" data-run ${library.length?'':'disabled'}>▶ Run</button><button data-play title="No script: just talk with Mother and test what it can perceive">▶ Play</button><a href="${url('/programs')}" target="earpiece_pages">Write programs ↗</a></div>`;
+  let markup=`<div class="row between"><h2>${esc(active?`${sel.snapshot.title} · v${sel.snapshot.revision}`:'Program')}</h2></div>`;
+  if(launch?.waitingFor)markup+=`<p class="launch">Starting “${esc(launch.title)}”: ${launch.waitingFor.length?launch.waitingFor.map(w=>`Phone ${w.phone}: ${esc(w.reason)}`).join(' · '):'starting…'} <button data-cancel>Cancel</button></p>`;
+  else if(launch?.error)markup+=`<p class="launch attention">${esc(launch.error)}</p>`;
+  if(!active)markup+=pick+(!launch?'<p class="hint">Run plays a script. Play skips the script: Mother just talks with you and tells you what it can see. Both start recording and the phone for you.</p>':'');
+  if(active){markup+=`<p class="hint">${esc(run.status)}</p><div class="row program-controls">`;
    if(run.status==='running')markup+='<button data-action="pause">Pause all roles</button>';
    if(run.status==='paused')markup+='<button data-action="resume">Resume program</button>';
    if(['running','paused'].includes(run.status))markup+='<button data-action="stop">Stop program</button>';
@@ -61,6 +64,10 @@
   }
   // Keep controls stable during polling so an update cannot swallow a pointer press.
   if(live.dataset.markup!==markup){live.innerHTML=markup;live.dataset.markup=markup;
+   const runBtn=live.querySelector('[data-run]');if(runBtn)runBtn.onclick=()=>{const id=live.querySelector('#run-pick').value;if(id)MotherRun.open(id,{after:()=>{live.dataset.markup='';load();}});};
+   const playBtn=live.querySelector('[data-play]');if(playBtn)playBtn.onclick=async()=>{if(busy)return;busy=true;playBtn.disabled=true;try{const r=await api('run',{action:'play'});playBtn.textContent=r.phase==='recording'?'Starting recording…':'Starting…';}catch(e){alert(e.message);}finally{busy=false;setTimeout(()=>{live.dataset.markup='';load();},1500);}};
+   const pickSel=live.querySelector('#run-pick');if(pickSel)pickSel.onchange=()=>{pickId=pickSel.value;};
+   const cancel=live.querySelector('[data-cancel]');if(cancel)cancel.onclick=async()=>{try{await api('run',{action:'cancel'});live.dataset.markup='';load();}catch(e){alert(e.message);}};
    for(const b of live.querySelectorAll('[data-action]'))b.onclick=async()=>{if(busy)return;if(b.dataset.action==='start'&&!confirm('Start the selected score for all assigned roles now?'))return;if(b.dataset.action==='stop'&&!confirm('Stop the program? Starting it again begins at the first scene.'))return;busy=true;b.disabled=true;
     try{state={...state,...await api('program-run',{instance:state.instance,action:b.dataset.action,phone:b.dataset.phone?Number(b.dataset.phone):undefined})};live.dataset.markup='';renderLive();}
     catch(e){const status=$('program-run-error');if(status)status.textContent=e.message;else alert(e.message);}
@@ -74,7 +81,7 @@
    if(selection){
     if(state&&data.instance!==state.instance&&dirty){selectionStatus('The session changed. Reload this page before saving.');$('save-program-selection').disabled=true;return;}
     const [saved,setup]=await Promise.all([api('programs'),api('setup')]);library=saved.programs;if(setup.instance!==data.instance)throw Error('Session changing — reconnecting…');state={...data,maxPhones:setup.maxPhones};renderSelection();
-   }else{state=data;renderLive();}
+   }else{if(!library.length||Date.now()-(libraryAt||0)>15000){library=(await api('programs')).programs;libraryAt=Date.now();}state=data;renderLive();}
    if($('program-run-error'))$('program-run-error').textContent='';
   }catch(e){if(selection)selectionStatus(e.message);else if($('program-run-error'))$('program-run-error').textContent=e.message;}
  }

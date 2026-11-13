@@ -36,7 +36,13 @@
   .pp textarea { min-height:44px; resize:vertical; font-size:13px; }
   .pp a { color:var(--fg); font-size:12px; } .pp .over, .over { outline:2px dashed var(--ai); }
   .ok { color:var(--ok); } .no { color:var(--hot); }
+  .titleform { display:flex; gap:8px; align-items:center; margin:0 0 4px; }
+  .titleform input { flex:1; min-width:0; font-size:20px; font-weight:500; background:transparent; border-color:transparent; padding:6px 8px; margin-left:-8px; }
+  .titleform input:hover, .titleform input:focus { border-color:var(--line); background:#101010; }
+  .titleform span { white-space:nowrap; }
+  @media (max-width: 900px) { main { grid-template-columns:1fr; height:auto; } #list { max-height:34vh; border-right:0; border-bottom:1px solid var(--line); } header { flex-direction:column; align-items:flex-start; gap:4px; } }
 </style>
+<link rel="stylesheet" href="replay.css">
 </head>
 <body>
 <header><h1>Library</h1><span class="hint">Every session is a folder in <code>recordings/</code>. Import <code>exports/timeline.fcpxml</code> into Resolve or Premiere to get everything lined up.</span></header>
@@ -89,10 +95,13 @@ async function open(name) {
     ${x.path.endsWith('.wav') ? `<audio controls preload="none" src="${f(x.path)}"></audio>` : `<a href="${f(x.path)}" target="_blank" style="color:var(--dim)">open</a>`}</div>`).join('') || '<span class="hint">none</span>';
   const live = sessions.find((x) => x.name === name)?.live;
   $('detail').innerHTML = `
-    <h2>${esc(s.title || name)}</h2>
+    <form id="titleform" class="titleform">
+      <input id="title" placeholder="Name this session" value="${esc(s.title || '')}" aria-label="Session title" autocomplete="off">
+      <button id="savetitle" type="submit">Save</button><span id="titlestate" class="hint"></span>
+    </form>
     <div class="hint">${esc(new Date(s.start_iso).toLocaleString())}${s.end_iso ? ' → ' + esc(new Date(s.end_iso).toLocaleTimeString()) : ''} · ${esc(name)}</div>
+    <div id="replay"></div>
     <div class="row">
-      <input id="title" placeholder="Title for this session" value="${esc(s.title || '')}"><button id="savetitle">Save title</button>
       <button id="allfiles">All files →</button>
       <button id="delsess" style="color:#e88" ${live ? 'disabled title="This session is recording"' : ''}>Delete session…</button>
       <button id="openf">Open folder in Finder</button>
@@ -112,10 +121,21 @@ async function open(name) {
     <h3>Video</h3><div class="files">${group((x) => x.path.startsWith('video/'))}</div>
     <h3>Audio</h3><div class="files">${group((x) => x.path.startsWith('audio/'))}</div>
     <h3>Transcript</h3><pre>${esc(d.transcript || '—')}</pre>`;
-  const c = d.catalogue;
-  $('catstate').textContent = !c ? (live ? '— built when the session ends' : '— not built yet') : c.state === 'running' ? `— working: ${c.step}…` : c.state === 'failed' ? `— failed: ${c.error || ''}` : `— ready${c.utterances != null ? ` · ${c.utterances} lines` : ''}${c.notes?.length ? ' · ' + c.notes.join('; ') : ''}`;
+  const catText = (c) => !c ? (live ? '— built when the session ends' : '— not built yet') : c.state === 'running' ? `— working: ${c.step}…` : c.state === 'failed' ? `— failed: ${c.error || ''}` : `— ready${c.utterances != null ? ` · ${c.utterances} lines` : ''}${c.notes?.length ? ' · ' + c.notes.join('; ') : ''}`;
+  $('catstate').textContent = catText(d.catalogue);
+  // While the catalogue builds, only its status line updates; redrawing the page would wipe the title
+  // being typed and restart the player.
   clearTimeout(window.catTimer);
-  if (c && c.state === 'running') window.catTimer = setTimeout(() => current === name && open(name), 3000);
+  const poll = async () => {
+    if (current !== name) return;
+    const c = (await api('session?s=' + encodeURIComponent(name)).catch(() => ({}))).catalogue;
+    if (current !== name || !$('catstate')) return;
+    $('catstate').textContent = catText(c) + (c && c.state !== 'running' ? ' · reopen the session to see the new files' : '');
+    if (c && c.state === 'running') window.catTimer = setTimeout(poll, 4000);
+  };
+  if (d.catalogue && d.catalogue.state === 'running') window.catTimer = setTimeout(poll, 4000);
+  window.player?.destroy();
+  window.player = Replay.mount($('replay'), { name, session: s, catalogue: d.catalogue, transcript: d.transcript || '', f });
   $('recat').onclick = async () => { const r = await api('catalogue?s=' + encodeURIComponent(name)); if (r.error) alert(r.error); setTimeout(() => open(name), 500); };
   const upload = async (files, pid) => { for (const file of files) await fetch(`/api/upload?k=${KEY}&s=${encodeURIComponent(name)}&name=${encodeURIComponent(file.name)}${pid ? '&pid=' + pid : ''}`, { method: 'POST', body: file }); open(name); };
   const drop = (el, pid) => {
@@ -149,10 +169,21 @@ async function open(name) {
   $('allfiles').onclick = () => (location.href = `/files?k=${KEY}&s=${encodeURIComponent(name)}`);
   $('openf').onclick = () => api('open?s=' + encodeURIComponent(name));
   $('reexp').onclick = async () => { const r = await api('export?s=' + encodeURIComponent(name)); if (r.error) alert(r.error); open(name); };
-  $('savetitle').onclick = async () => { await api('title?s=' + encodeURIComponent(name), { method: 'POST', body: JSON.stringify({ title: $('title').value }) }); sessions = await api('sessions'); render(); };
+  $('titleform').onsubmit = async (e) => {
+    e.preventDefault();
+    $('titlestate').textContent = 'Saving…';
+    try {
+      const r = await api('title?s=' + encodeURIComponent(name), { method: 'POST', body: JSON.stringify({ title: $('title').value.trim() }) });
+      if (!r.ok) throw Error(r.error || 'not saved');
+      $('titlestate').textContent = 'Saved ✓';
+      sessions = await api('sessions'); render();
+    } catch (err) { $('titlestate').textContent = 'Could not save: ' + err.message; }
+  };
+  $('title').oninput = () => { $('titlestate').textContent = 'Press Enter to save'; };
 }
 load();
 </script>
+<script src="replay.js"></script>
 <script src="nav.js"></script>
 </body>
 </html>

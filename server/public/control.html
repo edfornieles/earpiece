@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Live desk — Mother</title>
 <link rel="stylesheet" href="programs.css">
 <style>
@@ -12,9 +13,21 @@
   header h1 { font-size:15px; font-weight:500; margin:0; }
   header nav { display:flex; gap:10px; align-items:center; }
   header a { color:var(--dim); text-decoration:none; font-size:13px; }
-  .rec { color:var(--hot); font-size:12px; letter-spacing:.08em; }
-  .rec::before { content:'●'; margin-right:6px; }
+  header .rec { color:var(--hot); font-size:12px; letter-spacing:.08em; }
+  header .rec::before { content:'●'; margin-right:6px; }
   main { display:grid; grid-template-columns: 1fr 330px; gap:18px; padding:18px 20px; }
+  .desk-room { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin:0 0 16px; }
+  .dr-head { display:flex; align-items:baseline; gap:12px; margin-bottom:10px; } .dr-head h2 { font-size:15px; margin:0; } .dr-head a { margin-left:auto; font-size:12px; color:var(--dim); }
+  .dr-body { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1.3fr) minmax(0,1.2fr); gap:14px; align-items:start; }
+  .dr-plan { width:100%; aspect-ratio:1/1; max-height:300px; } .dr-plan .room { fill:none; stroke:var(--dim); stroke-width:.03; }
+  .dr-plan .fp { fill:rgba(127,127,127,.18); stroke:rgba(127,127,127,.5); stroke-width:.015; } .dr-plan .fpl { font-size:.16px; fill:var(--dim); text-anchor:middle; dominant-baseline:middle; } .dr-plan .rug { fill:rgba(160,120,80,.10); stroke:rgba(160,120,80,.45); stroke-width:.012; stroke-dasharray:.05 .04; } .dr-plan .rugl { font-size:.13px; fill:var(--dim); opacity:.8; text-anchor:start; }
+  .dr-plan .pl { font-size:.2px; fill:var(--fg); }
+  .desk-room #cams { margin:8px 0 0; } .dr-sub { margin-top:16px; }
+  .dr-follow { width:100%; aspect-ratio:16/9; background:#000; border-radius:6px; }
+  .dr-label { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); } .dr-sees p { margin:6px 0 10px; font-size:13px; line-height:1.45; }
+  .dr-check { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; } .dr-changes { list-style:none; margin:0; padding:0; font-size:12.5px; line-height:1.5; } .dr-changes li { display:flex; gap:8px; align-items:baseline; } .dr-changes .undone { opacity:.55; text-decoration:line-through; } .dr-changes button, .dr-check button { font-size:12px; padding:2px 8px; }
+  .dr-look { display:flex; gap:10px; font-size:12.5px; line-height:1.4; } .dr-look img { width:84px; height:110px; object-fit:cover; border-radius:5px; flex:none; }
+  @media(max-width:1100px) { .dr-body { grid-template-columns:1fr 1fr; } .dr-sees { grid-column:1/-1; } }
   #cams { display:grid; grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); gap:12px; margin-bottom:16px; }
   #cams:empty { display:none; }
   .cam { position:relative; background:#000; border:1px solid var(--line); border-radius:10px; overflow:hidden; aspect-ratio:16/9; cursor:zoom-in; }
@@ -39,7 +52,7 @@
   .meter { height:5px; background:#222; border-radius:3px; overflow:hidden; }
   .meter i { display:block; height:100%; width:0; background:var(--ok); transition:width .05s; }
   .row { display:flex; gap:8px; }
-  button { font:inherit; border:1px solid var(--line); background:#222; color:var(--fg); border-radius:8px; padding:9px 12px; cursor:pointer; user-select:none; }
+  button { font:inherit; border:1px solid var(--line); background:#222; color:var(--fg); border-radius:8px; padding:9px 12px; cursor:pointer; user-select:none; -webkit-user-select:none; }
   button.grow { flex:1; }
   button.on { background:var(--hot); border-color:var(--hot); }
   button.aion { background:var(--ai); border-color:var(--ai); color:#0b0b0b; }
@@ -55,7 +68,84 @@
   .panel h3 { margin:0; font-size:12px; color:var(--dim); font-weight:500; text-transform:uppercase; letter-spacing:.06em; display:flex; justify-content:space-between; }
   details.shape label, #globalvoice label { display:flex; align-items:center; gap:8px; } details.shape input[type=range], #globalvoice input[type=range] { flex:1; width:auto; padding:0; }
   .row select { width:auto; min-width:0; } .row select.voice { flex:1 1 55%; } .row select.emotion { flex:1 1 45%; }
-  .tabs { display:flex; gap:6px; } .tabs button { padding:5px 9px; font-size:12px; } .tabs button.sel { background:var(--fg); color:#000; }
+  .tabs { display:flex; gap:6px; } .tabs button { padding:5px 9px; font-size:12px; } .tabs button.sel { background:var(--fg); color:var(--card, #fff); }
+  .console { border:1px solid var(--line); border-radius:7px; background:var(--card); overflow:hidden; }
+  .console-strip { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:12px 14px; border-bottom:1px solid var(--line); }
+  .console .cs-group { display:flex; align-items:center; gap:8px; }
+  .console .cs-label { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+  .console .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .console .seg button { border:0; border-radius:0; padding:7px 12px; background:transparent; }
+  .console .seg button.sel { background:var(--fg); color:var(--card, #fff); }
+  .console-strip { flex-direction:column; align-items:stretch; }
+  .console .cs-top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .console .voice-switch { flex:1; min-width:260px; } .console .voice-switch button { flex:1; padding:10px 14px; font-size:14px; }
+  .talkpad { display:flex; gap:8px; }
+  .talkpad .padbtn { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; padding:14px 8px; min-width:0; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:none; }
+  /* Touch screens (an iPad): no keyboard, so no key hints; bigger talk buttons. */
+  @media (hover:none) and (pointer:coarse) { .cs-keys, #cs-keysbtn, .talkpad kbd, button kbd { display:none !important; } .talkpad .padbtn { padding:20px 8px; } }
+  .talkpad .padbtn b { font-size:18px; font-weight:500; } .talkpad .padbtn small { font-size:11px; color:var(--dim); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .talkpad .padbtn kbd { margin:2px 0 0; } .talkpad #all { flex:1.3; }
+  .talkpad .padbtn.off { opacity:.45; } .talkpad .padbtn.on small, .talkpad .padbtn.on kbd { color:#000; }
+  .console .cs-mic { display:flex; align-items:center; gap:8px; flex:1; min-width:140px; }
+  .console .cs-mic .meter { flex:1; }
+  .console kbd { font:11px ui-monospace,monospace; border:1px solid var(--line); border-radius:4px; padding:0 4px; color:var(--dim); margin-left:4px; }
+  .console button.on, .console #all.on { background:var(--hot); color:#000; }
+  .console .desk-workspace { border:0; border-radius:0; grid-template-columns:minmax(230px,.55fr) minmax(320px,1.45fr); }
+  .console .cs-left { display:flex; flex-direction:column; border-right:1px solid var(--line); min-height:100%; }
+  .console #speakall { width:100%; }
+  .voicebox .vb-head { display:flex; align-items:center; gap:8px; } .voicebox .vb-head .cs-label { flex:1; }
+  .voicebox .vb-head button { padding:5px 10px; font-size:12px; }
+  .console .cs-keys { line-height:1.9; margin:0; } .console .cs-keys[hidden] { display:none; }
+  .console .cs-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .console .cs-head #micmodehint { flex:1 1 200px; font-size:12px; }
+  .console .cs-head .cs-mic { flex:0 1 220px; min-width:120px; }
+  .console .cs-small, .console #cs-mark { padding:5px 10px; font-size:12px; }
+  .console .cs-small.on { border-color:var(--fg); }
+  .console .cs-subhead { display:flex; align-items:baseline; gap:12px; padding:10px 14px 8px; border-bottom:1px solid var(--line); }
+  .console .cs-subhead .hint { font-size:11px; }
+  .cam-strip .cs-camhead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; } .cam-strip .cs-camhead .hint { font-size:12px; }
+  .voicebox { display:flex; flex-direction:column; gap:8px; border:1px solid var(--line); border-radius:7px; padding:10px 12px; }
+  .voicebox .sliders { gap:16px; } .voicebox .sliders label { flex:1; min-width:160px; margin:0; display:flex; align-items:center; gap:8px; }
+  .voicebox input[type=range] { flex:1; width:auto; padding:0; }
+  .cam-strip { display:grid; grid-template-columns:minmax(200px,280px) 1fr; gap:14px; align-items:start; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+  .cam-strip[hidden] { display:none; }
+  .cam-strip img { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:8px; cursor:zoom-in; display:block; }
+  .cs-camctl { display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .cs-views, .cs-aim { display:flex; flex-wrap:wrap; gap:6px; }
+  .cam-strip button { -webkit-user-select:none; user-select:none; touch-action:manipulation; }
+  .cs-aim button[data-dir] { min-width:44px; font-size:16px; }
+  .cs-view.here { border-color:var(--ok); color:var(--ok); }
+  .cs-view kbd { margin-left:6px; }
+  .cs-follow.on { border-color:var(--ok); color:var(--ok); }
+  @media (max-width:700px) { .cam-strip { grid-template-columns:1fr; } .talkpad { flex-wrap:wrap; } .talkpad .padbtn { flex:1 1 22%; } .talkpad #all { flex:1 1 100%; } .console .voice-switch { min-width:0; } .console-strip { padding:10px; } }
+  /* Narrower screens (an iPad upright): the phones become a row of tabs above the selected phone. */
+  @media (max-width:1250px) {
+    .console .desk-workspace { grid-template-columns:1fr; }
+    .console .cs-left { border-right:0; border-bottom:1px solid var(--line); min-height:0; }
+    .console #roster { display:flex; flex-direction:row; overflow-x:auto; gap:6px; padding:8px; }
+    .console .desk-workspace > * { min-width:0; }
+    .console #roster { max-height:none; }
+    .console #roster .phone-row { flex:0 0 230px; }
+    .console #roster .phone-row > span:nth-child(3) > * { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .voicebox .sliders { flex-wrap:wrap; } .voicebox .sliders label { min-width:0; flex:1 1 200px; }
+    .voicebox .vb-head { flex-wrap:wrap; }
+  }
+  /* Only narrow screens (an upright iPad, a phone): the site menu becomes a strip across the top. Laptops keep the side menu. */
+  @media (max-width:900px) {
+    html body.mother-shell { margin-left:0; padding-top:0; }
+    html body #sitenav { position:relative; width:auto; display:flex; flex-direction:row; flex-wrap:wrap; padding:10px 14px; gap:4px; border-right:0; border-bottom:1px solid var(--line); height:auto; }
+    html body #sitenav .brand { padding:0 12px 0 0; font-size:20px; width:auto; } html body #sitenav .nav-group, html body #sitenav .sp { display:none; } html body #sitenav a { padding:7px 8px; font-size:13px; }
+  }
+  .cs-label { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+  .phone-row .chip { font-size:10px; border:1px solid var(--line); border-radius:20px; padding:1px 7px; color:var(--dim); white-space:nowrap; }
+  .phone-row .chip.on { color:var(--ok); border-color:currentColor; }
+  .phone-row.talking { outline:2px solid var(--hot); outline-offset:-2px; }
+  .card .switch { text-align:left; } .card .switch[aria-checked=true] b { color:var(--ok); } .card .switch[aria-checked=false] b { color:var(--hot); }
+  .card .talk { font-weight:500; padding:12px; }
+  .card .startvisit { width:100%; margin:8px 0 4px; }
+  .phone-row > .face { width:34px; height:34px; border-radius:50%; object-fit:cover; flex:0 0 auto !important; background:var(--line); }
+  .phone-row > span:nth-child(3) { flex:1; min-width:0; }
+  .phone-row .face.none { display:inline-flex; align-items:center; justify-content:center; font-size:12px; color:var(--dim); }
   kbd { background:#222; border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:11px; }
   .hint { color:var(--dim); font-size:12px; }
   header .titlebox { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
@@ -84,7 +174,11 @@
   .arr .t b { font-weight:500; } .arr .t b span { color:#e3c45a; margin-right:6px; }
   .arr .row button, .arr .row select { padding:6px 9px; font-size:13px; white-space:nowrap; }
   #startsession { background:var(--hot); border-color:var(--hot); font-weight:600; }
-  .rec.standby { color:var(--dim); } .rec.standby::before { content:'○'; }
+  header .rec.standby { color:var(--dim); } header .rec.standby::before { content:'○'; }
+  .outside { font-size:12px; color:var(--dim); max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .outside b { color:var(--fg); font-weight:500; }
+  .privacy.on { background:var(--hot); border-color:var(--hot); color:#fff; }
+  #privatewall { position:fixed; inset:0; z-index:50; display:none; place-items:center; background:var(--bg); color:var(--fg); font-size:16px; text-align:center; padding:16px; }
   #standbybar { display:none; background:#1b1a14; border:1px solid #4a4220; border-radius:12px; padding:12px 16px; margin-bottom:16px; color:#e8dcb0; font-size:13px; }
   #standbybar b { color:#fff; font-weight:600; }
   body.standby #standbybar { display:block; }
@@ -119,13 +213,16 @@
 </style>
 </head>
 <body class="live-desk">
+<div id="privatewall"></div>
 <header>
   <div class="titlebox"><h1>Live desk <span id="mock" class="hint"></span></h1>
     <input id="stitle" placeholder="Name this session…" title="Session name — saved with the recordings"></div>
   <nav>
-    <button id="mark" title="Drop a marker on the timeline (M)">Mark <kbd>M</kbd></button>
     <button id="startsession" title="Start recording: cameras, room mics, phones — with everything you've prepared">● Start session</button>
     <button id="endsession" title="Stop recording and save; go back to standby to prepare the next session">End session</button>
+    <span id="outside" class="outside" title="People using Mother from outside the studio"></span>
+    <button id="peoplebtn" hidden title="Team: who can direct Mother from outside the studio">People</button>
+    <button id="privacy" class="privacy" hidden title="Shut out everyone outside the studio except owners">Private: off</button>
     <span class="rec" id="recstate">REC</span>
   </nav>
 </header>
@@ -134,10 +231,56 @@
     <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
     <div id="audio-status" role="status"><span id="audio-label">Desk sound is off. Enable it to listen to participants.</span><button id="enable-sound">Enable sound</button><button id="enable-mic">Enable microphone</button></div>
     <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
-    <div class="desk-heading"><h2>Participants</h2><span class="hint">Select a phone to direct</span></div>
-    <div class="desk-workspace"><div id="roster" aria-label="Phones"></div><div id="grid"></div></div>
-    <div class="desk-heading"><h2>Gallery</h2><span class="hint">Live camera feeds &amp; room microphones</span></div>
-    <div id="cams"></div><div id="room"></div>
+    <div id="desk-room" class="desk-room">
+      <div class="dr-head"><h2>Room</h2><span class="hint">plan · close-up · cameras · mics</span><span id="dr-state" class="hint"></span><a id="dr-open" target="earpiece_pages">Open Room ↗</a></div>
+      <div class="dr-body">
+        <svg id="dr-plan" class="dr-plan" aria-label="Floor plan with people"></svg>
+        <canvas id="dr-follow" class="dr-follow" aria-label="Close-up following the person"></canvas>
+        <div class="dr-sees"><div class="dr-label">Mother sees</div><p id="dr-perception"></p><div id="dr-look" class="dr-look"></div>
+          <div class="dr-label dr-sub">Furniture check</div><p class="dr-check"><span id="dr-check"></span> <button id="dr-check-now">Check now</button></p><ul id="dr-changes" class="dr-changes"></ul></div>
+      </div>
+      <div class="dr-label dr-sub">Cameras &amp; room microphones</div>
+      <div id="cams"></div><div id="room"></div>
+    </div>
+    <div class="desk-heading"><h2>Participants</h2></div>
+    <div class="console">
+      <div class="console-strip">
+        <div class="cs-head">
+          <span class="cs-label">Talk</span>
+          <span class="hint" id="micmodehint">They hear you directly, live.</span>
+          <div class="cs-mic" title="Your microphone"><span class="cs-label">Your mic</span><div class="meter"><i id="mymeter"></i></div></div>
+          <button id="cs-mark" title="Mark this moment in the recording (M). Shift-click to add a note.">Mark <kbd>M</kbd></button>
+          <button id="cs-keysbtn" class="cs-small" title="Show the keyboard shortcuts">Keys</button>
+        </div>
+        <div class="seg voice-switch" id="micmode" title="How they hear you when you hold to talk. V flips it."><button data-as="own" class="sel">Your voice</button><button data-as="voice">AI voice</button></div>
+        <div class="talkpad" id="talkpad" aria-label="Hold to talk">
+          <button id="all" class="padbtn"><b>All</b><small>everyone</small><kbd>space</kbd></button>
+        </div>
+        <input id="speakall" placeholder="Type a line for everyone → they hear it in the AI voice (Enter)">
+        <div class="hint cs-keys" id="cs-keys" hidden>Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone (several together) · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>⇧</kbd>+arrows move the camera · <kbd>⇧</kbd>+<kbd>1</kbd>… camera positions · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
+        <div class="cam-strip" id="camstrip" hidden>
+          <img id="cs-cam" alt="Turning camera, live" title="Click to enlarge">
+          <div class="cs-camctl">
+            <div class="cs-camhead"><span class="cs-label">Camera</span><span id="cs-camstate" class="hint"></span></div>
+            <div class="cs-views" id="cs-views"></div>
+            <div class="cs-aim">
+              <button data-dir="-1,0" title="Pan left (Shift+←)">◀</button><button data-dir="1,0" title="Pan right (Shift+→)">▶</button>
+              <button data-dir="0,-1" title="Tilt up (Shift+↑)">▲</button><button data-dir="0,1" title="Tilt down (Shift+↓)">▼</button>
+              <button id="cs-step" title="How far each nudge turns">Small steps</button>
+              <button id="cs-follow" class="cs-follow">Follow person</button>
+            </div>
+          </div>
+        </div>
+        <audio id="previewAudio"></audio>
+      </div>
+      <div class="cs-subhead"><span class="cs-label">Phones</span><span class="hint">Tap a phone to see it · hold its number above to talk</span></div>
+      <div class="desk-workspace">
+        <div class="cs-left">
+          <div id="roster" aria-label="Phones"></div>
+        </div>
+        <div id="grid"></div>
+      </div>
+    </div>
     <div id="peoplebox">
       <h3><span>Arrivals — registered, waiting</span><a id="peoplelink" target="earpiece_pages" style="color:var(--dim);font-size:12px;text-transform:none;letter-spacing:0">All registrations ↗</a></h3>
       <div id="arrivals"></div>
@@ -147,29 +290,6 @@
     </div>
   </section>
   <aside>
-    <div class="panel">
-      <h3>Your mic</h3>
-      <div class="meter"><i id="mymeter"></i></div>
-      <div class="tabs" id="micmode">
-        <button data-as="own" class="sel">My own voice</button>
-        <button data-as="voice">As the AI voice</button>
-      </div>
-      <div class="hint" id="micmodehint">They hear you directly, live.</div>
-      <button id="all">Hold to talk to everyone</button>
-      <input id="speakall" placeholder="Type a line → every phone hears it in the voice (Enter)">
-      <div class="hint">Hold <kbd>space</kbd> = everyone · hold <kbd>1</kbd>–<kbd>9</kbd> = phones 1–9 · use each card for higher slots · <kbd>L</kbd> latches talk-to-all · <kbd>M</kbd> drops a marker. Talking cuts the AI off; it carries on after you stop.</div>
-    </div>
-    <div class="panel">
-      <h3>Voice</h3>
-      <div id="globalvoice">
-        <div class="row"><select class="voice" style="flex:1"></select><select class="emotion"></select></div>
-        <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
-        <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
-      </div>
-      <div class="row"><button id="preview" class="grow">▶ Preview here</button></div>
-      <div class="hint">Changes here apply to every phone; each card can then differ. Emotion is only available on the expressive voices. Preview plays through your Mac, not the phones.</div>
-      <audio id="previewAudio"></audio>
-    </div>
     <div class="panel setup-links">
       <h3>Prepare &amp; connect</h3>
       <a data-page="/phones">Phones <span>Connect devices &amp; add slots ↗</span></a>
@@ -201,8 +321,18 @@ function paintRoster(p) {
   const row = $('roster').querySelector(`[data-phone="${p.id}"]`);
   if (!row) return;
   row.querySelector('strong').textContent = p.waiting ? 'Waiting for participant' : (p.name || 'Participant');
+  // The person given this phone: their registration photo and name, so the desk knows who is on which phone.
+  const who = !p.waiting && p.pid && folk.find((x) => x.pid === p.pid), face = row.querySelector('.face');
+  const src = who?.photo ? fileUrl(who.photo) : '';
+  if (src) { if (face.tagName !== 'IMG' || face.dataset.src !== src) face.outerHTML = `<img class="face" alt="" src="${esc(src)}" data-src="${esc(src)}">`; }
+  else if (face.tagName === 'IMG' || face.textContent !== (who?.name || p.name || '').trim().charAt(0).toUpperCase()) face.outerHTML = `<span class="face none">${esc((who?.name || (p.waiting ? '' : p.name) || '').trim().charAt(0).toUpperCase())}</span>`;
+  if (who?.name && !p.waiting) row.querySelector('strong').textContent = (who.number ? '#' + who.number + ' ' : '') + who.name;
   row.querySelector('small').textContent = p.status?.textContent || 'Connected';
   row.classList.toggle('warning', !!p.status?.classList.contains('hot'));
+  const chip = row.querySelector('.chip.ai'); if (chip) { chip.hidden = !p.connected; chip.classList.toggle('on', p.mode === 'auto'); chip.textContent = p.mode === 'auto' ? 'AI on' : 'AI off'; }
+  row.classList.toggle('talking', holding.has(p.id) || holding.has(0));
+  const pad = $('talkpad').querySelector(`[data-phone="${p.id}"]`);
+  if (pad) { pad.querySelector('small').textContent = !p.connected ? 'not connected' : p.waiting ? 'waiting' : (who?.name || p.name || 'participant'); pad.classList.toggle('off', !p.connected); }
 }
 let ctx, mic, ws, myLevel = 0, talkTarget = null, latched = false, info = null, voices = [], micAs = 'own';
 const people = new Map();
@@ -262,40 +392,43 @@ function renderGrid(list) {
   for (const p of people.values()) p.connected = false;
   for (const { id, name, pid, mode, waiting } of list) { const p = person(id); Object.assign(p, { name, pid, mode, waiting, connected: true }); }
   const grid = $('grid'); grid.innerHTML = ''; $('roster').innerHTML = '';
+  for (const b of $('talkpad').querySelectorAll('[data-phone]')) b.remove();
   selectedPhone = Math.min(selectedPhone, MAX) || 1;
   for (let id = 1; id <= MAX; id++) {
     const p = people.get(id);
     const el = document.createElement('div'); el.dataset.phone = id; el.hidden = id !== selectedPhone;
     const row = document.createElement('button'); row.className = 'phone-row'; row.dataset.phone = id;
     row.setAttribute('aria-pressed', String(id === selectedPhone));
-    row.innerHTML = `<span class="phone-index">${String(id).padStart(2, '0')}</span><span><strong>Phone ${id}</strong><small>Not connected</small></span><span class="connection-dot"></span>`;
+    row.innerHTML = `<span class="phone-index">${String(id).padStart(2, '0')}</span><span class="face none"></span><span><strong>Phone ${id}</strong><small>Not connected</small></span><span class="chip ai" hidden>AI</span><span class="connection-dot"></span>`;
     row.classList.toggle('connected', !!p?.connected); row.onclick = () => selectPhone(id); $('roster').appendChild(row);
+    const pad = document.createElement('button'); pad.className = 'padbtn'; pad.dataset.phone = id;
+    pad.innerHTML = `<b>${id}</b><small>${p?.connected ? 'connected' : 'not connected'}</small>${id <= 9 ? `<kbd>${id}</kbd>` : ''}`;
+    pad.classList.toggle('off', !p?.connected); bindHold(pad, id); $('talkpad').appendChild(pad);
     if (!p || !p.connected) { el.className = 'card empty'; el.textContent = `Phone ${id} — not connected`; grid.appendChild(el); p && (p.el = null); continue; }
     el.className = 'card';
     el.innerHTML = `
       <h2><span><span class="who"></span><span class="badge relb"></span></span> <small>Phone ${id}</small></h2>
       <div class="status"></div>
       <div class="nextup"></div>
-      <div class="meter"><i></i></div>
+      <div class="meter" title="Their microphone"><i></i></div>
+      <button class="startvisit primary" hidden>Start visit</button>
       <div class="row">
-        <button class="grow talk">Hold to talk</button>
-        <button class="listen ${p.listening ? '' : 'muted'}">Listen</button>
+        <button class="grow aimode switch" role="switch"></button>
+        <button class="nudge" title="Mother gives its next direction now">Next direction <kbd>N</kbd></button>
+        <button class="listen ${p.listening ? '' : 'muted'}" title="Hear this phone's microphone on the desk">🎧 Listen</button>
       </div>
-      <div class="row">
-        <button class="grow aimode"></button>
-        <button class="nudge">Next direction</button>
+      <input class="speak" placeholder="Type a line → they hear it in the AI voice (Enter)">
+      <input class="instruct" placeholder="Private note to the AI (it rephrases it), then Enter">
+      <div class="shape voicebox"><div class="vb-head"><span class="cs-label">AI voice for this phone</span><button class="vpreview" title="Hear this voice on this computer">▶ Preview</button><button class="vall" title="Give every phone this voice, emotion, pitch and speed">Use for every phone</button></div>
+        <div class="row" style="align-items:center"><select class="voice" style="flex:1" title="Voice"></select><select class="emotion" title="Emotion"></select></div>
+        <div class="row sliders"><label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
+        <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label></div>
       </div>
-      <input class="speak" placeholder="Type a line → they hear it in the voice (Enter)">
-      <div class="row" style="align-items:center"><select class="voice" style="flex:1" title="Voice"></select><select class="emotion" title="Emotion"></select></div>
-      <details class="shape"><summary class="hint">Pitch &amp; speed</summary>
-        <label class="hint">Pitch <input type="range" class="pitch" min="-8" max="8" step="1"> <span class="pv"></span></label>
-        <label class="hint">Speed <input type="range" class="speed" min="0.6" max="1.6" step="0.05"> <span class="sv"></span></label>
-      </details>
-      <input class="instruct" placeholder="Private note to the AI (it rephrases), then Enter">
       <div class="log"></div>
       <button class="quiet endp">End participant → ready for next</button>`;
     p.el = el; p.meter = el.querySelector('.meter i'); p.log = el.querySelector('.log'); p.status = el.querySelector('.status');
-    bindHold(el.querySelector('.talk'), id);
+    paintMicAs();
+    el.querySelector('.startvisit').onclick = () => ws.send(JSON.stringify({ type: 'visitStart', phone: id }));
     el.querySelector('.listen').onclick = (e) => { p.listening = !p.listening; if (p.gain) p.gain.gain.value = p.listening ? 1 : 0; e.target.classList.toggle('muted', !p.listening); };
     el.querySelector('.aimode').onclick = () => ws.send(JSON.stringify({ type: 'mode', id, mode: p.mode === 'auto' ? 'off' : 'auto' }));
     el.querySelector('.nudge').onclick = () => ws.send(JSON.stringify({ type: 'nudge', id }));
@@ -325,7 +458,10 @@ function paintState(p) {
   const b = p.el.querySelector('.aimode');
   const scripted=programView && Object.values(programView.assignments || {}).includes(p.id);
   b.disabled=!!scripted;
-  b.textContent = scripted ? 'Following selected program' : p.mode === 'auto' ? 'AI directing — on' : 'AI off';
+  b.innerHTML = scripted ? 'Following selected program' : `Auto directing <b>${p.mode === 'auto' ? 'ON' : 'OFF'}</b> <kbd>A</kbd>`;
+  b.setAttribute('aria-checked', String(p.mode === 'auto'));
+  b.title = p.mode === 'auto' ? 'Mother listens and directs by itself. Click (or A) to stop it and direct by hand.' : 'Mother stays quiet unless you make it speak. Click (or A) to let it direct.';
+
   p.el.querySelector('.nudge').textContent=scripted?'Continue program cue':'Next direction';
   b.classList.toggle('aion', p.mode === 'auto');
   const s = p.st; let txt = '', cls = 'status';
@@ -341,6 +477,9 @@ function paintState(p) {
   else if (s.listening) { txt = 'participant speaking…'; cls += ' ok'; }
   else txt = p.mode === 'auto' ? 'AI listening' : 'AI off — you are directing';
   p.status.textContent = txt; p.status.className = cls; paintRoster(p);
+  // A waiting phone with nobody queued can still start a visit (practice, a walk-in); in standby, recording comes first.
+  const sv = p.el.querySelector('.startvisit');
+  if (sv) { sv.hidden = !p.waiting || !!nextFor(p.id); sv.disabled = !!info?.standby; sv.textContent = info?.standby ? 'Start visit (press Start session first)' : 'Start visit'; }
 }
 
 function appendLine(p, l, replay) {
@@ -355,29 +494,65 @@ function appendLine(p, l, replay) {
   if (atBottom || replay) p.log.scrollTop = p.log.scrollHeight;
 }
 
-function setTalk(target) {
-  if (target !== null && (!ws || ws.readyState !== 1)) return;
-  if (target !== null && (!mic || ctx?.state !== 'running')) { latched = false; toast('Enable the desk microphone first'); return; }
-  if (talkTarget === target) return;
-  if (talkTarget !== null && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'talk', target: talkTarget, on: false, as: micAs }));
-  talkTarget = target;
-  if (target !== null) ws.send(JSON.stringify({ type: 'talk', target, on: true, as: micAs }));
-  $('all').classList.toggle('on', target === 0);
+// Everything held right now (0 = everyone, else phone numbers): hold 2 and 3 together and both hear you.
+// The server gets the whole set; a new key joining a hold adds its phone without restarting what you are saying.
+const holding = new Set();
+function syncTalk() {
+  const want = [...holding];
+  if (want.length && (!ws || ws.readyState !== 1)) return;
+  if (want.length && (!mic || ctx?.state !== 'running')) { holding.clear(); latched = false; toast('Enable the desk microphone first'); }
+  const was = talkTarget;
+  talkTarget = holding.size ? (holding.has(0) ? 0 : want[0]) : null;
+  if (ws?.readyState === 1) {
+    if (holding.size) ws.send(JSON.stringify({ type: 'talk', target: [...holding], on: true, as: micAs }));
+    else if (was !== null) ws.send(JSON.stringify({ type: 'talk', target: was, on: false, as: micAs }));
+  }
+  for (const b of document.querySelectorAll('.padbtn')) b.classList.toggle('on', holding.has(b.id === 'all' ? 0 : Number(b.dataset.phone)));
+  for (const p of people.values()) paintRoster(p);
 }
-function releaseTalk() {
-  latched = false; setTalk(null);
-  for (const btn of document.querySelectorAll('.talk, #all')) btn.classList.remove('on');
-}
+const holdOn = (id) => { holding.add(id); syncTalk(); };
+const holdOff = (id) => { if (id === 0 && latched) return; if (holding.delete(id)) syncTalk(); };
+function setTalk(target) { holding.clear(); if (target !== null) holding.add(target); syncTalk(); }
+function releaseTalk() { latched = false; holding.clear(); syncTalk(); }
 window.addEventListener('blur', releaseTalk);
 window.addEventListener('pagehide', releaseTalk);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') releaseTalk(); });
+// Why the browser would not give us the microphone, in words the director can act on.
+function micProblem(error) {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia)
+    return 'This browser only allows the microphone on a secure page: open the https://earpiece.edfornieles.com link (or localhost on this Mac).';
+  if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError')
+    return /iPad|iPhone|Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1
+      ? 'Safari has blocked the microphone for this page. Tap aA in the address bar → Website Settings → Microphone → Allow, then reload.'
+      : 'The browser has blocked the microphone for this page. Click the icon at the left of the address bar, set Microphone to Allow, then reload.';
+  if (error?.name === 'NotFoundError' || error?.name === 'OverconstrainedError') return 'No microphone was found. Plug one in, or pick one in your computer’s sound settings.';
+  if (error?.name === 'NotReadableError') return 'Another app is using the microphone. Close it, then try again.';
+  return 'Microphone unavailable: ' + (error?.message || 'unknown problem') + '.';
+}
+// Start talking to a phone (0 = everyone). With the microphone not open, or the desk's sound paused, open or
+// resume it first (the press or key lets the browser show its permission prompt), then talk if still held.
+function beginTalk(target, stillHeld, btn) {
+  const go = () => holdOn(target);
+  if (mic && ctx?.state === 'running') return go();
+  enableMicrophone().then(() => stillHeld() ? go() : toast('Microphone on. Hold and speak.'),
+    (error) => { toast('⚠ ' + micProblem(error)); audioStatus(micProblem(error)); });
+}
 function bindHold(btn, target) {
-  const down = (e) => { e.preventDefault(); setTalk(target); btn.classList.toggle('on', talkTarget === target); };
-  const up = () => { if (!latched || target !== 0) setTalk(null); btn.classList.remove('on'); };
+  let held = false;
+  const down = (e) => { e.preventDefault(); held = true; beginTalk(target, () => held, btn); };
+  const up = () => { if (!held) return; held = false; holdOff(target); };
   btn.addEventListener('pointerdown', down); btn.addEventListener('pointerup', up); btn.addEventListener('pointerleave', up); btn.addEventListener('pointercancel', up);
 }
 function mark() { const t = prompt('Marker label (optional):', '') ; if (t === null) return; ws.send(JSON.stringify({ type: 'mark', text: t || 'Mark' })); }
-$('mark').onclick = mark;
+
+// A marker at this moment, no questions asked (the key and the console button): naming it would cost the moment.
+function quickMark() { ws.send(JSON.stringify({ type: 'mark', text: 'Mark' })); toast('Marked ' + new Date().toLocaleTimeString()); }
+$('cs-mark').onclick = (e) => (e.shiftKey ? mark() : quickMark());
+// The keyboard shortcuts stay folded away until asked for (remembered on this screen).
+const showKeys = (on) => { $('cs-keysbtn').classList.toggle('on', on); $('cs-keys').hidden = !on; try { localStorage.setItem('mother-keys', on ? '1' : '0'); } catch {} };
+$('cs-keysbtn').onclick = () => showKeys($('cs-keys').hidden);
+let keysWanted = false; try { keysWanted = localStorage.getItem('mother-keys') === '1'; } catch {}
+showKeys(keysWanted);
 $('endsession').onclick = () => { if (confirm('End this session? Recording stops, everything is saved and exported, and you go back to standby to prepare the next one. Phones reconnect by themselves.')) ws.send(JSON.stringify({ type: 'endSession' })); };
 $('startsession').onclick = () => { if (confirm(`Start recording${$('stitle').value ? ' “' + $('stitle').value + '”' : ''} now?`)) { $('stitle').blur(); ws.send(JSON.stringify({ type: 'startSession' })); } };
 function applyMode() {
@@ -389,13 +564,24 @@ function applyMode() {
   for (const b of document.querySelectorAll('.arr .add')) b.textContent = sb ? 'Add to next session' : 'Add';
   for (const p of people.values()) paintNext(p);
 }
-for (const b of document.querySelectorAll('#micmode button')) b.onclick = () => {
-  micAs = b.dataset.as;
-  document.querySelectorAll('#micmode button').forEach((x) => x.classList.toggle('sel', x === b));
+// How the participant hears the director: their own voice live, or the words spoken in the phone's AI voice.
+// One choice for the whole desk, shown beside every talk button, and remembered on this computer.
+function paintMicAs() {
+  for (const b of document.querySelectorAll('#micmode button, .voiceas button')) b.classList.toggle('sel', b.dataset.as === micAs);
   $('micmodehint').textContent = micAs === 'voice'
     ? 'They hear what you said, transcribed and spoken in each phone’s AI voice, about 2 s after you let go.'
     : 'They hear you directly, live.';
-};
+  for (const b of document.querySelectorAll('.padbtn')) b.title = micAs === 'voice' ? 'Hold, speak, let go: they hear your words in the AI voice' : 'Hold and speak: they hear your own voice, live';
+}
+function setMicAs(as) {
+  micAs = as === 'voice' ? 'voice' : 'own';
+  try { localStorage.setItem('mother-mic-as', micAs); } catch {}
+  paintMicAs();
+  toast(micAs === 'voice' ? 'They will hear your words in the AI voice' : 'They will hear your own voice');
+}
+try { const saved = localStorage.getItem('mother-mic-as'); if (saved) micAs = saved === 'voice' ? 'voice' : 'own'; } catch {}
+document.addEventListener('click', (e) => { const b = e.target.closest('#micmode button, .voiceas button'); if (b) setMicAs(b.dataset.as); });
+paintMicAs();
 
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?role=control&k=${KEY}`);
@@ -411,7 +597,7 @@ function connect() {
     if(m.type==='program'){programView=m.run;for(const p of people.values())paintState(p);}
     if (m.type === 'phonesChanged') { MAX = m.maxPhones; renderGrid(lastList); renderFolk(); renderArrivals(); }
     if (m.type === 'participants') { renderGrid(m.list); renderFolk(); renderArrivals(); }
-    if (m.type === 'people') { folk = m.list; renderFolk(); for (const p of people.values()) paintNext(p); renderArrivals(); }
+    if (m.type === 'people') { folk = m.list; renderFolk(); for (const p of people.values()) { paintNext(p); paintRoster(p); } renderArrivals(); }
     if (m.type === 'session') renderSession(m);
     if (m.type === 'registry' || m.type === 'people') allRegs = null;   // search reloads the full list next time
     if (m.type === 'state') { const p = person(m.id); Object.assign(p, { mode: m.mode, waiting: m.waiting, name: m.name, voice: m.voice, style: m.style, st: m }); paintState(p); }
@@ -424,9 +610,33 @@ function connect() {
     if (m.type === 'sessionStarting') toast('Starting the session — recording in a few seconds…');
     if (m.type === 'sessionEnding') { toast('Saving this session — a new one starts in a few seconds…'); for (const p of people.values()) { p.lines = []; } }
     if (m.type === 'marked') toast(`Marker at ${m.t}s: ${m.text}`);
+    if (m.type === 'access') paintAccess(m);
 
   };
-  ws.onclose = () => { releaseTalk(); setTimeout(connect, 1000); };
+  ws.onclose = (e) => {
+    releaseTalk();
+    // Shut out by privacy mode (or not on the list): say so, and look again now and then.
+    const wall = $('privatewall');
+    if (e.code === 4003) { wall.textContent = e.reason === 'private' ? 'Mother is private right now. This page will reconnect when Ed opens it again.' : 'You are not on the list of people who can use Mother.'; wall.style.display = 'grid'; return setTimeout(connect, 15000); }
+    wall.style.display = 'none'; setTimeout(connect, 1000);
+  };
+}
+// Team: owners and the studio desk get a People button that opens the Team page.
+function paintPeople(a) { $('peoplebtn').hidden = !a.canManage; }
+$('peoplebtn').onclick = () => window.open('/team' + (KEY ? '?k=' + KEY : ''), 'earpiece_pages');
+// Privacy mode and who is here from outside the studio. The studio's own desk and owners can switch privacy.
+function paintAccess(a) {
+  $('privatewall').style.display = 'none';
+  paintPeople(a);
+  const btn = $('privacy'); btn.hidden = !a.canPrivacy;
+  btn.classList.toggle('on', a.privacy); btn.textContent = a.privacy ? 'Private: ON' : 'Private: off';
+  btn.onclick = () => {
+    const others = a.people.filter((p) => !p.owner).map((p) => p.name);
+    if (!a.privacy && others.length && !confirm(`Shut out ${others.join(', ')} and everyone else outside the studio?`)) return;
+    ws.send(JSON.stringify({ type: 'privacy', on: !a.privacy }));
+  };
+  const names = a.people.map((p) => p.name + (p.owner ? ' (owner)' : ''));
+  $('outside').innerHTML = a.privacy ? 'Nobody outside can get in' + (names.length ? ' · here: <b>' + names.map((n) => n.replace(/[&<>]/g, '')).join(', ') + '</b>' : '') : names.length ? 'Outside: <b>' + names.map((n) => n.replace(/[&<>]/g, '')).join(', ') + '</b>' : '';
 }
 
 async function loadInfo() {
@@ -650,14 +860,15 @@ function wireVoice(root, id, p) {
 }
 fetch('/api/voices?k=' + KEY).then((r) => r.json()).then((v) => {
   voices = v.voices;
-  wireVoice($('globalvoice'), 0, { voice: v.byPhone[1] || v.default, style: v.styles[1] });
   for (const p of people.values()) if (p.el) wireVoice(p.el, p.id, p);
 });
-$('preview').onclick = () => {
-  const g = $('globalvoice'), a = $('previewAudio');
-  const q = new URLSearchParams({ k: KEY, voice: g.querySelector('.voice').value, emotion: g.querySelector('.emotion').value || '', pitch: g.querySelector('.pitch').value, speed: g.querySelector('.speed').value, r: Date.now() });
-  a.src = '/api/preview?' + q; a.play();
-};
+// A phone's voice box: hear it here, or give every phone the same voice.
+const voiceOf = (root) => ({ voice: root.querySelector('.voice').value, emotion: root.querySelector('.emotion').value || '', pitch: Number(root.querySelector('.pitch').value), speed: Number(root.querySelector('.speed').value) });
+document.addEventListener('click', (e) => {
+  const box = e.target.closest('.voicebox'); if (!box) return;
+  if (e.target.closest('.vpreview')) { const v = voiceOf(box), a = $('previewAudio'); a.src = '/api/preview?' + new URLSearchParams({ k: KEY, ...v, r: Date.now() }); a.play(); }
+  if (e.target.closest('.vall')) { ws.send(JSON.stringify({ type: 'voice', id: 0, ...voiceOf(box) })); toast('Every phone now uses ' + voiceOf(box).voice); }
+});
 $('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim() })); e.target.value = ''; } e.stopPropagation(); };
 $('speakall').onkeyup = (e) => e.stopPropagation();
 
@@ -685,7 +896,8 @@ async function enableSound() {
   await Promise.all([soundSetup, resumed]); audioStatus();
 }
 async function enableMicrophone() {
-  if (micSetup) return micSetup;
+  // Already open, but the browser may have paused the desk's sound (tab in the background, a reload): resume it.
+  if (micSetup) return micSetup.then(() => enableSound());
   micSetup = (async () => {
     await enableSound();
     mic = await openMic(ctx);
@@ -704,7 +916,9 @@ async function enableMicrophone() {
   try { await micSetup; } catch (error) { micSetup = null; throw error; }
 }
 $('enable-sound').onclick = () => enableSound().catch(() => audioStatus('Sound could not start. Try enabling sound again.'));
-$('enable-mic').onclick = () => enableMicrophone().catch(() => audioStatus('Microphone unavailable. Allow microphone access in your browser, then try again.'));
+// Safari (iPad) only starts sound from a completed tap, and pauses it when the screen sleeps: any tap brings it back.
+for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => { if (ctx && ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().then(() => audioStatus(), () => {}); }, { passive: true, capture: true });
+$('enable-mic').onclick = () => enableMicrophone().catch((error) => audioStatus(micProblem(error)));
 bindHold($('all'), 0);
 connect(); loadInfo().catch(() => toast('Could not load desk settings. Reconnecting…'));
 (function draw() {
@@ -716,20 +930,30 @@ connect(); loadInfo().catch(() => toast('Could not load desk settings. Reconnect
 })();
 
 const typing = () => ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+const keysDown = new Set();
 document.addEventListener('keydown', (e) => {
   if (e.repeat || !ws || typing()) return;
-  if (e.code === 'Space') { e.preventDefault(); setTalk(0); }
-  if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) setTalk(Number(e.code.slice(5)));
-  if (e.code === 'KeyL') { latched = !latched; setTalk(latched ? 0 : null); }
-  if (e.code === 'KeyM') { e.preventDefault(); mark(); }
+  if (e.shiftKey && window.deskCamera?.key(e)) return;   // Shift + arrows / 1–9: the camera (desk-camera.js)
+  const held = () => keysDown.has(e.code);
+  if (e.code === 'Space') { e.preventDefault(); keysDown.add(e.code); beginTalk(0, held, $('all')); }
+  if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) { keysDown.add(e.code); beginTalk(Number(e.code.slice(5)), held); }
+  if (e.code === 'KeyL') { latched = !latched; latched ? holdOn(0) : (holding.delete(0), syncTalk()); }
+  if (e.code === 'KeyM') { e.preventDefault(); quickMark(); }
+  if (e.code === 'KeyV') setMicAs(micAs === 'voice' ? 'own' : 'voice');
+  const sel = people.get(selectedPhone), connected = sel?.el;
+  if (e.code === 'KeyA' && connected) ws.send(JSON.stringify({ type: 'mode', id: selectedPhone, mode: sel.mode === 'auto' ? 'off' : 'auto' }));
+  if (e.code === 'KeyN' && connected) ws.send(JSON.stringify({ type: 'nudge', id: selectedPhone }));
+  if (e.code === 'ArrowDown' || e.code === 'ArrowUp') { e.preventDefault(); selectPhone(((selectedPhone - 1 + (e.code === 'ArrowDown' ? 1 : MAX - 1)) % MAX) + 1); }
   if (e.code === 'Escape') $('zoom').click();
 });
 document.addEventListener('keyup', (e) => {
+  keysDown.delete(e.code);
   if (!ws || typing()) return;
-  if (e.code === 'Space' || /^Digit[1-9]$/.test(e.code)) setTalk(latched ? 0 : null);
+  if (e.code === 'Space') holdOff(0);
+  if (/^Digit[1-9]$/.test(e.code)) holdOff(Number(e.code.slice(5)));
 });
 </script>
-<script src="program-session.js"></script>
+<script src="follow-core.js"></script><script src="desk-room.js"></script><script src="desk-camera.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>
 <script src="nav.js"></script>
 </body>
 </html>

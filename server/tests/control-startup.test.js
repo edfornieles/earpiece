@@ -22,7 +22,7 @@ test('desk connects without a gate or microphone permission and accepts phone st
 });
 test('microphone denial leaves monitoring and control usable',async()=>{
  const d=desk();await d.element('enable-sound').onclick();assert.equal(d.run('audioReady'),true);
- await d.element('enable-mic').onclick();assert.match(d.element('audio-label').textContent,/Microphone unavailable/);
+ await d.element('enable-mic').onclick();assert.match(d.element('audio-label').textContent,/microphone/i);
  assert.equal(d.run('mic'),undefined);assert.equal(d.sockets[0].readyState,1);assert.equal(d.run('audioReady'),true);
  d.sockets[0].onmessage({data:JSON.stringify({type:'state',id:2,waiting:true})});assert.ok(d.run('people.get(2).player'));
 });

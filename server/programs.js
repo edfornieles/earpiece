@@ -77,7 +77,7 @@ class ProgramRunner {
     if (!['running','paused'].includes(this.status)) return;
     for(const r of this.roles.filter(r=>phone==null || r.phone===phone)) {
       if (r.status==='complete') continue;
-      r.epoch++; r.deadline=null; r.status=automatic?'interrupted':'paused';r.reason=reason;r.exchanges=0;
+      r.epoch++; r.deadline=null; r.status=automatic?'interrupted':'paused';r.reason=reason;r.exchanges=0;r.autoHold=/disconnected|unavailable/i.test(reason);r.heldAt=reason==='participant interrupted'?Date.now():0;
       this.h.cancel(r.phone); this.h.event('program_hold',{role:r.id,reason});
     } this.emit();
   }
@@ -129,6 +129,20 @@ class ProgramRunner {
         r.status='interventionReply';r.deadline=Date.now()+45000;this.emit();
       }catch(error){if(this.valid(r,epoch))this.attention(r,error);}return;
     }
+    // Spoken to during a timed pause: answer briefly, or move on if they are done.
+    if(r.status==='silence' && !director && this.h.decide) {
+      const until=r.deadline; r.status='thinking'; r.deadline=null; this.emit();
+      try {
+        const decision=await this.h.decide(phone,text,{...this.current(r),program:this.selection.snapshot,director,exchanges:r.exchanges,duringSilence:true});
+        if(!this.valid(r,epoch))return;
+        r.reason=decision.reason||'';
+        if(decision.action==='resume'){this.advance(r);return;}
+        if(decision.action==='respond'&&decision.text){r.status='speaking';this.emit();await this.h.perform(phone,{type:'speak',text:decision.text,adapt:false},{...this.current(r),program:this.selection.snapshot});if(!this.valid(r,epoch))return;}
+        if(Date.now()>=until){this.advance(r);return;}
+        r.status='silence';r.deadline=until;this.emit();
+      }catch(error){if(this.valid(r,epoch)){r.status='silence';r.deadline=until;this.emit();}}
+      return;
+    }
     if(r.status!=='reply')return;
     r.deadline=null;
     if(cue.type==='reply'){this.advance(r);return;}
@@ -151,6 +165,10 @@ class ProgramRunner {
       if(r.status==='complete')continue;
       if(this.h.visit(r.phone)!==r.visit){if(r.status!=='attention')this.attention(r,Error('Participant changed. Stop and restart the program.'));continue;}
       if(!this.h.ready(r.phone)){if(!['paused','attention','interrupted'].includes(r.status))this.hold(r.phone,'Phone or earpiece unavailable');continue;}
+      // Cut off by a noise but no words followed: carry on with the line rather than waiting forever.
+      if(r.status==='interrupted'&&r.heldAt&&now-r.heldAt>8000){r.epoch++;r.status='ready';r.reason='';r.exchanges=0;this.h.event('program_auto_resume',{role:r.id,phone:r.phone,why:'no words after interruption'});this.emit();continue;}
+      // The phone dropped and came back: repeat the cue it was on, without waiting for the desk.
+      if(r.status==='paused'&&r.autoHold){r.autoHold=false;r.epoch++;r.status='ready';r.reason='';r.exchanges=0;this.h.event('program_auto_resume',{role:r.id,phone:r.phone});this.emit();}
       if(r.deadline && now>=r.deadline){if(r.status==='silence')this.advance(r);else this.attention(r,Error('No reply yet. Continue or repeat this cue from the desk.'));}
       const {scene,cue}=this.current(r);
       if(!scene){r.status='complete';this.emit();continue;}

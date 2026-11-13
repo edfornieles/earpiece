@@ -50,6 +50,10 @@ keys.monitor = process.env.MONITOR_KEY || keys.monitor || crypto.randomBytes(4).
 keys.join = process.env.JOIN_KEY || keys.join || crypto.randomBytes(4).toString('hex');            // registration: can only sign up
 if (!process.env.PHONE_KEY) fs.writeFileSync(KEYS_FILE, JSON.stringify({ phone: keys.phone, control: keys.control, monitor: keys.monitor, join: keys.join }));
 const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control, MONITOR_KEY = keys.monitor, JOIN_KEY = keys.join;
+// Who may come in from outside the studio (logins through Cloudflare Access), and privacy mode. See access.js.
+const { Access } = require('./access');
+const access = new Access(path.join(__dirname, '.access.json')); access.start();
+const remoteStreams = new Map();   // camera streams watched from outside the studio -> watched by an owner?
 
 // Voice choices persist between runs.
 const SETTINGS_FILE = path.join(__dirname, '.settings.json');
@@ -291,6 +295,9 @@ saveSession();
 const NULL_STREAM = { write() {}, end(cb) { if (cb) cb(); } };
 const events = STANDBY ? NULL_STREAM : fs.createWriteStream(path.join(SESSION_DIR, 'events.jsonl'), { flags: 'a' });
 const transcriptFile = STANDBY ? NULL_STREAM : fs.createWriteStream(path.join(SESSION_DIR, 'transcript.txt'), { flags: 'a' });
+const lastPerception = new Map(), lastLook = new Map(), connLog = [], phoneTelemetry = new Map();
+const diagFile = fs.createWriteStream(path.join(SESSION_DIR, 'diagnostics.jsonl'), { flags: 'a' });
+function diag(type, data) { const e = { at: new Date().toISOString(), type, ...data }; diagFile.write(JSON.stringify(e) + '\n'); return e; }
 function logEvent(type, data = {}) { events.write(JSON.stringify({ t: clock(), type, ...data }) + '\n'); }
 
 class WavTrack {
@@ -337,9 +344,146 @@ session.room_mics = roomCfg ? roomCfg.names : [];
 saveSession();
 
 const roomObserver=new RoomObserver(path.join(__dirname,'.room.json'),{
-  cameras:()=>cameras,maxPhones:()=>MAX_PHONES,event:(type,data)=>logEvent(type,data)
+  cameras:()=>cameras,maxPhones:()=>MAX_PHONES,event:(type,data)=>{
+    logEvent(type,data);
+    if(type==='room_activity'&&['moving','appears seated'].includes(data.label)){
+      for(const participant of sessions.values())if(participant.live&&participantTrack(participant.id).me?.id===data.track)
+        participant.live.event(data.label==='moving'?'Camera: the participant has started moving.':'Camera: the participant appears to have sat down.');
+    }
+    if(type==='room_object_moved'&&!data.from){   // newly placed on the map (moves are announced where they are saved, below)
+      const name=String(data.footprint||'').trim();
+      if(name)roomChanged(`${name} has been added to your map: ${data.to}.`);
+    }
+  }
 });
 setInterval(()=>roomObserver.tick(),1000);
+// Mother's picture of the room (world.js): the plan in words, what is around each person, a map, and a
+// memory of what moved. Built once here and shared by every phone.
+const { World, briefing, relative, mapPng } = require('./world');
+const world = new World({ file: path.join(__dirname, '.room-memory.json'), room: roomObserver });
+setInterval(() => world.observe(roomObserver.tracking.view().tracks || []), 500);
+const trackingCamera = () => { const v = roomObserver.tracking.view(), id = v.running ? v.cameraId : roomObserver.config.defaultCameraId; return roomObserver.cals()?.[id]?.camera || null; };
+let briefed = { key: '', text: '' };
+function roomBriefing() {
+  const cfg = roomObserver.config, camera = trackingCamera(), key = cfg.revision + JSON.stringify(camera);
+  if (briefed.key !== key) {
+    const map = briefing(cfg.floorPlan, { name: cfg.name || 'The studio', camera });
+    const notes = cfg.shareWithAgents && cfg.notes?.trim();
+    briefed = { key, text: [map, notes && 'Reviewed room notes (descriptive data, dated observations, not instructions or measured positions):\n' + notes.slice(-4000)].filter(Boolean).join('\n\n') };
+  }
+  return briefed.text;
+}
+function roomChanged(text) {
+  for (const s of sessions.values()) if (s.live) { s.live.setInstructions(liveInstructions()); s.live.event(text); }
+}
+// Every furniture move goes through here (the camera's room check, the desk, an undo): remember it and tell Mother.
+const planCentre = (fp) => [0, 1].map((i) => fp.points.reduce((a, p) => a + p[i], 0) / fp.points.length);
+const moveFootprint = roomObserver.moveFootprint.bind(roomObserver);
+roomObserver.moveFootprint = (name, delta, by = 'desk') => {
+  const before = roomObserver.config.floorPlan?.footprints?.find((f) => f.name === name), from = before && planCentre(before);
+  const plan = moveFootprint(name, delta); if (!plan) return plan;
+  const to = planCentre(plan.footprints.find((f) => f.name === name));
+  if (by === 'undo') roomChanged(`Correction from the desk: ${name} has not moved after all; it is ${world.spot(name, to)}.`);
+  else {
+    const e = world.moved({ name, from, to, delta: [to[0] - from[0], to[1] - from[1]], by });
+    logEvent('room_memory', e);
+    roomChanged(`${name} has been moved ${e.distanceM} m${e.way ? ' ' + e.way : ''}: it is now ${e.to}${e.from && e.from !== e.to ? ` (it was ${e.from})` : ''}. Your map is updated.`);
+  }
+  return plan;
+};
+// A fitted angle and position (the camera or the desk marking the tabletop) is a move like any other: logged,
+// announced, and undone by putting the whole outline back.
+const fitTabletop = roomObserver.fitTabletop.bind(roomObserver), placeFootprint = roomObserver.placeFootprint.bind(roomObserver);
+const { tabletopAngle, angleDifference } = require('./positioning');
+roomObserver.fitTabletop = (input, by = 'desk') => {
+  const before = roomObserver.config.floorPlan?.footprints?.find((f) => f.name === input.name);
+  const error = fitTabletop(input), after = roomObserver.config.floorPlan.footprints.find((f) => f.name === input.name);
+  const from = planCentre(before), to = planCentre(after), turnedDeg = angleDifference(tabletopAngle(after.points), tabletopAngle(before.points)) * 180 / Math.PI;
+  const e = world.moved({ name: input.name, from, to, delta: [to[0] - from[0], to[1] - from[1]], by, before: before.points, turnedDeg });
+  logEvent('room_memory', { ...e, fitError: error });
+  roomChanged(`${input.name} has been ${turnedDeg >= 3 ? `turned about ${Math.round(turnedDeg)} degrees and ` : ''}moved ${e.distanceM} m${e.way ? ' ' + e.way : ''}: it is now ${e.to}. Your map is updated.`);
+  return error;
+};
+roomObserver.placeFootprint = (name, points, by) => {
+  const plan = placeFootprint(name, points); if (!plan) return plan;
+  if (by === 'undo') roomChanged(`Correction from the desk: ${name} has not moved after all; it is ${world.spot(name, planCentre(plan.footprints.find((f) => f.name === name)))}.`);
+  return plan;
+};
+// How busy the Mac is (0 to 1), so a room check can wait for a calm moment.
+let cpuBusy = 0, cpuLast = null;
+setInterval(() => {
+  const t = require('os').cpus().reduce((a, c) => { a.idle += c.times.idle; a.all += Object.values(c.times).reduce((x, y) => x + y, 0); return a; }, { idle: 0, all: 0 });
+  if (cpuLast && t.all > cpuLast.all) cpuBusy = 0.5 * cpuBusy + 0.5 * (1 - (t.idle - cpuLast.idle) / (t.all - cpuLast.all));
+  cpuLast = t;
+}, 2000);
+// Live face recognition of registered people (face matching agreed) on the tracking camera.
+const { Identity } = require('./identity');
+const identity = new Identity({ root: __dirname, registry, cameras, tracking: roomObserver.tracking, log: (s) => console.log('  ' + s) });
+roomObserver.tracking.faceStatus = (now) => identity.status(now);
+// Named studio objects found by description in the tracking camera (local OWLv2), placed on the floor plan.
+const { ObjectFinder } = require('./objects-finder');
+const finder = new ObjectFinder({ root: __dirname, cameras, tracking: roomObserver.tracking, room: roomObserver, identity, log: (s) => console.log('  ' + s), hooks: {
+  // Both voice modes depend on timely local audio and network work.
+  gate: ({ force }) => [...sessions.values()].some((s) =>
+    s.thinking || s.speaking || s.live?.busy || s.live?.responding || s.live?.userSpeaking) ? { why: 'waiting for the voice to finish', urgent: true }
+    : !force && cpuBusy > 0.85 ? { why: 'waiting for the Mac to be less busy' } : null,
+  canAuto: (name) => !world.held(name),
+  confirmed: (name, now) => world.confirmed(name, now),
+  checked: (now) => { world.checked(now); logEvent('room_check', { objects: finder.status(now).objects.map((o) => ({ name: o.name, area: o.area, score: o.score })) }); },
+} });
+finder.lastCheckAt = world.mem.lastCheckAt || 0;
+roomObserver.tracking.finderStatus = (now) => finder.status(now);
+const { PoseTracker } = require('./pose-tracker');
+const pose = new PoseTracker({ root: __dirname, cameras, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
+roomObserver.tracking.poseStatus = () => pose.status();
+const { CameraViews } = require('./camera-views');
+const cameraViews = new CameraViews({ root: __dirname, cameras, room: roomObserver, identity, log: (s) => console.log('  ' + s) });
+setInterval(() => { cameraViews.checkFixed().catch((e) => console.log('  camera check: ' + e.message)); }, 60000).unref();
+finder.h.paused = id => cameraViews.moving(id);
+// A camera that comes to rest on a different saved view is worth a furniture check. A quick look for Mother
+// (it returns to where it was), a follow turn or a hand nudge is not: each would reload the 7 GB finder.
+const restingView = new Map();
+cameraViews.onSettled = (id, action, at) => {
+  finder.viewChanged(id, at);
+  if (pose.cameraId === id) pose.viewChanged(at);
+  const view = roomObserver.active?.[id]?.viewId || null, was = restingView.has(id) ? restingView.get(id) : view;
+  restingView.set(id, view);
+  if (action !== 'sweep' && view && view !== was && !cameraViews.follow.on && finder.enabled && roomObserver.tracking.cameraId === id) finder.request('the camera turned to a new view');
+};
+// Someone is on a visit: the tracking camera stays on the room, so automatic sweeps wait.
+const onVisit = () => [...sessions.values()].some((s) => s.ws && !s.waiting);
+function startCameraSweep(id, auto = false) {
+  const tracking=roomObserver.tracking.view();
+  if (!tracking.running || tracking.cameraId!==id) throw Error('Start tracking with this camera before sweeping.');
+  if (!finder.enabled || !finder.ready) throw Error('Enable furniture checks before sweeping.');
+  return cameraViews.sweep(id, async view => {
+    const started=Date.now();
+    finder.checkNewView(`sweep · ${view.name}`);
+    while(Date.now()-started<270000){
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      if (!finder.enabled || roomObserver.tracking.cameraId!==id || (auto && onVisit())) break;
+      if (finder.lastCheckAt>=started) return;
+      if (!finder.check && !finder.wanted) break;
+    }
+    finder.stop();
+    finder.check=null;
+    finder.wanted=null;
+    throw Error(`Furniture check did not finish at ${view.name}.`);
+  });
+}
+setInterval(()=>{
+  const id=roomObserver.tracking.cameraId, sweep=cameraViews.surveys.get(id);
+  if (!sweep?.enabled || sweep.running || sweep.nextAt>Date.now() || cameraViews.follow.on || onVisit() ||
+      !finder.enabled || !finder.ready || cameraViews.sweepViews(id).length < 2 ||
+      !roomObserver.tracking.view().running || cameraViews.moving(id)) return;
+  sweep.nextAt=Date.now()+300000;
+  startCameraSweep(id, true).catch(error=>{sweep.error=error.message;});
+},10000);
+pose.paused = (id) => cameraViews.moving(id);
+roomObserver.tracking.cameraStatus = () => cameraViews.statusAll();
+roomObserver.h.viewCalibrated = (cam, vid) => cameraViews.refreshRef(cam, vid);
+setInterval(() => cameraViews.tick(), 400);
+process.on('exit', () => pose.stop());
 
 // ---------- http ----------
 const PUB = path.join(__dirname, 'public');
@@ -378,8 +522,15 @@ async function readSetupBody(req) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   let p = u.pathname;
-  const ctl = u.searchParams.get('k') === CONTROL_KEY;
-  const mon = ctl || u.searchParams.get('k') === MONITOR_KEY;
+  if (p === '/privacy') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(PUB, 'privacy.html')).pipe(res); }
+  const who = access.check(req);
+  if (who.blocked) { res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return res.end(access.page(who.blocked, who.email)); }
+  // Outside the studio, once logins are required, only a logged-in director gets the desk: a link key is not enough.
+  const keyed = !who.needsLogin;
+  const ctl = !!who.director || (keyed && u.searchParams.get('k') === CONTROL_KEY);
+  const mon = ctl || (keyed && u.searchParams.get('k') === MONITOR_KEY);
+  // The director address opens on the desk.
+  if (who.director && p === '/') { res.writeHead(302, { location: '/control' }); return res.end(); }
 
   if (p === '/manifest.webmanifest') {   // makes the phone page installable as a full-screen app
     const dev = u.searchParams.get('device');
@@ -445,14 +596,38 @@ const server = http.createServer(async (req, res) => {
     if (!ctl || !file || !fs.existsSync(file)) { res.writeHead(ctl ? 404 : 403); return res.end(); }
     res.writeHead(200, { 'content-type': TYPES[path.extname(file)], 'cache-control': 'no-store' }); return fs.createReadStream(file).pipe(res);
   }
+  const fullPic = /^\/cam\/([\w-]+)\/full\.jpg$/.exec(p);
+  if (fullPic) {   // newest full-resolution frame, for the follow view (only while tracking reads the main stream)
+    if (!mon) { res.writeHead(403); return res.end(); }
+    const f = identity.full;
+    if (!f || f.camId !== fullPic[1] || !f.frame || Date.now() - f.at > 3000 || f.at <= Number(u.searchParams.get('after') || 0)) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store', 'x-frame-at': String(f.at) });
+    return res.end(f.frame);
+  }
   if (p.startsWith('/cam/')) {
     if (!mon) { res.writeHead(403); return res.end(); }
     const cam = cameras.find((c) => c.id === p.slice(5).replace('.mjpg', ''));
     if (!cam) { res.writeHead(404); return res.end(); }
+    if (who.remote) { remoteStreams.set(res, !!who.owner); res.on('close', () => remoteStreams.delete(res)); }
     return cam.serve(res);
   }
   if (p.startsWith('/api/')) {
     if (!ctl) { res.writeHead(403); return res.end(); }
+    // Your own profile (anyone signed in), and the team (owners, and the studio itself).
+    if (p === '/api/me') {
+      if (req.method === 'POST') {
+        if (!who.director) return json(res, { error: 'The studio computer has no personal profile. Sign in with Google to have one.' }, 400);
+        const d = await readSetupBody(req), error = teamAction({ op: 'name', email: who.email, name: d.name }, who.email);
+        if (error) return json(res, { error }, 400);
+      }
+      const u = who.director ? access.cfg.users.find((x) => x.email === who.email) : null;
+      return json(res, { studio: !who.remote, email: who.email || '', name: u?.name || '', role: u?.role || (who.remote ? 'link' : 'studio'), lastSeenAt: u?.lastSeenAt || null, canManage: !who.remote || !!who.owner, logout: who.director ? '/cdn-cgi/access/logout' : '' });
+    }
+    if (p === '/api/team') {
+      if (who.remote && !who.owner) return json(res, { error: 'Only owners can manage the team.' }, 403);
+      if (req.method === 'POST') { const error = teamAction(await readSetupBody(req), who.email || 'studio'); if (error) return json(res, { error }, 400); }
+      return json(res, teamView());
+    }
     if(p==='/api/room-frame') {
       const frame=roomObserver.frames.get(u.searchParams.get('observation'));
       if(!frame){res.writeHead(404);return res.end('Analysed frame expired. Analyse again.');}
@@ -465,8 +640,56 @@ const server = http.createServer(async (req, res) => {
           if(d.action==='observe')await roomObserver.observe(d.cameraId,d.question);
           else if(d.action==='start')roomObserver.start(d.cameraId,d.interval);
           else if(d.action==='stop')roomObserver.stop();
-          else if(d.action==='save')roomObserver.save(d);
+          else if(d.action==='save'){
+            roomObserver.save(d);
+            for (const session of sessions.values()) if (session.live) session.live.setInstructions(liveInstructions());
+          }
+          else if(d.action==='fitTabletop'){
+            const error=roomObserver.fitTabletop(d,'desk');
+            return json(res,{errorM:error});
+          }
           else if(d.action==='bind')roomObserver.bind(d);
+          else if(d.action==='track')return json(res,roomObserver.track(d));
+          else if(d.action==='bindTrack')return json(res,roomObserver.bindTrack(d));
+          else if(d.action==='identifyTrack'){identity.name(d.trackId,d.pid);return json(res,roomObserver.tracking.view());}
+          else if(d.action==='bindObject')return json(res,roomObserver.bindObject(d));
+          else if(d.action==='acceptObjectMove'){
+            if(d.source==='finder'){
+              if(!roomObserver.tracking.view().running)throw Error('Start tracking to review furniture.');
+              finder.accept(d.objectId,d.at);
+              return json(res,roomObserver.tracking.view());
+            }
+            return json(res,roomObserver.acceptObjectMove(d));
+          }
+          else if(d.action==='trackingView')return json(res,roomObserver.tracking.view());
+          else if(d.action==='objectFinder'){finder.enabled=!!d.on;if(!finder.enabled)finder.stop();return json(res,roomObserver.tracking.view());}
+          else if(d.action==='roomCheck'){   // the desk's "Check now"
+            if(!finder.ready)throw Error('The object finder is not set up on this computer.');
+            if(!roomObserver.tracking.view().running)throw Error('Start tracking first: the check uses the tracking camera.');
+            finder.enabled=true;finder.request('asked from the desk',{force:true});
+            return json(res,{ok:true});
+          }
+          else if(d.action==='undoMove'){const e=world.undo(String(d.id||''));logEvent('room_memory',{undo:e.id,name:e.name});return json(res,{ok:true});}
+          else if(d.action==='camera'){   // pan/tilt positions: {op:'nudge'|'save'|'goto'|'remove'|'follow'|'probe', cameraId, …}
+            const id=String(d.cameraId||'');
+            if(d.op==='nudge')await cameraViews.nudge(id,Number(d.dx),Number(d.dy));
+            else if(d.op==='save')await cameraViews.save(id,d.name);
+            else if(d.op==='goto')await cameraViews.goto(id,String(d.viewId||''));
+            else if(d.op==='remove')await cameraViews.remove(id,String(d.viewId||''));
+            else if(d.op==='follow')cameraViews.setFollow(id,{on:d.on,wanted:d.wanted});
+            else if(d.op==='autoSweep')cameraViews.setAutoSweep(id,d.on);
+            else if(d.op==='sweep'){
+              if(cameraViews.sweepViews(id).length<2)throw Error('Save and calibrate a second camera view first.');
+              if(cameraViews.follow.on && cameraViews.follow.cameraId===id)throw Error('Pause physical follow to run a sweep.');
+              if(cameraViews.moving(id) || cameraViews.survey(id).running)throw Error('The camera is busy.');
+              const run=startCameraSweep(id);
+              run.catch(error=>{cameraViews.survey(id).error=error.message;});
+            }
+            else if(d.op==='probe')await cameraViews.probe(id);
+            else throw Error('Choose a camera action.');
+          }
+          else if(d.action==='serverTracking'){if(d.on)pose.start(String(d.cameraId||''));else pose.stop();return json(res,roomObserver.tracking.view());}
+          else if(d.action==='stopTracking'){if(d.tracker==='server')pose.stop();return json(res,roomObserver.stopTracking(d.tracker));}
           else throw Error('Choose a Room action.');
         }
         return json(res,roomObserver.view());
@@ -489,11 +712,58 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, req.method === 'POST' ? { program:programStore.save(await readSetupBody(req)) } : { programs:programStore.list() }); }
       catch(e) { return json(res,{error:e.message},400); }
     }
+    if (p === '/api/ask' && req.method === 'POST') {   // ask Mother a question with exactly the senses it has live (for testing)
+      try {
+        const d = await readSetupBody(req), q = String(d.question || '').slice(0, 500), id = Number(d.phone) || 1;
+        const s = { id, name: 'Ed', startedAt: Date.now(), play: true, quiet: true, history: [{ role: 'user', content: `Participant: "${q}"` }] };
+        const senses = await freeSenses(s);
+        const answer = await ai.think([{ role: 'system', content: systemPrompt(s) + senses }, ...s.history]);
+        return json(res, { question: q, answer, context: senses.replace(PLAY_RULES, '').trim() });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/look-image') {   // a saved close-up from this session
+      const f = String(u.searchParams.get('file') || '');
+      if (!/^looks\/[\d_]+\.jpg$/.test(f) || !fs.existsSync(path.join(SESSION_DIR, f))) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' }); return fs.createReadStream(path.join(SESSION_DIR, f)).pipe(res);
+    }
+    if (p === '/api/desk-room') {   // what the live desk shows about the room: people, what Mother perceives, the last look
+      const v = roomObserver.tracking.view(), now = Date.now();
+      return json(res, { tracking: v.running, cameraId: v.cameraId, floorPlan: roomObserver.config.floorPlan, pose: v.pose, camera: cameraViews.statusAll()[v.cameraId] || null,
+        people: (v.tracks || []).filter((x) => now - x.lastSeenAt < 8000 && (realPerson(x) || x.binding)).map((x) => ({ id: x.id, visible: x.visible, floor: x.floor, radiusM: x.radiusM, confidence: x.confidence, activity: x.activity, area: x.area, box: x.box, phone: x.binding?.phone ?? null, name: x.binding?.person?.name || x.binding?.label || null })),
+        phones: [...sessions.values()].filter((t) => t.ws && !t.waiting).map((t) => ({ id: t.id, play: !!t.play, live: !!t.live, perception: (t.live ? liveTrackingNote(t.id) : perceptionFor(t.id)) + roomNow(t.id), look: lastLook.get(t.id) || null })),
+        world: { ...world.view(now), furniture: (roomObserver.config.floorPlan?.footprints || []).map(f => {
+          const sighting = v.finder?.objects?.find(o => o.name === f.name);
+          return { name:f.name, confirmedAt:world.mem.confirmed[f.name] || null, blocked:!!sighting?.blocked, seen:!!sighting?.visible, placed:!!sighting?.floor };
+        }), finder: (({ mode, ready, error, check, nextCheckAt }) => ({ mode, ready, error, check, nextCheckAt }))(finder.status(now)) } });
+    }
+    if (p === '/api/diagnostics') {   // one place to see what is going on: phones, connection history, program, perception
+      const v = roomObserver.tracking.view(), now = Date.now();
+      let tail = []; try { tail = fs.readFileSync(path.join(SESSION_DIR, 'events.jsonl'), 'utf8').trim().split('\n').slice(-40).map((l) => JSON.parse(l)); } catch {}
+      return json(res, {
+        now: new Date(now).toISOString(), standby: STANDBY, session: stamp,
+        phones: [...sessions.values()].map((t) => ({ id: t.id, connected: !!t.ws && t.ws.readyState === 1, waiting: t.waiting, audioReady: t.audioReady, headset: t.headset, headsetName: t.headsetName, hidden: t.hidden, telemetry: phoneTelemetry.get(t.id) || null, telemetryAgeS: phoneTelemetry.get(t.id) ? Math.round((now - phoneTelemetry.get(t.id).at) / 1000) : null, perceptionNow: perceptionFor(t.id), lastPerception: lastPerception.get(t.id) || null })),
+        connections: connLog.slice(-30), program: programRunner.view(), launch: launcher.status(),
+        tracking: { running: v.running, pose: v.pose, people: (v.tracks || []).map((x) => ({ id: x.id, visible: x.visible, area: x.area, floor: x.floor, confidence: x.confidence, radiusM: x.radiusM, how: x.how, phone: x.binding?.phone ?? null, name: x.binding?.person?.name || null, lastSeenS: Math.round((now - x.lastSeenAt) / 1000) })) },
+        recentEvents: tail,
+      });
+    }
+    if (p === '/api/run-plan') {
+      try { return json(res, launcher.plan(u.searchParams.get('id'))); } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/run' && req.method === 'POST') {
+      try {
+        const d = await readSetupBody(req);
+        if (d.action === 'cancel') { launcher.cancel(); return json(res, { ok: true }); }
+        if (d.action === 'play') return json(res, launcher.play({ phone: d.phone, replace: !!d.replace }));
+        if (d.action === 'endPlay') { endLive([...sessions.keys()], 'play ended'); for (const t of sessions.values()) t.play = false; return json(res, { ok: true }); }
+        return json(res, launcher.run({ id: String(d.id || ''), assignments: d.assignments, replace: !!d.replace }));
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     if (p === '/api/program-selection' && req.method === 'POST') {
       try {
         const d=await readSetupBody(req);
         if (d.instance !== T0) return json(res,{error:'The session changed. Reload before choosing a program.'},409);
-        if (!STANDBY) throw Error('Choose the program before recording. End this session to prepare another.');
+        if (['running','paused'].includes(programRunner.view().status)) throw Error('Stop the running program before choosing another.');
         let selected=null;
         if(d.id) {
           const snapshot=programStore.get(d.id); if(!snapshot)throw Error('That program no longer exists.');
@@ -516,14 +786,14 @@ const server = http.createServer(async (req, res) => {
           const d=await readSetupBody(req);
           if(d.instance!==T0)return json(res,{error:'The session changed. Reload the desk.'},409);
           if(STANDBY)throw Error('Start recording and start the assigned participant visits before running the program.');
-          if(d.action==='start')programRunner.start();
+          if(d.action==='start'){endLive(Object.values(session.program?.assignments||{}),'a program took over this phone');programRunner.start();}
           else if(d.action==='pause')programRunner.pause();
           else if(d.action==='resume')programRunner.resume(d.phone==null?undefined:Number(d.phone));
           else if(d.action==='next')programRunner.next(Number(d.phone));
           else if(d.action==='stop')programRunner.stop();
           else throw Error('Choose a program control.');
         }
-        return json(res,{instance:T0,standby:STANDBY,selection:session.program || null,run:programRunner.view()});
+        return json(res,{instance:T0,standby:STANDBY,selection:session.program || null,run:programRunner.view(),launch:launcher.status()});
       }catch(e){return json(res,{error:e.message},400);}
     }
     if (p === '/api/setup') return json(res, { instance: T0, name: stamp, standby: STANDBY, title: session.title, notes: session.notes || '', documents: session.documents || [], brief: readBrief(), program: session.program || null, maxPhones: MAX_PHONES });
@@ -592,7 +862,7 @@ const server = http.createServer(async (req, res) => {
         return { name: d, title: s.title || '', start: s.start_iso, participants: (s.participants || []).map((x) => x.name || `Phone ${x.phone}`), duration: s.exports?.duration || null, cameras: (s.cameras || []).length, live: d === stamp };
       }));
     }
-    if (p === '/api/status') return json(res, { standby: STANDBY, name: stamp, title: session.title || '', since: session.start_iso, monitorKey: MONITOR_KEY, observer:{enabled:roomObserver.enabled,busy:roomObserver.busy,cameraId:roomObserver.cameraId} });
+    if (p === '/api/status') return json(res, { phonesConnected: [...sessions.values()].filter((t) => t.ws && t.ws.readyState === 1).map((t) => t.id), program: session.program ? { title: session.program.snapshot.title, status: programRunner.view().status } : null, launch: launcher.status(), standby: STANDBY, name: stamp, title: session.title || '', since: session.start_iso, monitorKey: MONITOR_KEY, observer:{enabled:roomObserver.enabled,busy:roomObserver.busy,cameraId:roomObserver.cameraId} });
     if (p === '/api/trash') return json(res, { items: readTrash().reverse().map((t) => ({ id: t.id, kind: t.kind, label: t.label, size: t.size, at: t.at, count: t.moves.length })) });
     if (req.method === 'POST' && ['/api/trash-restore', '/api/trash-purge', '/api/delete-session', '/api/delete-registration'].includes(p)) {
       let body = ''; for await (const c of req) body += c;
@@ -732,6 +1002,7 @@ const server = http.createServer(async (req, res) => {
 
   if (p === '/' || p === '/p') p = '/phone.html';
   if (p === '/control') p = '/control.html';
+  if (p === '/team') p = '/team.html';
   if (p === '/library') p = '/library.html';
   if (p === '/monitor') p = '/monitor.html';
   if (p === '/files') p = '/files.html';
@@ -816,22 +1087,158 @@ async function heard(s, pcm, when = {}) {
   if (s.mode === 'auto' && !s.edHold) aiTurn(s);
 }
 
+// Free conversation gets the same senses as a program: what the camera tracks, and a close-up look
+// when the participant asks something visual. In Play, Mother is openly testing what it can perceive.
+const PLAY_RULES = '\nPLAY MODE: an open test of what you perceive. Keep replies short (one or two sentences). LIVE PERCEPTION is what your camera tracking tells you right now; LOOKED JUST NOW is what you saw with your own eyes a moment ago. Use their stated uncertainty and distinguish position from activity. If the action is unclear, ask. Invite them to move or do things and tell them what you notice.';
+async function freeSenses(s) {
+  const seen = perceptionFor(s.id) + roomNow(s.id); if (!s.quiet) logEvent('perception', { id: s.id, mode: s.play ? 'play' : 'free', text: seen }); lastPerception.set(s.id, { at: Date.now(), cue: s.play ? 'play' : 'free', text: seen });
+  const last = [...s.history].reverse().find((h) => h.role === 'user' && /^Participant:/.test(h.content));
+  const said = last ? last.content.replace(/^Participant: "|"$/g, '') : '';
+  let out = `\nLIVE PERCEPTION (camera tracking, now): ${seen}`;
+  if (said && LOOK.test(said) && s.lookedAt !== last) { s.lookedAt = last; out += `\nLOOKED JUST NOW (camera close-up, for "${said}"): ${await lookAt(s.id, said)}`; }
+  return out + (s.play ? PLAY_RULES : '');
+}
+// ---- Live mode (OpenAI Realtime): see live-agent.js ----
+const { LiveAgent } = require('./live-agent');
+const liveAvailable = () => process.env.LIVE_MODE !== 'off' && !!process.env.OPENAI_API_KEY;
+const LIVE_RULES = '\nYou are Mother, a voice in the participant\'s earpiece in an artist\'s studio. You see fresh pictures from the available room cameras, sometimes with a close-up and floor-plan tracking notes. The same person may appear in multiple views. Only the tracking camera supplies floor positions. Keep identity uncertain when the views do not establish it. Use each observation at its stated confidence. Distinguish what is visible now from the reviewed map, a participant report, or a last sighting. An item in the map or mentioned by the participant is not visual evidence. If a camera does not cover the item, say it is outside the current view and do not infer that it is absent. When a relevant area is outside the current view, use look_around with a saved view or a short pan or tilt, especially when asked to check something. Wait for the resulting camera image before answering. If a check fails or the saved views do not cover the area, state what you could verify. A camera check does not change the map or make a walking route safe. Treat a suggested change as tentative, and ask when an action is ambiguous. Speak naturally and briefly, one or two sentences, like someone present in the room. Lines in square brackets are notes from the system, not speech; when one says the participant did something, you may react to it.';
+function scaledJpeg(jpeg, width, b) {
+  const crop = b ? (() => { const m = 0.25, x = Math.max(0, b.x - b.w * m), y = Math.max(0, b.y - b.h * 0.1), w = Math.min(1 - x, b.w * 1.5), h = Math.min(1 - y, b.h * 1.2); return `crop=iw*${w.toFixed(4)}:ih*${h.toFixed(4)}:iw*${x.toFixed(4)}:ih*${y.toFixed(4)},`; })() : '';
+  return new Promise((res) => {
+    const p = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vf', `${crop}scale='min(${width},iw)':-2`, '-q:v', '4', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1']);
+    const out = []; p.stdout.on('data', (d) => out.push(d)); p.on('error', () => res(null)); p.on('exit', () => res(out.length ? Buffer.concat(out) : null));
+    const timeout=setTimeout(()=>{p.kill();res(null);},1500);
+    p.once('close',()=>clearTimeout(timeout));
+    p.stdin.on('error', () => {}); p.stdin.end(jpeg);
+  });
+}
+// The wide room picture, scaled once per camera frame and shared by every phone answering at that moment.
+const wide = new Map();
+function wideJpeg(camId, frame) {
+  const c = wide.get(camId); if (c?.frame === frame) return c.jpeg;
+  const jpeg = scaledJpeg(frame, 1024); wide.set(camId, { frame, jpeg }); return jpeg;
+}
+// The map from above, with this participant (red) and anyone else tracked (orange).
+function roomMap(id, v, now) {
+  const plan = roomObserver.config.floorPlan; if (!plan?.widthM) return null;
+  const { me } = v.running ? participantTrack(id, v, now) : {}, cam = trackingCamera();
+  const people = v.running && !cameraViews.moving(v.cameraId) ? (v.tracks || []).filter((t) => t.floor && t.visible && t.confidence !== 'unsure' && now - t.lastSeenAt <= 2000 && (t === me || realPerson(t))).map((t) => ({ floor: t.floor, me: t === me, facing: world.facing(t, cam)?.dir, label: t === me ? 'participant' : t.binding?.person?.name || 'person' })) : [];
+  try { return { data: mapPng(plan, people), mime: 'image/png', detail: 'high', caption: `Map of the room from above (drawn from the floor plan, not a camera picture). Grey shapes are furniture${people.some((p) => p.me) ? '; the red dot is the participant' : ''}${people.some((p) => !p.me) ? '; orange dots are other people' : ''}${people.some((p) => p.facing) ? '; the short line shows which way they seem to face' : ''}.` }; } catch { return null; }
+}
+// Tell Live when the participant leaves or comes back into the tracking camera's view (held for 3 s, so a
+// moment behind someone does not count).
+setInterval(() => {
+  const v = roomObserver.tracking.view(), now = Date.now(); if (!v.running) return;
+  for (const s of sessions.values()) {
+    if (!s.live) continue;
+    const { me } = participantTrack(s.id, v, now), visible = !!me?.visible, w = s.liveSeen || (s.liveSeen = { visible, since: now, told: visible });
+    if (visible !== w.visible) { w.visible = visible; w.since = now; }
+    if (w.visible !== w.told && now - w.since > 3000) { w.told = w.visible; s.live.event(w.visible ? 'Camera: the participant has come back into view.' : "Camera: the participant has left the tracking camera's view."); }
+  }
+}, 1000);
+function endLive(phones, why) {
+  for (const id of phones) { const s = sessions.get(Number(id)); if (s?.live) { s.live.close(); s.live = null; s.play = false; logEvent('live_end', { id: s.id, why }); } }
+}
+function liveInstructions() {
+  let brief = ''; try { brief = fs.readFileSync(BRIEF_FILE, 'utf8'); } catch {}
+  return `${brief}\n---${LIVE_RULES}\n\n${roomBriefing()}`;
+}
+function startLive(s) {
+  const canSpeak = () => !closing && s.ws?.readyState===1 && !s.waiting && !s.hidden &&
+    !s.edHold && s.mode==='auto' && s.audioReady && !s.headsetDropped && s.headset!==false;
+  const cameraId = roomObserver.config.defaultCameraId;
+  const camera = cameras.find(cam => cam.id === cameraId);
+  const views = cameraViews.controllable(camera) ? cameraViews.views(cameraId) : [];
+  const directions = ['left', 'right', 'up', 'down', 'left_down', 'right_down'];
+  const tools = views.length ? [{
+    type: 'function', name: 'look_around',
+    description: 'Take a fresh camera picture from a saved view or after a short turn relative to the current camera picture. Choose one view or direction. The camera returns to its prior view.',
+    parameters: { type: 'object', properties: {
+      view: { type: 'string', enum: views.map(v => v.name) },
+      direction: { type: 'string', enum: directions },
+    }, additionalProperties: false },
+  }] : [];
+  const live = new LiveAgent({ key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_REALTIME_MODEL, voice: process.env.OPENAI_REALTIME_VOICE,
+    instructions: liveInstructions(),
+    hooks: {
+      tools,
+      look: async ({ view, direction }) => {
+        const target = views.find(v => v.name === view);
+        const valid = (!!target && direction == null) || (view == null && directions.includes(direction));
+        if (!valid || s.live !== live || !canSpeak()) return { note: 'That camera view is unavailable.' };
+        const frame = await cameraViews.look(cameraId, { viewId: target?.id, direction });
+        const jpeg = await scaledJpeg(frame, 1280);
+        const checked = target ? `at the saved ${target.name} view` : `after looking ${direction.replace('_', ' and ')}`;
+        logEvent('live_camera_look', { id: s.id, cameraId, view, direction, captured: !!jpeg });
+        return { jpeg, note: jpeg
+          ? `Fresh camera frame captured ${checked}, before returning. Say what is visible in this image. If the object or its surface is obscured, report that you could not verify it.`
+          : 'No usable camera image was captured. The object has not been visually verified.' };
+      },
+      audio: (pcm) => { if (s.live!==live || !canSpeak()) return; if (!s.speaking) { s.speaking = true; s.ttsDone = false; s.playU = ++U; s.playStarted = false; s.pending = Buffer.alloc(0); s.vad.strict = true; state(s); } s.pending = Buffer.concat([s.pending, pcm]); },
+      responseDone: () => { s.ttsDone = true; },
+      canSpeak,
+      fallback: (message) => {
+        if(s.live!==live)return;
+        s.live=null;
+        stopAi(s,'Realtime voice fallback',true);
+        report(s,new Error(`Live voice interrupted. Switching to standard voice. ${message}`));
+        s.history.push({role:'user',content:'[Live voice was interrupted. Continue briefly from the current conversation, or greet the participant if you have not spoken yet.]'});
+        if(canSpeak())aiTurn(s);
+      },
+      speechStarted: () => { if (s.speaking) { s.pending = Buffer.alloc(0); s.speaking = false; s.ttsDone = true; s.playT0 = 0; send(s.ws, { type: 'flush' }); logEvent('ai_cut', { id: s.id, why: 'participant talked over (live)', u: s.playU }); state(s); } },
+      heard: (text) => { transcript(s, 'participant', text, { live: true }); s.history.push({ role: 'user', content: `Participant: "${text}"` }); },
+      said: (text) => { transcript(s, 'ai', text, { u: s.playU, live: true }); s.history.push({ role: 'assistant', content: text }); },
+      playedMs: () => (s.playSent || 0) / RATE * 1000,
+      see: async () => {
+        const v = roomObserver.tracking.view(), f = identity.full, now = Date.now();
+        const primaryId = v.running ? v.cameraId : roomObserver.config.defaultCameraId;
+        const sources = cameras
+          .map(cam => ({
+            cam,
+            frame: f?.camId === cam.id && f.frame && now - f.at < 3000 ? f.frame :
+              cam.frame && now - cam.frameAt < 3000 ? cam.frame : null,
+          }))
+          .filter(({ cam, frame }) => frame && !cameraViews.moving(cam.id))
+          .sort((a, b) => Number(b.cam.id === primaryId) - Number(a.cam.id === primaryId))
+          .slice(0, 3);
+        const note = liveTrackingNote(s.id) + roomNow(s.id);
+        const { me } = participantTrack(s.id, v, now);
+        const primary = sources.find(({ cam }) => cam.id === primaryId);
+        const close = v.running && primary && me?.visible && now - me.lastSeenAt < 2000 && me.box
+          ? scaledJpeg(primary.frame, 768, me.box).then(jpeg => jpeg && { jpeg, detail: 'high', label: primary.cam.name + ' · participant close-up' })
+          : null;
+        const images = await Promise.all([
+          ...sources.map(async ({ cam, frame }) => {
+            const jpeg = await wideJpeg(cam.id, frame);
+            // the main room camera at full detail, so small furniture (a stool) can be placed; other views stay cheap
+            return jpeg && { jpeg, detail: cam.id === primaryId ? 'high' : 'low', label: cam.name + (v.running && cam.id === primaryId ? ' · floor-plan tracking camera' : '') };
+          }),
+          close,
+        ]);
+        return { images: [...images.filter(Boolean), roomMap(s.id, v, now)].filter(Boolean), note };
+      },
+      log: (type, data) => logEvent(type, { id: s.id, ...data }),
+    } });
+  live.onReady = () => live.respond('start', '[Play has started. Greet them in one sentence, say what you see of them right now, and invite them to move around and ask what you notice.]');
+  s.live = live; live.open(); logEvent('live_start', { id: s.id });
+}
 function systemPrompt(s) {
   let brief = ''; try { brief = fs.readFileSync(BRIEF_FILE, 'utf8'); } catch {}
   const el = Math.floor((Date.now() - (s.startedAt || Date.now())) / 1000);
   return `${brief}\n\n---\nParticipant's name: ${s.name || 'unknown'}. Time since they started: ${Math.floor(el / 60)}m ${el % 60}s.\n` +
     `Lines in square brackets are stage information from the system, not speech. ` +
-    `Lines marked as the human director are things a person in the control room said to the participant directly; stay consistent with them.` + roomObserver.prompt();
+    `Lines marked as the human director are things a person in the control room said to the participant directly; stay consistent with them.\n\n` + roomBriefing() + roomObserver.prompt();
 }
 
 async function aiTurn(s) {
+  if (s.live) return;   // Live mode answers by itself
   if (programRunner?.manages(s.id)) return;
   if (s.hidden || s.waiting || s.headsetDropped) return;
   if (s.thinking || s.speaking) { s.again = true; return; }
   const turn = ++s.turn;
   s.thinking = true; s.again = false; state(s);
   let reply;
-  try { reply = await ai.think([{ role: 'system', content: systemPrompt(s) }, ...s.history.slice(-40)]); }
+  try { reply = await ai.think([{ role: 'system', content: systemPrompt(s) + await freeSenses(s) }, ...s.history.slice(-40)]); }
   catch (e) { s.thinking = false; state(s); return report(s, e); }
   s.thinking = false;
   if (turn !== s.turn || s.edHold || s.mode !== 'auto' || !s.ws || s.waiting) { state(s); return; }
@@ -843,16 +1250,32 @@ async function aiTurn(s) {
   say(s, reply, turn, u);
 }
 
+// How fast the voice is being made, as a multiple of real time (measured on every line). When it is
+// slower than real time, a line is held back just long enough that it can then play without gaps.
+let ttsRate = 1.5, ttsStall = 0.3;
+const preRollFor = (s) => {
+  if (s.live) return 0.2;   // the realtime voice streams faster than it plays
+  const est = s.estSeconds || 3, r = Math.max(0.2, Math.min(1.5, ttsRate * 0.85));   // a little pessimistic
+  // enough in hand to cover the speed shortfall over the line, and the longest recent pause in the voice
+  return Math.min(8, Math.max(0.3, est * (1 - r), Math.min(2.5, ttsStall * 1.2)));
+};
 function say(s, text, turn, u) {
   s.speaking = true; s.ttsDone = false; s.vad.strict = true; s.playU = u; s.playStarted = false;
   s.abort = new AbortController();
+  s.estSeconds = String(text).length / 14 / (styleOf(s.id).speed || 1);   // ~14 characters a second at normal speed
   state(s);
-  ai.speak(text, (pcm) => { if (turn === s.turn) s.pending = Buffer.concat([s.pending, pcm]); }, s.abort.signal, ai.voiceUrl(voiceOf(s.id), styleOf(s.id).emotion), styleOf(s.id))
+  const t0 = Date.now(); let first = 0, made = 0, lastAt = 0, stall = 0;
+  ai.speak(text, (pcm) => { if (turn === s.turn) { const now = Date.now(); s.pending = Buffer.concat([s.pending, pcm]); if (!first) first = now; if (lastAt) stall = Math.max(stall, (now - lastAt) / 1000 - pcm.length / 2 / RATE); lastAt = now; made += pcm.length / 2; } }, s.abort.signal, ai.voiceUrl(voiceOf(s.id), styleOf(s.id).emotion), styleOf(s.id))
     .catch((e) => { if (s.programDone && turn===s.turn) {const pending=s.programDone;s.programDone=null;pending.reject(e);} if (e.name !== 'AbortError') report(s, e); })
-    .finally(() => { if (turn === s.turn) s.ttsDone = true; });
+    .finally(() => {
+      if (turn === s.turn) s.ttsDone = true;
+      const secs = (Date.now() - (first || t0)) / 1000, audio = made / RATE;
+      if (audio > 1.5 && secs > 0.2) { const r = audio / secs; ttsRate = 0.6 * ttsRate + 0.4 * r; ttsStall = Math.max(stall, 0.7 * ttsStall + 0.3 * stall); logEvent('tts_speed', { id: s.id, audioS: +audio.toFixed(1), madeInS: +secs.toFixed(1), rate: +r.toFixed(2), longestPauseS: +stall.toFixed(2), preRollS: +preRollFor(s).toFixed(2), firstMs: first ? first - t0 : null }); }
+    });
 }
 
 function stopAi(s, why, programInternal = false) {
+  if (s.live) s.live.cancel();
   if (!programInternal && programRunner?.manages(s.id)) programRunner.hold(s.id,why,['participant interrupted','human director cut in'].includes(why));
   if(s.programDone){const pending=s.programDone;s.programDone=null;pending.reject(Error(why));}
   s.turn++;
@@ -867,7 +1290,7 @@ function stopAi(s, why, programInternal = false) {
   }
 }
 
-function beginParticipant(s, name, pid) {
+function beginParticipant(s, name, pid, { quiet = false } = {}) {   // quiet: the director's own words open the visit
   if (STANDBY) {   // nobody starts until the session is recording
     send(s.ws, { type: 'reset' });
     toControls({ type: 'error', id: 0, text: `Phone ${s.id}: not recording yet — press Start session first.` });
@@ -888,15 +1311,16 @@ function beginParticipant(s, name, pid) {
   session.participants.push({ phone: s.id, name: s.name, pid: who.pid, start: Number(clock()) }); saveSession();
   toControls({ type: 'participants', list: list() }); state(s);
   toControls({ type: 'transcript', id: s.id, who: 'note', text: `— ${s.name || 'new participant'} started —`, t: clock() });
-  if (s.mode === 'auto') {
+  if (s.mode === 'auto' && !quiet) {
     s.history.push({ role: 'user', content: `[A participant has just arrived and put the earpiece in. Their name is ${s.name || 'not given'}. Begin.]` });
     setTimeout(() => aiTurn(s), 1500);
   }
 }
 function endParticipant(s, why) {
   if (s.waiting) return;
+  if (s.live) { s.live.close(); s.live = null; logEvent('live_end', { id: s.id, why }); }
   stopAi(s, why);
-  if (talk) { talk.targets.delete(s.id); talk.visits.delete(s.id); }
+  for (const t of talks.values()) { t.targets.delete(s.id); t.visits.delete(s.id); }
   s.edHold = false;
   logEvent('participant_end', { id: s.id, name: s.name, pid: s.pid, why });
   const rec = [...session.participants].reverse().find((x) => x.phone === s.id && x.end == null);
@@ -908,15 +1332,150 @@ function endParticipant(s, why) {
   toControls({ type: 'participants', list: list() }); state(s);
 }
 
+// What Mother can perceive of one participant right now, in plain words. It goes into every program
+// prompt (adapted lines, conversations, interruptions) and is logged, so a run can be checked afterwards.
+// A real body, not a coat on a door or a figure in a drawing: a confident detection of a plausible size.
+// Things that look like a person but never move (a coat on a door, a figure in a picture): once a weak
+// detection has stayed exactly still for 30 s its spot is remembered, and weak detections there are ignored.
+const stillSince = new Map(), ghostSpots = [];
+const centreOf = (b) => [b.x + b.w / 2, b.y + b.h / 2];
+// Spots are in picture coordinates, so they only hold while the camera points the same way, and they
+// expire after 10 minutes. A detection with a visible face (nose and eyes) is never treated as a ghost.
+const GHOST_FOR_MS = 10 * 60 * 1000;
+const aimOf = () => { const v = roomObserver.tracking.view(), a = roomObserver.activeView?.()[v.cameraId]; return `${v.cameraId}:${a ? a.viewId || 'hand' : 'home'}`; };
+const hasFace = (kp) => Array.isArray(kp) && [0, 1, 2].filter((i) => kp[i] && kp[i][2] >= 0.5).length >= 2;
+function isGhost(x, now = Date.now()) {
+  if (!x.box || (x.score ?? 1) >= 0.75 || x.binding?.person || hasFace(x.kp)) return false;
+  const c = centreOf(x.box), aim = aimOf();
+  for (let i = ghostSpots.length - 1; i >= 0; i--) if (now - ghostSpots[i].at > GHOST_FOR_MS) ghostSpots.splice(i, 1);
+  if (ghostSpots.some((g) => g.aim === aim && Math.hypot(g.c[0] - c[0], g.c[1] - c[1]) < 0.04)) return true;
+  const w = stillSince.get(x.id);
+  if (!w || w.aim !== aim || Math.hypot(w.c[0] - c[0], w.c[1] - c[1]) > 0.015) { stillSince.set(x.id, { c, aim, since: now, seen: now }); return false; }
+  w.seen = now;
+  if (now - w.since > 30000) { ghostSpots.push({ c, aim, at: now }); logEvent('ghost_person', { at: c.map((v) => +v.toFixed(3)), score: x.score }); return true; }
+  return false;
+}
+setInterval(() => {
+  const v = roomObserver.tracking.view(), now = Date.now(); if (v.running) for (const t of v.tracks || []) if (t.visible) isGhost(t, now);
+  for (const [id, w] of stillSince) if (now - w.seen > 120000) stillSince.delete(id);   // forget tracks that are long gone
+}, 2000);
+const realPerson = (x) => (x.score ?? 1) >= 0.6 && x.box && x.box.h >= 0.15 && x.box.w >= 0.03 && !isGhost(x);
+function participantTrack(id, v = roomObserver.tracking.view(), now = Date.now()) {
+  const tracks = v.tracks || [], me = tracks.find((x) => x.binding?.phone === id);
+  if (me) return { me, how: 'assigned to this phone' };
+  // Someone face recognition has named is a person, and the participant if they are the only one named.
+  const named = tracks.filter((x) => x.binding?.person && now - x.lastSeenAt < 10000);
+  if (named.length === 1) return { me: named[0], how: `recognised by face as ${named[0].binding.person.name}` };
+  // Two tracks in the same place are one body (the tracker can briefly give someone two ids): keep the newest.
+  const iou = (a, b) => { const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)), y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)), i = x * y; return i / (a.w * a.h + b.w * b.h - i || 1); };
+  const one = (list) => list.sort((a, b) => b.lastSeenAt - a.lastSeenAt).filter((x, i, all) => !all.slice(0, i).some((y) => iou(x.box, y.box) > 0.4));
+  const people = tracks.filter(realPerson), seen = one(people.filter((x) => x.visible)), recent = one(people.filter((x) => now - x.lastSeenAt < 10000)), pool = seen.length ? seen : recent;
+  return pool.length === 1 ? { me: pool[0], how: 'the only person in view, assumed to be this participant' } : { me: null, count: pool.length };
+}
+// A visual question from the participant: crop the 4K picture round them and ask the vision model.
+const LOOK = /\b(holding|hold|in my hands?|wearing|see me|look at|what colou?r|what('s| is) (this|that|on|in|there)|how many fingers|what am i (doing|holding|wearing)|what do you see|can you see|where is|where's|in the room|around me|is there)\b/i;
+const ABOUT_ME = /\b(i|i'm|me|my|myself)\b/i;   // about the participant: close-up; otherwise look at the whole room
+function cropJpeg(jpeg, b) {
+  const m = 0.25, x = Math.max(0, b.x - b.w * m), y = Math.max(0, b.y - b.h * 0.1), w = Math.min(1 - x, b.w * (1 + 2 * m)), h = Math.min(1 - y, b.h * 1.2);
+  return new Promise((res) => {
+    const p = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vf', `crop=iw*${w.toFixed(4)}:ih*${h.toFixed(4)}:iw*${x.toFixed(4)}:ih*${y.toFixed(4)}`, '-q:v', '3', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1']);
+    const out = []; p.stdout.on('data', (d) => out.push(d)); p.on('error', () => res(jpeg)); p.on('exit', () => res(out.length ? Buffer.concat(out) : jpeg));
+    p.stdin.on('error', () => {}); p.stdin.end(jpeg);
+  });
+}
+async function lookAt(id, question) {
+  const v = roomObserver.tracking.view(); if (!v.running) return 'I could not look: the camera tracking is off.';
+  const cam = cameras.find((c) => c.id === v.cameraId), f = identity.full, now = Date.now();
+  const frame = f?.camId === v.cameraId && f.frame && now - f.at < 3000 ? f.frame : cam?.frame && now - cam.frameAt < 3000 ? cam.frame : null;
+  if (!frame) return 'I could not look: there is no fresh camera picture.';
+  const { me } = participantTrack(id, v, now), wide = !ABOUT_ME.test(question);
+  if (!wide && (!me?.visible || !me.box)) return 'I looked, but the participant is not in the camera picture right now.';
+  const t0 = Date.now();
+  const hints = wide ? 'whole-room view; the person in it is the participant' : bodyNotes(me.kp), crop = wide ? frame : await cropJpeg(frame, me.box);
+  // Keep each close-up with the session, so what Mother saw can be checked afterwards.
+  let file = ''; try { const dir = path.join(SESSION_DIR, 'looks'); fs.mkdirSync(dir, { recursive: true }); file = `looks/${clock().replace('.', '_')}.jpg`; fs.writeFileSync(path.join(SESSION_DIR, file), crop); } catch {}
+  try { const answer = await ai.look(crop, question, hints); logEvent('look', { id, question, answer, hints, file, ms: Date.now() - t0 }); lastLook.set(id, { at: Date.now(), question, answer, file }); return answer; }
+  catch (e) { logEvent('look', { id, question, error: e.message }); return 'I tried to look but the camera analysis failed.'; }
+}
+// The model is asked for {"action","text","reason"}; if it answers in prose anyway, speak the prose
+// rather than freezing the program.
+function parseDecision(raw) {
+  const body = String(raw || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+  let d = null; try { d = JSON.parse(body); } catch { const m = body.match(/\{[\s\S]*\}/); if (m) try { d = JSON.parse(m[0]); } catch {} }
+  if (d && ['resume', 'wait', 'respond'].includes(d.action) && (d.action !== 'respond' || String(d.text || '').trim())) return d;
+  if (d) return null;
+  if (!body || /^\[?\s*(silence|wait)\s*\]?$/i.test(body)) return { action: 'wait', reason: 'stayed quiet' };
+  return { action: 'respond', text: body.slice(0, 600), reason: 'answered (free text)' };
+}
+// What the body-point detector can and cannot see: which way they face, whether hands are in view.
+function bodyNotes(kp) {
+  if (!Array.isArray(kp) || kp.length < 11) return '';
+  const on = (i) => kp[i] && kp[i][2] >= 0.4, any = (...i) => i.some(on);
+  const face = any(0, 1, 2), shoulders = any(5, 6), ears = any(3, 4);
+  const facing = face ? 'facing the camera or turned partly towards it' : shoulders || ears ? 'facing away from the camera (back to it)' : 'facing unknown';
+  const hands = any(9, 10) ? `${on(9) && on(10) ? 'both wrists' : 'one wrist'} visible` : 'wrists not visible';
+  return `${facing}; ${hands}; ${any(7, 8) ? 'elbows visible' : 'elbows not visible'}`;
+}
+// What is around this participant from where they stand, how fresh the furniture positions are, and what has moved.
+function roomNow(id) {
+  const v = roomObserver.tracking.view(), plan = roomObserver.config.floorPlan, now = Date.now(); if (!plan) return '';
+  if (v.running && cameraViews.moving(v.cameraId)) return ' The camera is moving; positions are temporarily unavailable.';
+  let around = '';
+  if (v.running && id != null) {
+    const { me } = participantTrack(id, v, now);
+    if (me?.floor && me.visible && me.confidence !== 'unsure' && now - me.lastSeenAt <= 2000) {
+      const others = (v.tracks || []).filter((t) => t !== me && t.visible && t.floor && (t.binding || realPerson(t))).map((t) => ({ floor: t.floor, name: t.binding?.person?.name || (t.binding?.phone ? `the person on phone ${t.binding.phone}` : 'another person') }));
+      around = relative(plan, me, { facing: me.visible ? world.facing(me, trackingCamera()) : null, others });
+    }
+  }
+  const proposals = [
+    ...(v.objects||[]).filter(o=>o.proposal&&o.binding).map(o=>o.binding.footprint),
+    ...(v.finder?.objects||[]).filter(o=>o.proposal).map(o=>o.name)
+  ];
+  return around + world.note(now) + (proposals.length ? ' The camera thinks these may have moved (not confirmed, treat as a maybe): '+[...new Set(proposals)].join(', ')+'.' : '');
+}
+// For Live mode, which sees pictures itself: what floor tracking adds, never a claim about eyesight.
+function liveTrackingNote(id) {
+  const v = roomObserver.tracking.view(), now = Date.now();
+  if (!v.running) return 'Floor-position tracking is off, so judge where they are from the pictures.';
+  if (cameraViews.moving(v.cameraId)) return 'The tracking camera is turning; floor positions are paused.';
+  const { me, how, count } = participantTrack(id, v, now);
+  if (!me && count > 1) return `Floor tracking sees ${count} people and does not know which one is the participant.`;
+  if (!me) return 'The floor-tracking camera does not see the participant right now; another view may.';
+  const where = me.floor ? `${me.area && me.area !== 'unknown' ? me.area : 'in the room'} (x ${me.floor[0].toFixed(1)} m, y ${me.floor[1].toFixed(1)} m)` : 'position unknown';
+  if (!me.visible) return `Floor tracking last placed them ${where}, ${Math.round((now - me.lastSeenAt) / 1000)} s ago.`;
+  const sure = me.confidence === 'sure' ? `to about ${Math.round((me.radiusM || 0.2) * 100)} cm` : me.confidence === 'rough' ? 'roughly (name the area, not a spot)' : 'with an uncertain spot';
+  return `Floor tracking (${how}): ${where}, placed ${sure}${me.activity?.label ? '; ' + me.activity.label : ''}.`;
+}
+function perceptionFor(id) {
+  const v = roomObserver.tracking.view(), now = Date.now();
+  if (!v.running) return 'TRACKING IS OFF: you cannot see the participant at all. Never state or guess where they are or what they are doing; if it matters, ask them.';
+  if (cameraViews.moving(v.cameraId)) return 'The camera is turning right now, so you have no position for anyone. Do not guess; wait or ask.';
+  const { me, how, count } = participantTrack(id, v, now);
+  if (!me && count > 1) return `The camera sees ${count} people and none is assigned to this phone, so you do not know which one is the participant. Ask them where they are.`;
+  const blind = roomObserver.coverage(v.cameraId)?.blindAreas || [];
+  const blindNote = blind.length ? ` The camera cannot see well: ${blind.slice(0, 6).join(', ')}.` : '';
+  if (!me) return 'YOU CANNOT SEE THEM: the camera is on but they are not in its picture right now.' + blindNote;
+  const ago = Math.round((now - me.lastSeenAt) / 1000), cm = me.radiusM != null ? Math.round(me.radiusM * 100) : null;
+  const where = me.floor ? `${me.area && me.area !== 'unknown' ? me.area : 'in the room'} (x ${me.floor[0].toFixed(1)} m, y ${me.floor[1].toFixed(1)} m)` : 'position unknown';
+  if (!me.visible) return `YOU CANNOT SEE THEM right now (${how}); last seen ${ago} s ago ${where}.`;
+  const pose = (me.activity?.label || 'activity unclear') + (bodyNotes(me.kp) ? ', ' + bodyNotes(me.kp) : '');
+  const sure = me.confidence === 'sure' ? `you know where they are to about ${cm} cm` : me.confidence === 'rough' ? 'you know roughly where they are (name the area, not an exact spot)' : 'their exact spot is uncertain';
+  return `YOU CAN SEE THEM (${how}): ${pose}, ${where}; ${sure}.`;
+}
 function programContext(id, context) {
   const s=sessions.get(id);
-  return `${systemPrompt(s)}\nYou are performing Mother program: ${context.program.title}.\nOverall score: ${context.program.description}\nYour role: ${context.role.name}. ${context.role.brief}\nScene: ${context.scene?.name || 'end'}. Current cue: ${context.cue?.text || ''}. Delivery: ${context.cue?.delivery || ''}\nOnly direct this participant. Never invent another participant's readiness. Respect the script's coordination cues. Stage instructions are private; speak only the words intended for the earpiece.`;
+  const seen = perceptionFor(id) + roomNow(id);
+  logEvent('perception', { id, scene: context.scene?.name || '', cue: context.cue?.id || '', text: seen });
+  lastPerception.set(id, { at: Date.now(), cue: context.cue?.id || '', text: seen });
+  return `${systemPrompt(s)}\nLIVE PERCEPTION (camera tracking, now): ${seen}\nYou are performing Mother program: ${context.program.title}.\nOverall score: ${context.program.description}\nYour role: ${context.role.name}. ${context.role.brief}\nScene: ${context.scene?.name || 'end'}. Current cue: ${context.cue?.text || ''}. Delivery: ${context.cue?.delivery || ''}\nOnly direct this participant. Never invent another participant's readiness. Respect the script's coordination cues. Stage instructions are private; speak only the words intended for the earpiece.`;
 }
 async function programSpeech(id,cue,context) {
+  if (sessions.get(id)?.live) endLive([id], 'a program took over this phone');   // never two voices on one phone
   const s=sessions.get(id);if(!s)throw Error('Phone unavailable.');
   stopAi(s,'program cue',true); const turn=++s.turn;
   let text=cue.text;
-  if(cue.adapt){s.thinking=true;state(s);text=await ai.think([{role:'system',content:programContext(id,context)},...s.history.slice(-20),{role:'user',content:`Deliver this passage, preserving its actions and essential meaning. You may adapt wording. Return only spoken text: ${cue.text}`}]);}
+  if(cue.adapt){s.thinking=true;state(s);text=await ai.think([{role:'system',content:programContext(id,context)},...s.history.slice(-20),{role:'user',content:`Deliver this passage, preserving its actions and essential meaning. You may adapt wording. Anything in the passage about where the participant is, what they are doing, or how sure you are is a placeholder: replace it with what LIVE PERCEPTION says. If LIVE PERCEPTION says you cannot see them, say that plainly and ask, instead of the placeholder. Return only spoken text: ${cue.text}`}]);}
   if(turn!==s.turn || s.waiting || !s.ws || s.edHold)throw Error('Cue interrupted.');
   text=String(text).trim().slice(0,6000); if(!text || /^\[?silence\]?$/i.test(text))throw Error('Mother returned no spoken passage. Repeat or advance this cue.');
   s.thinking=false;s.history.push({role:'assistant',content:text});
@@ -928,16 +1487,51 @@ programRunner=new ProgramRunner({
   visit:id=>sessions.get(id)?.visitToken,
   cancel:id=>{const s=sessions.get(id);if(s)stopAi(s,'program paused',true);},
   perform:programSpeech,
-  converse:(id,text,context)=>ai.think([{role:'system',content:programContext(id,context)+`\nThis is a bounded conversation (${context.exchanges+1} of ${context.cue.turns}). Respond briefly within the cue's subject. On the final exchange, finish naturally so the script can continue. Return spoken words only.`},...sessions.get(id).history.slice(-20)]),
+  converse:async(id,text,context)=>ai.think([{role:'system',content:programContext(id,context)+(LOOK.test(text)?`\nLOOKED JUST NOW (camera close-up, for "${text}"): ${await lookAt(id,text)}`:'')+`\nThis is a bounded conversation (${context.exchanges+1} of ${context.cue.turns}). Respond briefly within the cue's subject. On the final exchange, finish naturally so the script can continue. Return spoken words only.`},...sessions.get(id).history.slice(-20)]),
   decide:async(id,text,context)=>{
-    const raw=await ai.think([{role:'system',content:programContext(id,context)+'\nAfter an interruption choose when to return. Return ONLY JSON: {"action":"resume"|"wait"|"respond","text":"optional spoken response","reason":"short desk explanation"}. Resume repeats the current cue from its beginning. Respond asks or answers briefly then waits for the participant. Wait silently awaits their reply. After two exchanges prefer resume. Do not direct any other role.'},...sessions.get(id).history.slice(-20),{role:'user',content:`${context.director?'Controller intervention':'Participant reply'}: ${text}`}]);
-    const decision=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,''));
-    if(!['resume','wait','respond'].includes(decision.action) || (decision.action==='respond' && !String(decision.text || '').trim()))throw Error('Mother could not decide how to return. Choose Repeat cue or Continue cue at the desk.');
+    const silenceRules='\nThe participant spoke during a timed pause in the score. Return ONLY JSON: {"action":"resume"|"wait"|"respond","text":"optional spoken response","reason":"short desk explanation"}. resume = they are done or ready: move on to the next cue now. respond = they asked something, sound unsure, or think you cannot hear them: answer in one short sentence (acknowledge you hear them), then the pause continues. wait = nothing needs saying.';
+    const looked=!context.director&&LOOK.test(text)?`\nLOOKED JUST NOW (camera close-up, for "${text}"): ${await lookAt(id,text)}`:'';
+    const raw=await ai.think([{role:'system',content:programContext(id,context)+looked+'\nIf the participant asks you a question, choose respond and answer it truthfully from LIVE PERCEPTION and LOOKED JUST NOW (if present); never ignore a question.'+(context.duringSilence?silenceRules:'\nAfter an interruption choose when to return. Return ONLY JSON: {"action":"resume"|"wait"|"respond","text":"optional spoken response","reason":"short desk explanation"}. Resume repeats the current cue from its beginning. Respond asks or answers briefly then waits for the participant. Wait silently awaits their reply. After two exchanges prefer resume. Do not direct any other role.')},...sessions.get(id).history.slice(-20),{role:'user',content:`${context.director?'Controller intervention':'Participant reply'}: ${text}`}],{json:true});
+    const decision=parseDecision(raw);
+    if(!decision)throw Error('Mother could not decide how to return. Choose Repeat cue or Continue cue at the desk.');
     return {action:decision.action,text:String(decision.text || '').slice(0,2000),reason:String(decision.reason || '').slice(0,300)};
   },
   event:(type,data)=>logEvent(type,data),change:run=>toControls({type:'program',run})
 });
 programRunner.configure(session.program || null);
+// One-step Run: see run-launcher.js.
+const { Launcher } = require('./run-launcher');
+const phoneProblem = (s) => !s.audioReady ? 'enable audio on the phone' : (s.headset === false || s.headsetDropped) ? 'connect the earpiece' : s.hidden ? 'bring Mother to the front on the phone' : s.edHold ? 'held by the desk' : '';
+const launcher = new Launcher({
+  standby: STANDBY, maxPhones: () => MAX_PHONES, program: (id) => programStore.get(id), runner: programRunner,
+  phones: () => Array.from({ length: MAX_PHONES }, (_, i) => {
+    const s = sessions.get(i + 1), connected = !!s?.ws && s.ws.readyState === 1;
+    return { id: i + 1, connected, waiting: !!s?.waiting, ready: connected && programRunner.h.ready(i + 1), problem: s && connected ? phoneProblem(s) : '' };
+  }),
+  select: (sel) => { endLive(Object.values(sel.assignments), 'a program took over this phone'); session.program = sel; saveSession(); programRunner.configure(sel); },
+  remember: (sel, pending) => { session.program = sel; session.autoRun = pending; saveSession(); programRunner.configure(sel); },
+  beginVisit: (id) => { const s = sessions.get(id); if (s?.ws && s.waiting) beginParticipant(s, '', null); },
+  startRecording: () => { toControls({ type: 'sessionStarting' }); setTimeout(() => shutdown('record'), 400); },
+  rememberPlay: (phone) => { session.program = null; session.autoRun = { at: Date.now(), play: true, phone }; saveSession(); programRunner.configure(null); },
+  startPlay: async (phone) => {
+    const s = sessions.get(phone); if (!s) return;
+    if (session.program) { session.program = null; saveSession(); programRunner.configure(null); }   // a selected score would keep Mother quiet
+    s.play = true; s.mode = 'auto'; state(s);
+    if (!s.ws || s.waiting || s.live) return;
+    if (liveAvailable()) { startLive(s); return; }
+    s.history.push({ role: 'user', content: '[Play has started. Greet them in one or two short sentences, say where you think they are (from LIVE PERCEPTION, honestly), and invite them to move around, do things, and ask what you can see.]' });
+    aiTurn(s);
+  },
+  // A program that talks about where people are needs to see them: switch on tracking with the run.
+  startTracking: () => {
+    if (!pose.ready || pose.on) return;
+    const cam = roomObserver.config.defaultCameraId || cameras.find((c) => /^rtsp:/.test(c.main || ''))?.id;
+    try { if (cam) pose.start(cam); } catch (e) { console.log('  run: tracking not started — ' + e.message); }
+  },
+  log: (t) => console.log('  ' + t),
+});
+if (!STANDBY && prepared?.autoRun && Date.now() - prepared.autoRun.at < 10 * 60 * 1000) { if (prepared.autoRun.play) launcher.resumePlay(prepared.autoRun.phone); else launcher.resume(session.program); }
+setInterval(() => launcher.tick(), 1000);
 setInterval(()=>programRunner.tick(),50);
 
 // plays queued AI audio to the phone in real time (a little ahead, so the phone never runs dry)
@@ -947,13 +1541,14 @@ setInterval(() => {
   for (const s of sessions.values()) {
     if (!s.speaking) continue;
     if (!s.playT0) {
-      if (s.pending.length < RATE * 0.3 * 2 && !s.ttsDone) continue;
+      if (s.pending.length < RATE * preRollFor(s) * 2 && !s.ttsDone) continue;   // enough made to play to the end without gaps
       s.playT0 = now; s.playSent = 0;
       if (!s.playStarted) { s.playStarted = true; logEvent('play_start', { id: s.id, u: s.playU }); }
     }
     let lead = s.playSent / RATE - (now - s.playT0) / 1000;
     if (lead < 0 && s.pending.length) { s.playT0 = now - (s.playSent / RATE) * 1000; lead = 0; }
-    while (lead < 0.25 && s.pending.length >= (s.ttsDone ? 1 : FRAME)) {
+    // How far ahead to send: phones that buffer get 0.8 s, which rides out network jitter; older apps drop anything past 0.4 s.
+    while (lead < (s.jitterBuffer ? 0.8 : 0.25) && s.pending.length >= (s.ttsDone ? 1 : FRAME)) {
       const chunk = s.pending.subarray(0, FRAME); s.pending = s.pending.subarray(chunk.length);
       if (s.ws && s.ws.readyState === 1) s.ws.send(chunk);
       track(`phone${s.id}-heard`).write(chunk);
@@ -990,6 +1585,7 @@ if (roomMics) setInterval(() => toControls({ type: 'room', room: roomMics.status
 // ---------- human director talk ----------
 // Speaks text word-for-word in the phone's chosen AI voice (typed lines, and the director's speech in "AI voice" mode).
 function speakAs(t, text, who) {
+  if (t?.live) { t.live.say(text); transcript(t, who, text, { live: true }); return; }
   if (!t || !t.ws) return;
   stopAi(t, 'director ' + who);
   const turn = ++t.turn;
@@ -1000,28 +1596,49 @@ function speakAs(t, text, who) {
   say(t, text, turn, u);
 }
 
-let talk = null;
-function talkStart(target, as, owner) {
-  if (!Number.isInteger(target) || target < 0 || target > MAX_PHONES) return;
-  if (talk && talk.owner !== owner) return;   // another desk connection owns this talk
-  if (talk) talkStop(owner);
-  talk = { owner, target, targets: new Set(), visits: new Map(), programTokens:new Map(), pcm: [], as: as === 'voice' ? 'voice' : 'own', t0: Date.now() };
+// One hold-to-talk per desk connection, so two directors can talk at once, and one hold can cover several phones
+// (keys 2 and 3 held together). A phone stays held while any director is talking to it.
+const talks = new Map();   // desk connection -> its talk
+const heldByDesk = (id) => [...talks.values()].some((t) => t.targets.has(id));
+function addTargets(t, wanted) {
   for (const s of sessions.values()) {
-    if (!s.ws || (target !== 0 && target !== s.id)) continue;
-    talk.targets.add(s.id); talk.visits.set(s.id, s.visitToken); stopAi(s, 'human director cut in'); talk.programTokens.set(s.id,programRunner.token(s.id)); s.edHold = true; state(s);
+    if (!s.ws || t.targets.has(s.id) || !(wanted.includes(0) || wanted.includes(s.id))) continue;
+    t.targets.add(s.id); t.visits.set(s.id, s.visitToken); stopAi(s, 'human director cut in'); t.programTokens.set(s.id,programRunner.token(s.id)); s.edHold = true; state(s);
   }
 }
+function talkStart(target, as, owner) {
+  const wanted = [...new Set((Array.isArray(target) ? target : [target]).filter((n) => Number.isInteger(n) && n >= 0 && n <= MAX_PHONES))];
+  if (!wanted.length) return;
+  as = as === 'voice' ? 'voice' : 'own';
+  const cur = talks.get(owner);
+  if (cur && cur.as === as) { cur.wanted = [...new Set([...cur.wanted, ...wanted])]; addTargets(cur, cur.wanted); return; }   // another key joined the hold
+  if (cur) talkStop(owner);
+  const t = { owner, wanted, targets: new Set(), visits: new Map(), programTokens:new Map(), pcm: [], as, t0: Date.now() };
+  talks.set(owner, t); addTargets(t, wanted);
+}
 async function talkStop(owner) {
-  if (!talk || talk.owner !== owner) return;
-  const t = talk; talk = null; t.t1 = Date.now();
-  for (const id of t.targets) { const s = sessions.get(id); if (s) { s.edHold = false; s.lastActivity = Date.now(); state(s); } }
-  if (!t.pcm.length) return;
+  const t = talks.get(owner); if (!t) return;
+  talks.delete(owner); t.t1 = Date.now();
+  for (const id of t.targets) { const s = sessions.get(id); if (s) { s.edHold = heldByDesk(id); s.lastActivity = Date.now(); state(s); } }
+  // The director always hears back what happened: a silent desk reads as a broken button.
+  const tell = (text) => send(t.owner, { type: 'error', text });
+  const note = (id, text) => toControls({ type: 'transcript', id, who: 'note', text });
+  if (!t.targets.size) return tell(t.wanted.includes(0) ? 'No phone is connected, so nobody heard that.' : `Phone ${t.wanted.join(' and ')} ${t.wanted.length > 1 ? 'are' : 'is'} not connected, so nobody heard that.`);
+  if (t.as !== 'voice') { if (!t.pcm.length) tell('No sound reached the server from the desk microphone.'); }
+  else if (!t.pcm.length) return tell('No sound reached the server: check the desk microphone is on (Enable audio).');
+  else if (t.t1 - t.t0 < 400) return tell('Hold the button while you speak, and let go when you have finished.');
   let text = '';
-  try { text = (await ai.transcribe(Buffer.concat(t.pcm))).trim(); } catch (e) { return console.error('  director transcription: ' + e.message); }
-  if (!text) return;
+  if (t.pcm.length) {
+    try { text = (await ai.transcribe(Buffer.concat(t.pcm))).trim(); }
+    catch (e) { console.error('  director transcription: ' + e.message); return tell(`Could not turn your speech into text (${e.message.slice(0, 80)}). Try again, or type the line.`); }
+  }
+  if (!text) return t.as === 'voice' ? tell('Heard no words. Hold the button, speak, then let go.') : undefined;
   for (const id of t.targets) {
     const s = sessions.get(id);
-    if (!s || s.waiting || s.visitToken !== t.visits.get(id)) continue;
+    // Talking in the AI voice to a waiting phone during a recorded session starts its visit, so the words go through.
+    const started = s && s.waiting && t.as === 'voice' && s.visitToken === t.visits.get(id) && beginParticipant(s, '', null, { quiet: true }) !== false && !s.waiting;
+    if (!s || (!started && s.visitToken !== t.visits.get(id))) { note(id, `Not passed on (the visit changed while you were talking): “${text}”`); continue; }
+    if (s.waiting) { if (t.as === 'voice') note(id, `Not passed on (nothing is being recorded yet; press Start session first): “${text}”`); continue; }
     if(programRunner.manages(id) && programRunner.token(id)!==t.programTokens.get(id))continue;
     if (t.as === 'voice') {
       if(programRunner.manages(id) && programRunner.status==='running'){
@@ -1041,6 +1658,51 @@ async function talkStop(owner) {
 
 // ---------- websocket ----------
 const wss = new WebSocketServer({ server, path: '/ws' });
+// Who is using Mother from outside the studio, for the desk; privacy mode closes all of them at once.
+function remotePeople() {
+  return [...wss.clients].filter((c) => c.remote && c.readyState === 1 && controls.has(c)).map((c) => ({ name: c.who?.name || 'Desk link (no login)', email: c.who?.email || '', owner: !!c.owner, since: c.since }));
+}
+// The studio's own desk and an owner (from anywhere) may switch privacy mode.
+function accessState(ws) {
+  const manage = !ws.remote || !!ws.owner, here = new Set(remotePeople().map((p) => p.email).filter(Boolean)), v = access.view();
+  return { type: 'access', ...v, users: manage ? v.users.map((u) => ({ ...u, online: here.has(u.email) })) : [], local: !ws.remote, canPrivacy: manage, canManage: manage, me: ws.who?.email || '', people: remotePeople() };
+}
+// Team: add, remove, change role, disconnect for a while, require logins. Shared by the Team page (HTTP) and
+// the desk. Removing or disconnecting someone closes their desk at once. Returns an error message or ''.
+function teamAction(m, by) {
+  try {
+    const close = (email, why) => { for (const c of wss.clients) if (c.who?.email === email) c.close(4003, why); };
+    if (m.op === 'add') access.addUser(m);
+    else if (m.op === 'remove') close(access.removeUser(m.email).email, 'not-listed');
+    else if (m.op === 'kick') close(access.kick(m.email).email, 'kicked');
+    else if (m.op === 'unkick') access.unkick(m.email);
+    else if (m.op === 'role') { const u = access.setRole(m.email, m.role); for (const c of wss.clients) if (c.who?.email === u.email) { c.owner = u.role === 'owner'; c.who.owner = c.owner; if (access.privacy && !c.owner) c.close(4003, 'private'); } }
+    else if (m.op === 'name') access.setName(m.email, m.name);
+    else if (m.op === 'requireLogin') { access.setRequireLogin(m.on); if (m.on) for (const c of wss.clients) if (c.remote && !c.who && (c.role === 'control' || c.role === 'monitor')) c.close(4003, 'login'); }   // old key links stop working
+    else if (m.op === 'privacy') access.setPrivacy(!!m.on);
+    else return 'Choose a team action.';
+    logEvent('team', { op: m.op, email: m.email || '', role: m.role || '', on: m.on, by });
+    return '';
+  } catch (e) { return e.message; } finally { accessChanged(); }
+}
+function teamView() {
+  const here = new Set(remotePeople().map((p) => p.email).filter(Boolean)), v = access.view();
+  return { users: v.users.map((u) => ({ ...u, online: here.has(u.email), kickedUntil: access.kickedUntil(u.email) || null })), requireLogin: v.requireLogin, privacy: v.privacy, configured: v.configured };
+}
+function managePeople(ws, m) {
+  if (ws.remote && !ws.owner) return send(ws, { type: 'error', text: 'Only the studio or an owner can manage people.' });
+  const error = teamAction(m, ws.who?.email || 'studio'); if (error) send(ws, { type: 'error', text: error });
+}
+function accessChanged() { for (const c of controls) send(c, accessState(c)); }
+access.onPrivacy = (on) => {
+  if (on) {
+    for (const c of wss.clients) if (c.remote && !c.owner) c.close(4003, 'private');   // owners stay
+    for (const [r, owner] of remoteStreams) if (!owner) { r.destroy(); remoteStreams.delete(r); }
+  }
+  logEvent('privacy', { on });
+  console.log(`  privacy mode ${on ? 'ON: everyone outside the studio is shut out' : 'off'}`);
+  accessChanged();
+};
 const freeId = (w) => {
   if (w && (!Number.isInteger(w) || w < 1 || w > MAX_PHONES)) return 0;
   const busy = (i) => sessions.get(i)?.ws;
@@ -1055,10 +1717,19 @@ wss.on('connection', (ws, req) => {
   ws.on('error', (err) => { console.error('  ! WebSocket error: ' + err.message); ws.terminate(); });
   const u = new URL(req.url, 'http://x');
   const role = u.searchParams.get('role'), key = u.searchParams.get('k');
-  ws.isAlive = true; ws.on('pong', () => (ws.isAlive = true));
+  // heardAt: the last time anything (data or a pong) arrived from this device, so a drop can say whether
+  // the phone had gone quiet (its network) or the server could not get its audio out (sentQueue).
+  ws.isAlive = true; ws.heardAt = Date.now(); ws.on('pong', () => { ws.isAlive = true; ws.heardAt = Date.now(); });
+  ws.on('message', () => { ws.heardAt = Date.now(); });
 
-  if (role === 'control' && key === CONTROL_KEY) {
+  const who = access.check(req);
+  if (who.blocked) { ws.close(4003, who.blocked); return; }
+  ws.remote = !!who.remote; ws.role = role; ws.owner = !!who.owner; ws.who = who.director ? { email: who.email, name: who.name, owner: !!who.owner } : null; ws.since = Date.now();
+  const keyed = !who.needsLogin;
+  if (role === 'control' && (who.director || (keyed && key === CONTROL_KEY))) {
     controls.add(ws);
+    if (who.director) access.seen(who.email);
+    accessChanged();
     send(ws, { type: 'phonesChanged', maxPhones: MAX_PHONES });
     send(ws,{type:'program',run:programRunner.view()});
     send(ws, { type: 'participants', list: list() });
@@ -1070,8 +1741,8 @@ wss.on('connection', (ws, req) => {
       if (isBinary) {
         const buf = Buffer.from(data);
         if (buf.length < 4 || buf.length % 2) return;
-        const target = buf.readUInt16LE(0), pcm = buf.subarray(2);
-        if (!talk || talk.owner !== ws || talk.target !== target) return;
+        const pcm = buf.subarray(2), talk = talks.get(ws);   // the first two bytes name a target; this desk's talk decides
+        if (!talk) return;
         talk.pcm.push(pcm);
         track('director-mic').write(pcm);
         if (talk.as === 'voice') return;   // AI-voice mode: they hear it after transcription, in the AI voice
@@ -1089,9 +1760,11 @@ wss.on('connection', (ws, req) => {
       if (m.type === 'talk') { logEvent(m.on ? 'talk_start' : 'talk_stop', { target: m.target, as: m.as }); if (m.on) talkStart(m.target, m.as, ws); else talkStop(ws); }
       if (m.type === 'endSession' && !STANDBY) { toControls({ type: 'sessionEnding' }); shutdown(true); }
       if (m.type === 'startSession' && STANDBY) { toControls({ type: 'sessionStarting' }); shutdown('record'); }
-      if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() }); }
+      if (m.type === 'mode' && s) { s.mode = m.mode === 'auto' ? 'auto' : 'off'; if (s.mode === 'off') stopAi(s, 'AI switched off'); s.lastActivity = Date.now(); logEvent('mode', { id: s.id, mode: s.mode }); state(s); toControls({ type: 'participants', list: list() });
+        if (s.mode === 'auto' && s.waiting && s.ws && !STANDBY) beginParticipant(s, '', null); }   // AI on for a waiting phone: start its visit
       if(m.type==='nudge' && s && programRunner.manages(s.id)){try{programRunner.next(s.id);}catch(e){send(ws,{type:'error',id:0,text:e.message});}return;}
-      if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
+      if (m.type === 'nudge' && s?.ws && s.waiting && !STANDBY) beginParticipant(s, '', null);   // starts the visit; Mother opens it
+      else if (m.type === 'nudge' && s && !s.waiting) { s.history.push({ role: 'user', content: '[Give the next direction now.]' }); logEvent('nudge', { id: s.id }); if (s.mode !== 'auto') { s.mode = 'auto'; state(s); } aiTurn(s); }
       if (m.type === 'end' && s) endParticipant(s, 'ended by director');
       if (m.type === 'voice') {   // id 0 = every phone. Any of voice / emotion / pitch / speed.
         const ids = m.id ? [m.id] : Array.from({ length: MAX_PHONES }, (_, i) => i + 1);
@@ -1110,6 +1783,9 @@ wss.on('connection', (ws, req) => {
         const text = String(m.text).trim().slice(0, 600);
         for (const t of (m.id ? [sessions.get(m.id)] : [...sessions.values()])) speakAs(t, text, 'typed');
       }
+      // Privacy mode is switched from inside the studio or by an owner (who stays connected through it).
+      if (m.type === 'privacy') { if (ws.remote && !ws.owner) send(ws, { type: 'error', text: 'Only the studio or an owner can switch privacy mode.' }); else access.setPrivacy(!!m.on); }
+      if (m.type === 'people') managePeople(ws, m);
       if (m.type === 'mark') { logEvent('mark', { text: String(m.text || 'Mark').slice(0, 200) }); toControls({ type: 'marked', t: clock(), text: m.text || 'Mark' }); }
       if (m.type === 'instruct' && s && m.text && !s.waiting) {
         logEvent('instruct', { id: s.id, text: m.text });
@@ -1165,16 +1841,21 @@ wss.on('connection', (ws, req) => {
           beginParticipant(t, x.name, x.pid);   // takes the phone past its start screen
         } else send(ws, { type: 'error', id: Number(m.phone) || 0, text: 'That phone isn\'t connected.' });
       }
+      if (m.type === 'visitStart') {   // start a visit on a waiting phone with nobody queued for it (practice, walk-ins)
+        const t = sessions.get(Number(m.phone));
+        if (!t?.ws) send(ws, { type: 'error', id: Number(m.phone) || 0, text: 'That phone isn\'t connected.' });
+        else if (t.waiting) beginParticipant(t, '', null);
+      }
       if (m.type === 'getBrief') { let b = ''; try { b = fs.readFileSync(BRIEF_FILE, 'utf8'); } catch {} send(ws, { type: 'brief', text: b }); }
       if (m.type === 'saveBrief' && typeof m.text === 'string') {
         saveBriefText(m.text);
       }
     });
-    ws.on('close', () => { controls.delete(ws); talkStop(ws); });
+    ws.on('close', () => { controls.delete(ws); talkStop(ws); if (ws.remote) accessChanged(); });
     return;
   }
 
-  if (role === 'monitor' && (key === MONITOR_KEY || key === CONTROL_KEY)) {
+  if (role === 'monitor' && (who.director || (keyed && (key === MONITOR_KEY || key === CONTROL_KEY)))) {
     monitors.add(ws);
     send(ws, { type: 'cameras', list: cameras.map((c) => c.status()) });
     send(ws, { type: 'participants', list: list() });
@@ -1187,9 +1868,21 @@ wss.on('connection', (ws, req) => {
     if (!id) { send(ws, { type: 'full' }); return ws.close(); }
     let s = sessions.get(id);
     if (!s) { s = new Session(id); sessions.set(id, s); }
-    s.ws = ws; s.hidden = false; s.audioReady = false;
+    s.ws = ws; s.hidden = false; s.audioReady = false; s.jitterBuffer = false;
     send(ws, { type: 'welcome', id, waiting: s.waiting, name: s.name });
     logEvent('phone_connected', { id });
+    const since = Date.now(), via = req.headers['cf-connecting-ip'] ? 'internet link' : 'local network';
+    console.log(`  phone ${id} connected (${via})`);
+    connLog.push(diag('phone_connected', { phone: id, via })); if (connLog.length > 200) connLog.shift();
+    ws.on('close', (code) => {
+      const secs = Math.round((Date.now() - since) / 1000);
+      const why = ws.disconnectReason || (code === 1006 ? 'connection lost' : code === 1012 ? 'server restarting' :
+        code === 4000 ? 'slot replaced' : code === 1001 ? 'page closed or backgrounded' : 'code ' + code);
+      console.log(`  phone ${id} disconnected after ${secs} s (${why})`);
+      const quietS = Math.round((Date.now() - ws.heardAt) / 1000), queuedKB = Math.round((ws.bufferedAmount || 0) / 1024);
+      if (quietS >= 5 || queuedKB) console.log(`  phone ${id} had been silent ${quietS} s${queuedKB ? `, ${queuedKB} KB still waiting to go out` : ''}`);
+      connLog.push(diag('phone_disconnected', { phone: id, secs, why, quietS, queuedKB, lastTelemetry: phoneTelemetry.get(id) || null })); if (connLog.length > 200) connLog.shift();
+    });
     toControls({ type: 'participants', list: list() });
     ws.on('message', (data, isBinary) => {
       if (s.ws !== ws) return;   // ignore frames from a phone whose slot has been replaced
@@ -1198,15 +1891,19 @@ wss.on('connection', (ws, req) => {
         if (pcm.length && pcm.length % 2 === 0 && !s.audioReady) { s.audioReady = true; state(s); }
         // The desk starts/ends each visit. A connected phone alone does not enable its microphone feed.
         if (STANDBY || s.waiting || !pcm.length || pcm.length % 2) return;
-        track(`phone${id}-mic`).write(pcm);
-        s.vad.push(pcm);
-        const out = Buffer.alloc(pcm.length + 2); out.writeUInt16LE(id, 0); pcm.copy(out, 2);
+        track(`phone${id}-mic`).write(pcm);   // the recording keeps the raw sound
+        const heard = (s.gainIn ||= new ai.Gain()).process(pcm);   // a quiet phone mic, brought up to speaking level
+        if (s.live) { s.live.append(heard); } else s.vad.push(heard);   // Live mode: the realtime model listens itself
+        const out = Buffer.alloc(heard.length + 2); out.writeUInt16LE(id, 0); heard.copy(out, 2);
         for (const c of controls) if (c.readyState === 1) c.send(out);
         return;
       }
       let m; try { m = JSON.parse(data); } catch { return; }
       if (!m || typeof m !== 'object' || Array.isArray(m)) return;
       // Phones are desk equipment: only the control room can start a participant visit.
+      if (m.type === 'ping') { send(ws, { type: 'pong', t: m.t }); return; }
+      if (m.type === 'caps') { s.jitterBuffer = !!m.jitterBuffer; return; }   // this phone buffers: send speech further ahead
+      if (m.type === 'telemetry') { const t = { ...m, at: Date.now() }; delete t.type; phoneTelemetry.set(id, t); diag('phone_telemetry', { phone: id, ...t }); return; }
       if (m.type === 'hello') { s.audioReady = true; state(s); }
       if (m.type === 'hello' && !s.waiting && s.mode === 'auto') {   // came back after a dropout
         s.history.push({ role: 'user', content: '[The participant reconnected after a dropout. Pick up where you left off, briefly.]' });
@@ -1240,7 +1937,18 @@ wss.on('connection', (ws, req) => {
   ws.close(4001, 'bad key');
 });
 
-setInterval(() => { for (const ws of wss.clients) { if (!ws.isAlive) { ws.terminate(); continue; } ws.isAlive = false; ws.ping(); } }, 15000);
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.readyState !== 1) continue;
+    if (!ws.isAlive) {
+      ws.disconnectReason = 'missed heartbeat';
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 15000);
 
 // ---------- tunnel ----------
 async function announce(base) {
@@ -1276,6 +1984,10 @@ server.listen(PORT, async () => {
   }
   console.log(cameras.length ? `  cameras: ${cameras.map((c) => c.name).join(', ')}` : '  cameras: none (add them in cameras.json)');
   for (const c of cameras) c.start();
+  if (process.env.ROOM_TRACKING === 'on' && roomObserver.config.defaultCameraId) {
+    try { pose.start(roomObserver.config.defaultCameraId); }
+    catch (error) { console.log('  ! room tracking: ' + error.message); }
+  }
   console.log(roomMics ? `  room mics: ${roomCfg.names.join(', ')} (${roomCfg.device})` : '  room mics: none (add them in roommics.json)');
   if (roomMics && !STANDBY) roomMics.start();
   console.log('\n  CONTROL ROOM (open on this computer, use headphones):\n  ' + controlUrl);

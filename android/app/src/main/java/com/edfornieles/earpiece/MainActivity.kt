@@ -147,9 +147,9 @@ class MainActivity : Activity() {
 
             val expected = Config.expectedHeadset(this@MainActivity)
             when {
-                !AudioService.headset -> line(headsetLine, "No headset — sound comes from the phone itself", WARN)
+                !AudioService.headset -> line(headsetLine, "No headset audio route. Mother is muted.", WARN)
                 expected.isNotEmpty() && AudioService.headsetName != expected -> line(headsetLine, "${AudioService.headsetName} — not this phone's earbuds ($expected)", WARN)
-                else -> line(headsetLine, "${AudioService.headsetName}${if (expected.isNotEmpty()) " ✓" else ""}", if (expected.isNotEmpty()) OK else FG)
+                else -> line(headsetLine, "Audio output · ${AudioService.headsetName}${if (expected.isNotEmpty()) " ✓" else ""}", if (expected.isNotEmpty()) OK else FG)
             }
             thisHeadset.visibility = if (AudioService.headset && AudioService.headsetName != expected) View.VISIBLE else View.GONE
             thisHeadset.text = "Make “${AudioService.headsetName}” this phone's headset"

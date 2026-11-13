@@ -105,6 +105,10 @@ test('recording server connection, visit and audio isolation regressions', { tim
     assert.equal((await request('room',{action:'save',revision:room.revision,name:'Stale'})).status,400);
     assert.equal((await request('room-frame?observation=missing',undefined,'phone')).status,403);
     assert.equal((await request('room-frame?observation=missing')).status,404);
+    const desk=await(await request('desk-room')).json();
+    assert.ok(Array.isArray(desk.world.changes));assert.ok(['off','checks','always'].includes(desk.world.finder.mode));
+    assert.equal((await request('room',{action:'roomCheck'})).status,400,'no check without tracking or the finder');
+    assert.equal((await request('room',{action:'undoMove',id:'nope'})).status,400);
   });
 
   await t.test('draft generation requires the desk key and rejects invalid briefs without changing preparation', async () => {
@@ -287,4 +291,33 @@ test('recording server connection, visit and audio isolation regressions', { tim
     assert.ok(fs.readFileSync(path.join(tmp,'recordings',recordInfo.name,'events.jsonl'),'utf8').includes('program_cue_start'));
   });
 
+});
+
+test('a quiet phone microphone is brought up to speaking level, and loud input passes unchanged', () => {
+  const { Gain } = require('../ai');
+  const tone = (amp) => { const b = Buffer.alloc(960); for (let i = 0; i < 480; i++) b.writeInt16LE(Math.round(amp * 32767 * Math.sin(i / 5)), i * 2); return b; };
+  const rms = (b) => { let s = 0; for (let i = 0; i < 480; i++) s += (b.readInt16LE(i * 2) / 32768) ** 2; return Math.sqrt(s / 480); };
+  const quiet = new Gain(); let out;
+  for (let i = 0; i < 400; i++) out = quiet.process(tone(0.006));   // about -47 dB: what the phone sent
+  assert.ok(rms(out) > 0.018 * 2, `boosted to ${rms(out).toFixed(3)}, enough for speech detection`);
+  const loud = new Gain(), sample = tone(0.3);
+  for (let i = 0; i < 50; i++) out = loud.process(sample);
+  assert.equal(out, sample, 'already loud: untouched');
+});
+
+test('while Mother talks, only sustained speech cuts her off; a breath or a quick "yes" does not', () => {
+  const { Vad } = require('../ai');
+  const frame = (amp) => { const b = Buffer.alloc(960); for (let i = 0; i < 480; i++) b.writeInt16LE(Math.round(amp * 32767 * Math.sin(i / 3)), i * 2); return b; };
+  let starts = 0; const v = new Vad({ onStart: () => starts++, onUtterance: () => {} });
+  for (let i = 0; i < 50; i++) v.push(frame(0.002));          // a quiet room
+  v.strict = true;                                             // Mother is speaking
+  for (let i = 0; i < 12; i++) v.push(frame(0.2));             // 0.24 s: a breath, a "yes"
+  for (let i = 0; i < 50; i++) v.push(frame(0.002));
+  assert.equal(starts, 0, 'short sounds do not cut her off');
+  for (let i = 0; i < 40; i++) v.push(frame(0.2));             // 0.8 s of real talking
+  assert.equal(starts, 1, 'sustained speech does');
+  for (let i = 0; i < 50; i++) v.push(frame(0.002));
+  v.strict = false;                                            // Mother is quiet: speech is noticed at once
+  for (let i = 0; i < 4; i++) v.push(frame(0.2));
+  assert.equal(starts, 2);
 });

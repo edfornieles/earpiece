@@ -6,7 +6,8 @@
   const view = new FollowCore.Follow();
   let tracks = [], tracking = false, full = null, fullAt = 0, loading = false, last = performance.now();
   let wanted = (() => { try { return localStorage.getItem('room.follow') || 'auto'; } catch { return 'auto'; } })();
-  const on = () => stage.dataset.view === 'follow' && !document.hidden;
+  // Drawn whenever the pane is on screen (Follow, and Both), never left frozen on an old picture.
+  const on = () => !document.hidden && cv.offsetParent !== null;
   const keyOf = (t) => t.binding?.person?.pid || t.id;
   const nameOf = (t) => t.binding?.person?.name || t.binding?.label || 'Unknown person ' + t.id.replace(/^\D+/, '');
 
@@ -18,6 +19,7 @@
   });
   camera.addEventListener('change', () => {
     full?.close(); full = null; fullAt = 0; tracks = []; tracking = false; listPeople();
+    ctx.clearRect(0, 0, cv.width, cv.height); note.textContent = '';
   });
   function listPeople() {
     const seen = tracks.filter((t) => t.visible && t.box), opts = [['auto', 'Auto']].concat(seen.map((t) => [keyOf(t), nameOf(t)]));

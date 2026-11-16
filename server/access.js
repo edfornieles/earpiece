@@ -25,7 +25,7 @@ class Access {
     this.file = file; this.fetch = fetchImpl; this.now = now;
     this.cfg = { users: [], requireLogin: false, privacy: false, teamDomain: '', aud: '' };
     try { Object.assign(this.cfg, JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
-    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director', ...(u.addedAt ? { addedAt: u.addedAt } : {}), ...(u.lastSeenAt ? { lastSeenAt: u.lastSeenAt } : {}) })).filter((u) => u.email);
+    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director', ...(u.addedAt ? { addedAt: u.addedAt } : {}), ...(u.lastSeenAt ? { lastSeenAt: u.lastSeenAt } : {}), ...(u.welcomedAt ? { welcomedAt: u.welcomedAt } : {}) })).filter((u) => u.email);
     this.keys = new Map(); this.keysAt = 0;
     this.kicked = new Map();   // email -> until: disconnected by an owner, kept out for a while
     this.onPrivacy = null;
@@ -63,6 +63,11 @@ class Access {
     user.name = name; this.save(); return user;
   }
   // Disconnect someone for a while without taking them off the list (removeUser is permanent).
+  // When the welcome email went out (the Team page shows it, and offers to send it again).
+  markWelcomed(email) {
+    const user = this.cfg.users.find((u) => u.email === String(email || '').trim().toLowerCase()); if (!user) return null;
+    user.welcomedAt = new Date(this.now()).toISOString(); this.save(); return user;
+  }
   kick(email, ms = 15 * 60e3) {
     const user = this.cfg.users.find((u) => u.email === String(email || '').trim().toLowerCase()); if (!user) throw Error('That person is not on the list.');
     this.kicked.set(user.email, this.now() + ms); return user;

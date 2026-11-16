@@ -53,6 +53,27 @@ const PHONE_KEY = keys.phone, CONTROL_KEY = keys.control, MONITOR_KEY = keys.mon
 // Who may come in from outside the studio (logins through Cloudflare Access), and privacy mode. See access.js.
 const { Access } = require('./access');
 const access = new Access(path.join(__dirname, '.access.json')); access.start();
+// The welcome email for people added to the team (mailer.js): sent from Gmail when GMAIL_USER and
+// GMAIL_APP_PASSWORD are set. Its wording can be edited on the Team page (welcome-email.txt, not in git).
+const mailer = require('./mailer');
+const WELCOME_FILE = path.join(__dirname, 'welcome-email.txt');
+const MAIL = { user: process.env.GMAIL_USER || '', pass: (process.env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, ''), fromName: process.env.MAIL_FROM_NAME || 'Mother' };
+const DIRECTOR_URL = process.env.DIRECTOR_URL || 'https://mother.edfornieles.com';
+const welcomeState = new Map();   // email -> { sending } or { error, at }: this run only; success is kept on the person (welcomedAt)
+const welcomeTemplate = () => { try { return fs.readFileSync(WELCOME_FILE, 'utf8'); } catch { return mailer.DEFAULT_WELCOME; } };
+function sendWelcome(email, by) {
+  const u = access.cfg.users.find((x) => x.email === email); if (!u) throw Error('That person is not on the list.');
+  if (!MAIL.user || !MAIL.pass) throw Error('Email is not set up yet: add GMAIL_USER and GMAIL_APP_PASSWORD to server/.env and restart Mother.');
+  if (welcomeState.get(email)?.sending) return;
+  const from = access.cfg.users.find((x) => x.email === by) || access.cfg.users.find((x) => x.role === 'owner');
+  const mail = mailer.welcomeEmail({ name: u.name, email: u.email, role: u.role, inviter: from?.name || '', link: DIRECTOR_URL }, welcomeTemplate());
+  welcomeState.set(email, { sending: true });
+  mailer.sendMail({ to: u.email, ...mail }, MAIL).then(() => {
+    welcomeState.delete(email); access.markWelcomed(email); logWho('welcome_sent', { to: email, by });
+  }, (e) => {
+    welcomeState.set(email, { error: e.message, at: Date.now() }); logWho('welcome_failed', { to: email, by, error: e.message });
+  }).finally(accessChanged);
+}
 const remoteStreams = new Map();   // camera streams watched from outside the studio -> watched by an owner?
 
 // Voice choices persist between runs.
@@ -1833,7 +1854,9 @@ function accessState(ws) {
 function teamAction(m, by) {
   try {
     const close = (email, why) => { for (const c of wss.clients) if (c.who?.email === email) c.close(4003, why); };
-    if (m.op === 'add') access.addUser(m);
+    if (m.op === 'add') { const u = access.addUser(m); if (m.welcome !== false && MAIL.user && MAIL.pass) sendWelcome(u.email, by); }
+    else if (m.op === 'welcome') sendWelcome(String(m.email || '').trim().toLowerCase(), by);
+    else if (m.op === 'welcomeText') { const t = String(m.text || '').trim(); if (!t || t === mailer.DEFAULT_WELCOME.trim()) fs.rmSync(WELCOME_FILE, { force: true }); else fs.writeFileSync(WELCOME_FILE, t.slice(0, 8000) + '\n'); }
     else if (m.op === 'remove') close(access.removeUser(m.email).email, 'not-listed');
     else if (m.op === 'kick') close(access.kick(m.email).email, 'kicked');
     else if (m.op === 'unkick') access.unkick(m.email);
@@ -1848,7 +1871,8 @@ function teamAction(m, by) {
 }
 function teamView() {
   const here = new Set(remotePeople().map((p) => p.email).filter(Boolean)), v = access.view();
-  return { users: v.users.map((u) => ({ ...u, online: here.has(u.email), kickedUntil: access.kickedUntil(u.email) || null })), requireLogin: v.requireLogin, privacy: v.privacy, configured: v.configured };
+  return { users: v.users.map((u) => ({ ...u, online: here.has(u.email), kickedUntil: access.kickedUntil(u.email) || null, welcome: welcomeState.get(u.email) || null })), requireLogin: v.requireLogin, privacy: v.privacy, configured: v.configured,
+    mail: { configured: !!(MAIL.user && MAIL.pass), from: MAIL.user, link: DIRECTOR_URL, text: welcomeTemplate(), defaultText: mailer.DEFAULT_WELCOME } };
 }
 function managePeople(ws, m) {
   if (ws.remote && !ws.owner) return send(ws, { type: 'error', text: 'Only the studio or an owner can manage people.' });

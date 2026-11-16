@@ -44,3 +44,4 @@ server/sounds/
 
 # The debrief question guide (edited on the Debrief page)
 server/debrief-guide.txt
+server/welcome-email.txt

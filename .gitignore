@@ -41,3 +41,6 @@ server/logs/
 
 # Uploaded sound tracks
 server/sounds/
+
+# The debrief question guide (edited on the Debrief page)
+server/debrief-guide.txt

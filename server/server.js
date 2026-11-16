@@ -61,8 +61,8 @@ let settings = { voices: {}, styles: {} };
 try { settings = { voices: {}, styles: {}, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) }; } catch {}
 const saveSettings = () => fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 let MAX_PHONES = Math.max(INITIAL_PHONE_COUNT, Math.min(65535, Math.floor(Number(settings.phoneCount) || 0)));
-const voiceOf = (id) => settings.voices[id] || ai.VOICES[0].name;
-const styleOf = (id) => ({ emotion: 'neutral', pitch: 0, speed: 1, ...(settings.styles[id] || {}) });
+const voiceOf = (id) => sessions.get(Number(id))?.debrief?.voice || settings.voices[id] || ai.VOICES[0].name;
+const styleOf = (id) => { const d = sessions.get(Number(id))?.debrief; return d ? { emotion: d.emotion || 'neutral', pitch: 0, speed: 1 } : { emotion: 'neutral', pitch: 0, speed: 1, ...(settings.styles[id] || {}) }; };
 
 // ---------- session folder ----------
 // Two modes, chosen by run.js. STANDBY: nothing is recorded; you prepare the next session (name, notes,
@@ -324,6 +324,11 @@ function logDeskCommand(ws, m) {
 // Sound library (uploaded tracks + the beep), played into participants' ears from the desk. See sounds.js.
 const { Sounds, Playing, MAX_BYTES: SOUND_MAX } = require('./sounds');
 const soundLib = new Sounds(path.join(__dirname, 'sounds')), soundsPlaying = new Playing();
+// Debriefs: a neutral interviewer asks a participant how the performance felt, briefed on their visit. See debrief.js.
+const debrief = require('./debrief');
+const DEBRIEF_GUIDE_FILE = path.join(__dirname, 'debrief-guide.txt');
+const debriefGuide = () => { try { return fs.readFileSync(DEBRIEF_GUIDE_FILE, 'utf8').trim() || debrief.DEFAULT_GUIDE; } catch { return debrief.DEFAULT_GUIDE; } };
+const DEBRIEF_VOICE = { voice: 'Cosette (expressive)', emotion: 'calm' };   // not Mother's voice
 function logEvent(type, data = {}) { events.write(JSON.stringify({ t: clock(), type, ...data }) + '\n'); }
 
 class WavTrack {
@@ -680,6 +685,52 @@ const server = http.createServer(async (req, res) => {
         const d = await readBody(req, 10e3);
         if (d.op === 'stop') { stopSound(d, whoLabel(who)); return json(res, { ok: true }); }
         return json(res, { ok: true, phones: playSound(d, whoLabel(who)) });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/debrief' && req.method === 'GET') {
+      const live = [...sessions.values()].filter((s) => s.ws && s.ws.readyState === 1);
+      return json(res, { visits: debrief.recentVisits(REC_ROOT), guide: debriefGuide(), defaultGuide: debrief.DEFAULT_GUIDE,
+        voices: ai.VOICES.map((v) => ({ name: v.name, emotions: ai.emotionsOf(v.name) })), voice: DEBRIEF_VOICE, recording: !STANDBY,
+        phones: live.map((s) => ({ phone: s.id, waiting: !!s.waiting, name: s.name || '', debrief: s.debrief ? { of: s.debrief.of } : null })) });
+    }
+    if (p.startsWith('/api/debrief/') && req.method === 'POST') {
+      try {
+        const d = await readBody(req, 200e3), op = p.slice('/api/debrief/'.length);
+        const dirOf = () => { const dir = sessionDirOf(String(d.session || '')); if (!dir) throw Error('No such session.'); return dir; };
+        if (op === 'guide') { fs.writeFileSync(DEBRIEF_GUIDE_FILE, String(d.text || '').slice(0, 8000)); return json(res, { ok: true, guide: debriefGuide() }); }
+        if (op === 'prepare') {   // read their visit back and write the interviewer's briefing
+          const rec = debrief.visitRecord(dirOf(), String(d.pid || ''));
+          const dossier = await debrief.writeDossier(rec);
+          logWho('debrief_prepared', { ...whoLabel(who), session: rec.session, name: rec.name });
+          return json(res, { ok: true, dossier, name: rec.name, minutes: rec.minutes, lines: rec.lines.length, moments: rec.moments.length });
+        }
+        if (op === 'start') {
+          const s = sessions.get(Number(d.phone));
+          if (!s?.ws || s.ws.readyState !== 1) throw Error('That phone is not connected.');
+          if (STANDBY) throw Error('Start the session first: a debrief is recorded like any visit.');
+          if (programRunner?.manages(s.id)) throw Error('A program is running on that phone. Stop it first.');
+          const rec = d.session && d.pid ? debrief.visitRecord(dirOf(), String(d.pid)) : null;
+          const voice = ai.VOICES.some((v) => v.name === d.voice) ? d.voice : DEBRIEF_VOICE.voice;
+          const emotion = ai.emotionsOf(voice).includes(d.emotion) ? d.emotion : voice === DEBRIEF_VOICE.voice ? DEBRIEF_VOICE.emotion : 'neutral';
+          const debriefOf = rec ? { session: rec.session, pid: String(d.pid), name: rec.name } : null;
+          s.mode = 'auto';
+          beginParticipant(s, String(d.name || rec?.name || '').slice(0, 80), null, { quiet: true });
+          s.debrief = { of: debriefOf, dossier: String(d.dossier || '').slice(0, 12000), guide: debriefGuide(), minutes: rec?.minutes || 0, voice, emotion };
+          const visit = [...session.participants].reverse().find((x) => x.phone === s.id && x.end == null);
+          if (visit) { visit.debriefOf = debriefOf || { session: null }; saveSession(); }
+          logWho('debrief_start', { ...whoLabel(who), phone: s.id, name: s.name, of: debriefOf?.session || null, voice });
+          toControls({ type: 'transcript', id: s.id, who: 'note', text: `— debrief with the interviewer${debriefOf ? ' (about ' + (debriefOf.name || 'their visit') + ', ' + debriefOf.session + ')' : ''} —`, t: clock() });
+          s.history.push({ role: 'user', content: `[The debrief is starting. ${s.name || 'The participant'} has just sat down in front of the camera with the earpiece in. Introduce yourself in one or two sentences as the interviewer (not Mother), say this is a short conversation about how the performance felt, and ask your first question.]` });
+          state(s); setTimeout(() => aiTurn(s), 1200);
+          return json(res, { ok: true });
+        }
+        if (op === 'end') {
+          const s = sessions.get(Number(d.phone));
+          if (!s?.debrief) throw Error('No debrief is running on that phone.');
+          endParticipant(s, 'debrief ended');
+          return json(res, { ok: true });
+        }
+        return json(res, { error: 'unknown' }, 404);
       } catch (e) { return json(res, { error: e.message }, 400); }
     }
     if (req.method === 'POST' && p !== '/api/room' && p !== '/api/sound') logWho('desk_request', { ...whoLabel(who), path: p, ...(u.searchParams.get('s') ? { folder: u.searchParams.get('s') } : {}) });
@@ -1074,6 +1125,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/' || p === '/p') p = '/phone.html';
   if (p === '/control') p = '/control.html';
   if (p === '/team') p = '/team.html';
+  if (p === '/debrief') p = '/debrief.html';
   if (p === '/library') p = '/library.html';
   if (p === '/monitor') p = '/monitor.html';
   if (p === '/files') p = '/files.html';
@@ -1330,6 +1382,7 @@ function startLive(s) {
   s.live = live; live.open(); logEvent('live_start', { id: s.id });
 }
 function systemPrompt(s) {
+  if (s.debrief) return debrief.interviewerPrompt({ name: s.name, guide: s.debrief.guide, dossier: s.debrief.dossier, minutes: s.debrief.minutes });
   let brief = ''; try { brief = fs.readFileSync(BRIEF_FILE, 'utf8'); } catch {}
   const el = Math.floor((Date.now() - (s.startedAt || Date.now())) / 1000);
   return `${brief}\n\n---\nParticipant's name: ${s.name || 'unknown'}. Time since they started: ${Math.floor(el / 60)}m ${el % 60}s.\n` +
@@ -1345,7 +1398,7 @@ async function aiTurn(s) {
   const turn = ++s.turn;
   s.thinking = true; s.again = false; state(s);
   let reply;
-  try { reply = await ai.think([{ role: 'system', content: systemPrompt(s) + await freeSenses(s) }, ...s.history.slice(-40)]); }
+  try { reply = await ai.think([{ role: 'system', content: systemPrompt(s) + (s.debrief ? '' : await freeSenses(s)) }, ...s.history.slice(-40)]); }
   catch (e) { s.thinking = false; state(s); return report(s, e); }
   s.thinking = false;
   if (turn !== s.turn || s.edHold || s.mode !== 'auto' || !s.ws || s.waiting) { state(s); return; }
@@ -1434,6 +1487,7 @@ function endParticipant(s, why) {
   if (rec) { rec.end = Number(clock()); saveSession(); }
   const who = s.pid && personBy(s.pid), v = who && [...who.visits].reverse().find((x) => x.phone === s.id && x.end == null);
   if (v) { v.end = Number(clock()); savePeople(); }
+  if (s.debrief) { logWho('debrief_end', { phone: s.id, name: s.name, why }); s.debrief = null; }
   s.waiting = true; s.history = []; s.pid = null; s.visitToken = null; s.vad.reset();
   send(s.ws, { type: 'reset' });
   toControls({ type: 'participants', list: list() }); state(s);

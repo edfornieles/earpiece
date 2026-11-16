@@ -885,6 +885,13 @@ const server = http.createServer(async (req, res) => {
       } catch (e) { return json(res, { error: e.message }, 400); }
     }
     if (req.method === 'POST' && p !== '/api/room' && p !== '/api/sound') logWho('desk_request', { ...whoLabel(who), path: p, ...(u.searchParams.get('s') ? { folder: u.searchParams.get('s') } : {}) });
+    // A desk whose live connection keeps failing says so here (plain requests still get through), so the log shows it.
+    if (p === '/api/desk-problem' && req.method === 'POST') {
+      const d = await readBody(req, 2e3).catch(() => ({}));
+      logWho('desk_connect_failed', { ...whoLabel({ ...who, name: who.name }), remote: !!who.remote, code: Number(d.code) || 0, tries: Number(d.tries) || 0, browser: String(req.headers['user-agent'] || '').slice(0, 160) });
+      console.log(`  ! a desk${who.email ? ' (' + (who.name || who.email) + ')' : ''} cannot open its live connection (code ${Number(d.code) || 0}); its browser or network is blocking it`);
+      return json(res, { ok: true });
+    }
     // Your own profile (anyone signed in), and the team (owners, and the studio itself).
     if (p === '/api/me') {
       if (req.method === 'POST') {

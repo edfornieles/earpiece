@@ -101,7 +101,8 @@ const session = { name: stamp, title: '', start_iso: new Date(T0).toISOString(),
 const saveSession = () => fs.writeFileSync(path.join(SESSION_DIR, STANDBY ? 'next.json' : 'session.json'), JSON.stringify(session, null, 2));
 // what was prepared in standby: title, notes, documents (people are adopted below)
 const prepared = (() => { try { return JSON.parse(fs.readFileSync(path.join(NEXT_DIR, 'next.json'), 'utf8')); } catch { return null; } })();
-if (prepared) for (const k of ['title', 'notes', 'documents', 'program']) if (prepared[k]) session[k] = prepared[k];
+if (prepared) for (const k of ['title', 'notes', 'documents', 'program', 'caregiver', 'actions']) if (prepared[k]) session[k] = prepared[k];
+if (!STANDBY && session.actions) session.actions = session.actions.map((a) => ({ ...a, runs: [] }));   // rehearsals in standby do not count
 let adopted = false;
 if (!STANDBY && fs.existsSync(NEXT_DIR)) {   // a new recording takes over the prepared documents and people
   try {
@@ -347,6 +348,49 @@ const { Sounds, Playing, MAX_BYTES: SOUND_MAX } = require('./sounds');
 const soundLib = new Sounds(path.join(__dirname, 'sounds')), soundsPlaying = new Playing();
 // Debriefs: a neutral interviewer asks a participant how the performance felt, briefed on their visit. See debrief.js.
 const debrief = require('./debrief');
+// Protocols (protocols.js): the session's caregiver voice and the actions it deploys, one running at a time.
+const { ProtocolStore, motherPrompt: protocolPrompt } = require('./protocols');
+const protocolStore = new ProtocolStore(path.join(__dirname, 'protocols.json'));
+const runningAction = () => (session.actions || []).find((a) => a.key === session.activeAction) || null;
+const protocolsNow = () => protocolPrompt({ voice: session.caregiver, action: runningAction() });
+function protocolsView() {
+  return { voices: protocolStore.voices(), protocols: protocolStore.list(), standby: STANDBY,
+    session: { title: session.title || '', caregiver: session.caregiver || null, actions: session.actions || [], active: session.activeAction || null } };
+}
+function protocolAction(d, who) {
+  const by = whoLabel(who), action = (key) => { const a = (session.actions || []).find((x) => x.key === key); if (!a) throw Error('That action is no longer in this session.'); return a; };
+  const stop = () => { const a = runningAction(); if (!a) return; const run = a.runs.at(-1); if (run && run.end == null) run.end = +clock(); session.activeAction = null; logEvent('action_end', { key: a.key, title: a.snapshot.title }); logWho('action_end', { ...by, title: a.snapshot.title }); };
+  let out = {};
+  if (d.op === 'save') {
+    const saved = protocolStore.save(d.protocol || {}); out = { saved };
+    for (const a of session.actions || []) if (a.id === saved.id && !a.runs.length) { a.snapshot = saved; a.revision = saved.revision; }   // not started yet: keep it current
+    logWho('protocol_saved', { ...by, title: saved.title, revision: saved.revision });
+  } else if (d.op === 'delete') logWho('protocol_deleted', { ...by, title: protocolStore.remove(d.id).title });
+  else if (d.op === 'voiceText') {
+    const v = protocolStore.setVoiceText(d.voice, d.text);
+    if (session.caregiver?.id === v.id) session.caregiver = { ...session.caregiver, text: v.text };
+  } else if (d.op === 'setVoice') {
+    const v = d.voice ? protocolStore.voice(d.voice) : null; if (d.voice && !v) throw Error('Choose one of the four voices.');
+    session.caregiver = v ? { id: v.id, name: v.name, text: v.text, at: +clock() } : null;
+    logEvent('caregiver_voice', { voice: v?.name || null }); logWho('caregiver_voice', { ...by, voice: v?.name || 'none' });
+  } else if (d.op === 'deploy') {
+    const p = protocolStore.get(d.id); if (!p) throw Error('That protocol no longer exists.');
+    (session.actions ||= []).push({ key: crypto.randomUUID().slice(0, 8), id: p.id, revision: p.revision, snapshot: p, runs: [] });
+    logWho('action_added', { ...by, title: p.title });
+  } else if (d.op === 'undeploy') {
+    const a = action(d.key); if (a.key === session.activeAction) stop();
+    session.actions = session.actions.filter((x) => x !== a);
+  } else if (d.op === 'move') {
+    const list = session.actions || [], i = list.indexOf(action(d.key)), j = i + (d.dir < 0 ? -1 : 1);
+    if (j >= 0 && j < list.length) [list[i], list[j]] = [list[j], list[i]];
+  } else if (d.op === 'start') {
+    const a = action(d.key); stop();
+    a.runs.push({ start: +clock(), end: null }); session.activeAction = a.key;
+    logEvent('action_start', { key: a.key, title: a.snapshot.title, voice: session.caregiver?.name || null }); logWho('action_start', { ...by, title: a.snapshot.title, voice: session.caregiver?.name || 'none' });
+  } else if (d.op === 'stop') stop();
+  else throw Error('Choose a protocol action.');
+  saveSession(); return out;
+}
 const DEBRIEF_GUIDE_FILE = path.join(__dirname, 'debrief-guide.txt');
 const debriefGuide = () => { try { return fs.readFileSync(DEBRIEF_GUIDE_FILE, 'utf8').trim() || debrief.DEFAULT_GUIDE; } catch { return debrief.DEFAULT_GUIDE; } };
 const DEBRIEF_VOICE = { voice: 'Cosette (expressive)', emotion: 'calm' };   // not Mother's voice
@@ -708,6 +752,11 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true, phones: playSound(d, whoLabel(who)) });
       } catch (e) { return json(res, { error: e.message }, 400); }
     }
+    if (p === '/api/protocols') {
+      if (req.method !== 'POST') return json(res, protocolsView());
+      try { const out = protocolAction(await readBody(req, 200e3), who); return json(res, { ...protocolsView(), ...out }); }
+      catch (e) { return json(res, { error: e.message }, 400); }
+    }
     if (p === '/api/debrief' && req.method === 'GET') {
       const live = [...sessions.values()].filter((s) => s.ws && s.ws.readyState === 1);
       return json(res, { visits: debrief.recentVisits(REC_ROOT), guide: debriefGuide(), defaultGuide: debrief.DEFAULT_GUIDE,
@@ -1002,10 +1051,10 @@ const server = http.createServer(async (req, res) => {
       const list = fs.existsSync(REC_ROOT) ? fs.readdirSync(REC_ROOT).filter((d) => !d.startsWith('_') && fs.existsSync(path.join(REC_ROOT, d, 'session.json'))).sort().reverse() : [];
       return json(res, list.map((d) => {
         let s = {}; try { s = JSON.parse(fs.readFileSync(path.join(REC_ROOT, d, 'session.json'), 'utf8')); } catch {}
-        return { name: d, title: s.title || '', start: s.start_iso, participants: (s.participants || []).map((x) => x.name || `Phone ${x.phone}`), duration: s.exports?.duration || null, cameras: (s.cameras || []).length, live: d === stamp };
+        return { name: d, title: s.title || '', start: s.start_iso, participants: (s.participants || []).map((x) => x.name || `Phone ${x.phone}`), duration: s.exports?.duration || null, cameras: (s.cameras || []).length, live: d === stamp, caregiver: s.caregiver?.name || '', actions: (s.actions || []).map((a) => a.snapshot?.title).filter(Boolean) };
       }));
     }
-    if (p === '/api/status') return json(res, { phonesConnected: [...sessions.values()].filter((t) => t.ws && t.ws.readyState === 1).map((t) => t.id), program: session.program ? { title: session.program.snapshot.title, status: programRunner.view().status } : null, launch: launcher.status(), standby: STANDBY, name: stamp, title: session.title || '', since: session.start_iso, monitorKey: MONITOR_KEY, observer:{enabled:roomObserver.enabled,busy:roomObserver.busy,cameraId:roomObserver.cameraId} });
+    if (p === '/api/status') return json(res, { phonesConnected: [...sessions.values()].filter((t) => t.ws && t.ws.readyState === 1).map((t) => t.id), program: session.program ? { title: session.program.snapshot.title, status: programRunner.view().status } : null, launch: launcher.status(), standby: STANDBY, name: stamp, title: session.title || '', caregiver: session.caregiver?.name || null, action: runningAction()?.snapshot.title || null, since: session.start_iso, monitorKey: MONITOR_KEY, observer:{enabled:roomObserver.enabled,busy:roomObserver.busy,cameraId:roomObserver.cameraId} });
     if (p === '/api/trash') return json(res, { items: readTrash().reverse().map((t) => ({ id: t.id, kind: t.kind, label: t.label, size: t.size, at: t.at, count: t.moves.length })) });
     if (req.method === 'POST' && ['/api/trash-restore', '/api/trash-purge', '/api/delete-session', '/api/delete-registration'].includes(p)) {
       let body = ''; for await (const c of req) body += c;
@@ -1147,6 +1196,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/control') p = '/control.html';
   if (p === '/team') p = '/team.html';
   if (p === '/debrief') p = '/debrief.html';
+  if (p === '/protocols') p = '/protocols.html';
   if (p === '/library') p = '/library.html';
   if (p === '/monitor') p = '/monitor.html';
   if (p === '/files') p = '/files.html';
@@ -1321,7 +1371,7 @@ function endLive(phones, why) {
 }
 function liveInstructions() {
   let brief = ''; try { brief = fs.readFileSync(BRIEF_FILE, 'utf8'); } catch {}
-  return `${brief}\n---${LIVE_RULES}\n\n${roomBriefing()}`;
+  return `${brief}\n---${LIVE_RULES}\n\n${roomBriefing()}${protocolsNow()}`;
 }
 function startLive(s) {
   const canSpeak = () => !closing && s.ws?.readyState===1 && !s.waiting && !s.hidden &&
@@ -1408,7 +1458,7 @@ function systemPrompt(s) {
   const el = Math.floor((Date.now() - (s.startedAt || Date.now())) / 1000);
   return `${brief}\n\n---\nParticipant's name: ${s.name || 'unknown'}. Time since they started: ${Math.floor(el / 60)}m ${el % 60}s.\n` +
     `Lines in square brackets are stage information from the system, not speech. ` +
-    `Lines marked as the human director are things a person in the control room said to the participant directly; stay consistent with them.\n\n` + roomBriefing() + roomObserver.prompt();
+    `Lines marked as the human director are things a person in the control room said to the participant directly; stay consistent with them.\n\n` + roomBriefing() + roomObserver.prompt() + protocolsNow();
 }
 
 async function aiTurn(s) {

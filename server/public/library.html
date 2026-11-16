@@ -69,11 +69,11 @@ function render() {
   const q = $('search').value.toLowerCase();
   [...document.querySelectorAll('.item')].forEach((e) => e.remove());
   for (const s of sessions) {
-    const hay = (s.name + ' ' + s.title + ' ' + s.participants.join(' ') + ' ' + (texts[s.name] || '')).toLowerCase();
+    const hay = (s.name + ' ' + s.title + ' ' + s.participants.join(' ') + ' ' + (s.caregiver || '') + ' ' + (s.actions || []).join(' ') + ' ' + (texts[s.name] || '')).toLowerCase();
     if (q && !hay.includes(q)) continue;
     const el = document.createElement('div');
     el.className = 'item' + (s.name === current ? ' sel' : '');
-    el.innerHTML = `<b>${esc(s.title || s.name)}${s.live ? '<span class="live">● recording</span>' : ''}</b><span>${esc(new Date(s.start).toLocaleString())}${s.duration ? ' · ' + dur(s.duration) : ''}${s.participants.length ? ' · ' + esc(s.participants.join(', ')) : ''}${s.cameras ? ' · ' + s.cameras + ' cam' : ''}</span>`;
+    el.innerHTML = `<b>${esc(s.title || s.name)}${s.live ? '<span class="live">● recording</span>' : ''}</b><span>${esc(new Date(s.start).toLocaleString())}${s.duration ? ' · ' + dur(s.duration) : ''}${s.participants.length ? ' · ' + esc(s.participants.join(', ')) : ''}${s.cameras ? ' · ' + s.cameras + ' cam' : ''}${s.caregiver || s.actions?.length ? '<br>' + esc([s.caregiver, ...(s.actions || [])].filter(Boolean).join(' · ')) : ''}</span>`;
     el.onclick = () => open(s.name);
     $('list').appendChild(el);
   }

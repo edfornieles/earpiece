@@ -27,7 +27,7 @@
   const inControl = here === '/control';
   // Six sections. The section you are in lists its pages underneath.
   const sections = [
-    ['Perform', [['/control', 'Live desk'], ['/session', 'Brief & notes'], ['/debrief', 'Debrief']]],
+    ['Perform', [['/control', 'Live desk'], ['/session', 'Brief & notes'], ['/protocols', 'Protocols'], ['/debrief', 'Debrief']]],
     ['Programs', [['/programs', 'Programs']]],
     ['Room', [['/room', 'Room']]],
     ['Setup', [['/phones', 'Phones'], ['/screens', 'Screens'], ['/people', 'Registrations']]],
@@ -68,6 +68,7 @@
       st.className = 'st' + (s.standby ? '' : ' rec');
       const lines = [s.standby ? '○ Not recording' : '● Recording' + (s.title ? ' — ' + s.title : '')];
       lines.push(phones.length ? `Phone${phones.length > 1 ? 's' : ''} ${phones.join(', ')} connected` : 'No phones connected');
+      if (s.caregiver || s.action) lines.push([s.caregiver, s.action && '▶ ' + s.action].filter(Boolean).join(' · '));
       if (prog && ['running', 'paused'].includes(prog.status)) lines.push(`▶ ${prog.title} · ${prog.status}`);
       if (launch?.waitingFor) lines.push(`Starting ${launch.title}: ` + (launch.waitingFor.map((w) => `phone ${w.phone} — ${w.reason}`).join('; ') || 'starting…'));
       else if (launch?.error) lines.push(launch.error);

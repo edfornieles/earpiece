@@ -63,10 +63,14 @@ function visitRecord(dir, pid) {
     else if (e.type === 'talk_start') moments.push({ t, what: 'The director spoke to them live' });
     else if (e.type === 'sound_play') moments.push({ t, what: `A sound played: ${e.name || e.sound}${e.loop ? ' (looping)' : ''}` });
     else if (e.type === 'phone_hidden') moments.push({ t, what: 'Their phone screen went off' });
+    else if (e.type === 'action_start') moments.push({ t, what: `Action began: ${e.title}` });
+    else if (e.type === 'action_end') moments.push({ t, what: `Action ended: ${e.title}` });
+    else if (e.type === 'caregiver_voice') moments.push({ t, what: `Caregiver voice changed to ${e.voice || 'none'}` });
   }
   const start = Math.min(...visits.map((v) => v.start)), end = Math.max(...visits.map((v) => v.end ?? v.start));
   return { session: path.basename(dir), title: s.title || '', program: s.program?.snapshot?.title || '', programAbout: s.program?.snapshot?.description || '',
-    date: s.start_iso || null, name: person.name || '', notes: person.notes || '', minutes: Math.round((end - start) / 6) / 10, lines, moments };
+    date: s.start_iso || null, name: person.name || '', notes: person.notes || '', minutes: Math.round((end - start) / 6) / 10, lines, moments,
+    caregiver: s.caregiver?.name || '', actions: (s.actions || []).map((a) => ({ title: a.snapshot?.title || '', description: a.snapshot?.description || '', debrief: a.snapshot?.more?.debrief || '' })).filter((a) => a.title) };
 }
 
 const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
@@ -74,7 +78,9 @@ const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStar
 function visitText(rec, max = 24000) {
   const head = [`Session: ${rec.title || rec.session}${rec.date ? ' (' + rec.date.slice(0, 10) + ')' : ''}`,
     rec.program && `Score performed: ${rec.program}. ${rec.programAbout}`.slice(0, 900), `Participant: ${rec.name || 'unnamed'}; visit about ${rec.minutes} minutes.`,
-    rec.notes && `Director's notes about them: ${rec.notes}`].filter(Boolean).join('\n');
+    rec.notes && `Director's notes about them: ${rec.notes}`,
+    rec.caregiver && `Caregiver voice the control team adopted for Mother this session: ${rec.caregiver}.`,
+    ...(rec.actions || []).map((a) => `Action deployed: ${a.title}. ${a.description}${a.debrief ? ' Debrief questions for this action: ' + a.debrief : ''}`.slice(0, 1200))].filter(Boolean).join('\n');
   const rows = [...rec.lines.map((l) => ({ t: l.t, s: `${l.who}: ${l.text}` })), ...rec.moments.map((m) => ({ t: m.t, s: `[${m.what}]` }))].sort((a, b) => a.t - b.t).map((r) => `${clock(r.t)} ${r.s}`);
   let body = rows.join('\n');
   if (body.length > max) body = body.slice(0, max * 0.45) + '\n[… middle of the visit left out …]\n' + body.slice(-max * 0.45);

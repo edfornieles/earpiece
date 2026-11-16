@@ -11,7 +11,7 @@
   #deployed li.run { border-color:#417358; box-shadow:inset 3px 0 0 #417358; }
   #deployed li { flex-wrap:wrap; } #deployed li span { flex:1 1 220px; min-width:0; } #deployed small { color:var(--dim); margin-left:6px; }
   #deployed button { padding:5px 9px; font-size:12px; }
-  .pgrid { display:grid; grid-template-columns:minmax(260px,1fr) minmax(340px,1.6fr); gap:20px; align-items:start; }
+  .pgrid { display:grid; grid-template-columns:minmax(340px,1.8fr) minmax(240px,1fr); gap:20px; align-items:start; }
   @media (max-width:1000px) { .pgrid { grid-template-columns:1fr; } }
   .libhead { display:flex; gap:8px; } .libhead input { flex:1; min-width:0; margin:0; } .libhead button { margin:0; }
   #list { list-style:none; margin:12px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; }
@@ -23,35 +23,24 @@
   .people { display:flex; gap:8px; align-items:center; } .people input { width:70px; margin:0; }
   .v4 { display:grid; grid-template-columns:1fr 1fr; gap:8px; } @media (max-width:600px) { .v4 { grid-template-columns:1fr; } }
   .v4 label { margin:0 0 4px; font-size:13px; } .v4 textarea { min-height:90px !important; }
+  .smallrow { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:14px; } .smallrow #f-tags { flex:1 1 200px; margin:0; }
   details.more { margin-top:14px; } details summary { cursor:pointer; }
   .actions-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:14px; }
   .actions-row .right { margin-left:auto; }
 </style></head><body>
-<header class="pagehead"><div><div class="eyebrow">Perform</div><h1>Protocols</h1><p>The actions a session can deploy, and the caregiver voice the control team adopts for the session. Mother takes on the voice, and follows the action that is running.</p></div></header>
+<header class="pagehead"><div><div class="eyebrow">Perform</div><h1>Protocols</h1><p>Write the actions a session can use, with a note on how each caregiver voice changes them. Below, choose this session's voice and which actions it deploys.</p></div></header>
 <main><div id="notice" class="notice" role="status"></div>
-<section class="panel" id="now">
-  <div class="row between"><h2>This session</h2><span class="hint" id="sessname"></span></div>
-  <p class="hint" style="margin:4px 0 0">Caregiver voice: one per session. It sets Mother's attitude and tone, and changes the objectives of every action.</p>
-  <div class="vgrid" id="vgrid"></div>
-  <p id="voicetext"></p>
-  <h3 style="margin-top:18px">Actions</h3>
-  <ol id="deployed"></ol>
-</section>
 <div class="pgrid">
-  <section class="panel">
-    <div class="libhead"><input id="filter" type="search" placeholder="Search protocols or tags" autocomplete="off"><button id="new">+ New</button></div>
-    <ul id="list"></ul>
-  </section>
-  <section class="panel" id="editor" hidden>
-    <h2 id="edtitle">New protocol</h2>
+  <section class="panel" id="editor">
+    <h2 id="edtitle">Write a protocol</h2>
     <label for="f-title">Title</label><input id="f-title" maxlength="120" autocomplete="off">
-    <label for="f-desc">What is involved</label><textarea id="f-desc" placeholder="A short description of the action."></textarea>
-    <label>Number of people</label>
-    <div class="people"><span>From</span><input id="f-min" type="number" min="1" max="99"><span>to</span><input id="f-max" type="number" min="1" max="99"><span class="hint">people</span></div>
-    <label>How it changes with each voice</label>
+    <label for="f-desc">What the action is</label><textarea id="f-desc" placeholder="Describe the action: what happens, what the participants do."></textarea>
+    <label>How each voice changes it</label>
+    <p class="hint" style="margin:0 0 8px">A note for each caregiver voice: how the performance changes when the control team adopts it. Leave any blank.</p>
     <div class="v4" id="f-voices"></div>
-    <label for="f-tags">Tags</label><input id="f-tags" placeholder="e.g. touch, pairs, refusal" autocomplete="off">
-    <details class="more" id="more"><summary>More: instructions to Mother, setup, care, debrief</summary>
+    <div class="smallrow"><span class="people"><span>People</span><input id="f-min" type="number" min="1" max="99" aria-label="From"><span>to</span><input id="f-max" type="number" min="1" max="99" aria-label="To"></span>
+      <input id="f-tags" placeholder="Tags, e.g. touch, pairs" autocomplete="off" aria-label="Tags"></div>
+    <details class="more" id="more"><summary>More (optional): instructions to Mother, setup, care, debrief</summary>
       <label for="f-mother">Instructions to Mother while it runs</label><textarea id="f-mother" placeholder="Anything Mother should do or avoid during this action."></textarea>
       <label for="f-setup">Setup and props</label><textarea id="f-setup"></textarea>
       <label for="f-care">Care and stop conditions</label><textarea id="f-care" placeholder="When to stop, what to avoid. Mother is told to respect these."></textarea>
@@ -60,7 +49,19 @@
     </details>
     <div class="actions-row"><button id="save" class="primary">Save</button><button id="deploy">Add to this session</button><span id="edstate" class="save-state"></span><button id="del" class="link right">Delete</button></div>
   </section>
+  <section class="panel">
+    <h2>Saved protocols</h2><div class="libhead"><input id="filter" type="search" placeholder="Search protocols or tags" autocomplete="off"><button id="new">+ New</button></div>
+    <ul id="list"></ul>
+  </section>
 </div>
+<section class="panel" id="now">
+  <div class="row between"><h2>This session</h2><span class="hint" id="sessname"></span></div>
+  <p class="hint" style="margin:4px 0 0">Caregiver voice: one per session. It sets Mother's attitude and tone, and changes the objectives of every action.</p>
+  <div class="vgrid" id="vgrid"></div>
+  <p id="voicetext"></p>
+  <h3 style="margin-top:18px">Actions</h3>
+  <ol id="deployed"></ol>
+</section>
 <details class="panel" id="voicedefs"><summary><b>What the four voices mean</b> <span class="hint">: what Mother is told for each</span></summary>
   <div class="v4" id="vdefs" style="margin-top:12px"></div>
   <div class="actions-row"><button id="savevoices">Save</button><span id="vstate" class="save-state"></span></div>
@@ -96,9 +97,9 @@ function renderVoiceDefs() {
 }
 function openEditor(p) {
   edit = p; dirty = false; $('editor').hidden = false; $('edstate').textContent = '';
-  $('edtitle').textContent = p.id ? 'Edit protocol' : 'New protocol';
+  $('edtitle').textContent = p.id ? 'Edit protocol' : 'Write a protocol';
   $('f-title').value = p.title || ''; $('f-desc').value = p.description || ''; $('f-min').value = p.people?.min || ''; $('f-max').value = p.people?.max || '';
-  $('f-voices').innerHTML = ['warm-selfless', 'warm-selfish', 'cold-selfless', 'cold-selfish'].map((id) => { const v = data.voices.find((x) => x.id === id); return `<div><label for="fv-${id}">${esc(v.name)}</label><textarea id="fv-${id}" data-v="${id}" placeholder="How the action plays, and what Mother is after, under this voice.">${esc(p.voices?.[id] || '')}</textarea></div>`; }).join('');
+  $('f-voices').innerHTML = ['warm-selfless', 'warm-selfish', 'cold-selfless', 'cold-selfish'].map((id) => { const v = data.voices.find((x) => x.id === id); return `<div><label for="fv-${id}">${esc(v.name)}</label><textarea id="fv-${id}" data-v="${id}" placeholder="How does ${esc(v.name)} change this action?">${esc(p.voices?.[id] || '')}</textarea></div>`; }).join('');
   $('f-tags').value = (p.tags || []).join(', ');
   for (const k of ['mother', 'setup', 'care', 'debrief']) $('f-' + k).value = p.more?.[k] || '';
   $('f-minutes').value = p.more?.minutes || '';
@@ -116,7 +117,7 @@ async function send(body, done) {
   catch (e) { toast(e.message); return null; }
 }
 async function load() {
-  try { data = await api('protocols'); renderNow(); renderList(); renderVoiceDefs(); $('notice').textContent = ''; }
+  try { data = await api('protocols'); renderNow(); if (!edit) openEditor({}); renderList(); renderVoiceDefs(); $('notice').textContent = ''; }
   catch (e) { $('notice').textContent = e.message; }
 }
 
@@ -150,7 +151,7 @@ $('deploy').onclick = async () => {
   if (dirty) { const r = await send({ op: 'save', protocol: formValue() }); if (!r) return; openEditor(r.saved); }
   send({ op: 'deploy', id: edit.id }, `Added to this session: ${edit.title}`);
 };
-$('del').onclick = () => { if (confirm(`Delete “${edit.title}”? Sessions that already used it keep their copy.`)) send({ op: 'delete', id: edit.id }, 'Protocol deleted').then((r) => { if (r) { edit = null; dirty = false; $('editor').hidden = true; renderList(); } }); };
+$('del').onclick = () => { if (confirm(`Delete “${edit.title}”? Sessions that already used it keep their copy.`)) send({ op: 'delete', id: edit.id }, 'Protocol deleted').then((r) => { if (r) { dirty = false; openEditor({}); } }); };
 $('vdefs').addEventListener('input', () => { vdirty = true; $('vstate').textContent = 'Not saved'; });
 $('savevoices').onclick = async () => {
   const changed = [...document.querySelectorAll('#vdefs textarea')].filter((t) => t.value.trim() !== data.voices.find((v) => v.id === t.dataset.v).text.trim());

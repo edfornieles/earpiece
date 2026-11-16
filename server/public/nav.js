@@ -30,7 +30,7 @@
     ['Perform', [['/control', 'Live desk'], ['/session', 'Brief & notes'], ['/protocols', 'Protocols'], ['/debrief', 'Debrief']]],
     ['Programs', [['/programs', 'Programs']]],
     ['Room', [['/room', 'Room']]],
-    ['Setup', [['/phones', 'Phones'], ['/screens', 'Screens'], ['/people', 'Registrations']]],
+    ['Setup', [['/phones', 'Phones'], ['/screens', 'Screens'], ['/people', 'Registrations'], ['/signups', 'Sign-ups']]],
     ['Archive', [['/library', 'Library'], ['/files', 'Files'], ['/trash', 'Trash']]],
     ['Team', [['/team', 'Team']]],
   ];

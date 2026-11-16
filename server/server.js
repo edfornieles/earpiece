@@ -351,6 +351,80 @@ const debrief = require('./debrief');
 // Protocols (protocols.js): the session's caregiver voice and the actions it deploys, one running at a time.
 const { ProtocolStore, motherPrompt: protocolPrompt } = require('./protocols');
 const protocolStore = new ProtocolStore(path.join(__dirname, 'protocols.json'));
+// Sign-ups and the schedule (signups.js): the public sign-up page, the team's schedule, and each person's
+// private booking page. Emails go through the same Gmail sender as the team welcome.
+const { Signups, EXPERIENCE, LEVELS, emails: signupEmails, when: slotWhen } = require('./signups');
+const signups = new Signups(path.join(__dirname, 'participants'));
+const signupBase = () => String(process.env.SIGNUP_URL || process.env.PUBLIC_URL || phoneBase || `http://localhost:${PORT}`).replace(/\/+$/, '');
+const bookLink = (s) => `${signupBase()}/book?t=${s.token}`;
+const mailOn = () => !!(MAIL.user && MAIL.pass);
+const mailSignup = (s, mail, what) => mailOn() ? mailer.sendMail({ to: s.email, ...mail }, MAIL).then(() => true, (e) => { logWho('signup_mail_failed', { to: s.email, what, error: e.message }); return false; }) : Promise.resolve(false);
+const signupHits = new Map();
+// The public side: open to anyone, even in privacy mode (it shows nothing of the studio). Never lists other people.
+async function signupApi(req, res, u, p) {
+  try {
+    if (p === '/signup-api/info') { const c = registry.consent(); return json(res, { page: signups.page(), consent: c.text, version: c.version, experience: EXPERIENCE, levels: LEVELS }); }
+    if (p === '/signup-api/submit' && req.method === 'POST') {
+      const ip = String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+      const hits = (signupHits.get(ip) || []).filter((t) => Date.now() - t < 3600e3);
+      if (hits.length >= 10) return json(res, { error: 'Too many sign-ups from this connection. Please try again later.' }, 429);
+      const d = await readBody(req, 50e3);
+      if (d.website) return json(res, { ok: true });   // a field people never see: only robots fill it in
+      const { signup, isNew } = signups.add(d, registry.consent());
+      hits.push(Date.now()); signupHits.set(ip, hits);
+      logWho('signup', { who: signup.name, again: !isNew });
+      if (isNew) mailSignup(signup, signupEmails.received(signup, signups.page(), bookLink(signup)), 'received');
+      return json(res, { ok: true, name: signup.name, mail: mailOn() });
+    }
+    if (p === '/signup-api/booking') {
+      const s = signups.byToken(u.searchParams.get('t'));
+      if (!s) return json(res, { error: 'This link does not work any more. Reply to our email and we will send you a new one.' }, 404);
+      if (req.method === 'POST') {
+        const d = await readBody(req, 5e3);
+        if (d.op === 'book') { signups.book(s.id, String(d.slot || '')); const x = signups.slot(s.booking.slot); logWho('booking', { who: s.name, slot: slotWhen(x), by: 'themselves' }); mailSignup(s, signupEmails.booked(s, signups.page(), bookLink(s), x), 'booked'); }
+        else if (d.op === 'cancel') { if (signups.cancel(s.id).was) logWho('booking_cancelled', { who: s.name, by: 'themselves' }); }
+        else throw Error('Choose a time.');
+      }
+      return json(res, { ...signups.publicView(s), mail: mailOn() });
+    }
+    res.writeHead(404); return res.end();
+  } catch (e) { return json(res, { error: e.message }, 400); }
+}
+// The team's side.
+async function signupsView() {
+  const regs = new Set(registry.list.map((r) => String(r.email || '').toLowerCase())), url = signupBase() + '/signup';
+  return {
+    signups: signups.list().map((s) => { const x = s.booking && signups.slot(s.booking.slot);
+      return { id: s.id, name: s.name, email: s.email, phone: s.phone, pronouns: s.pronouns, experience: s.experience, availability: s.availability, access: s.access, heard: s.heard, notes: s.notes,
+        createdAt: s.createdAt, invitedAt: s.invitedAt, booking: x ? { slot: x.id, when: slotWhen(x), by: s.booking.by } : null, cancelledAt: s.cancelledAt || null, registered: regs.has(s.email), link: bookLink(s) }; }),
+    slots: signups.slots().map((x) => ({ ...x, label: slotWhen(x), people: signups.booked(x.id).map((s) => ({ id: s.id, name: s.name })) })),
+    page: signups.page(), mail: { configured: mailOn(), from: MAIL.user }, url, qr: await QRCode.toString(url, { type: 'svg', margin: 1 }), experience: EXPERIENCE, levels: LEVELS,
+  };
+}
+async function signupsAction(d, who) {
+  const by = whoLabel(who).who;
+  if (d.op === 'page') signups.setPage(d.page || {});
+  else if (d.op === 'addSlots') { const made = signups.addSlots(d); logWho('schedule_slots_added', { who: by, count: made.length, date: d.date }); return { message: `Added ${made.length} time${made.length === 1 ? '' : 's'}` }; }
+  else if (d.op === 'editSlot') signups.editSlot(d.id, d);
+  else if (d.op === 'removeSlot') { const r = signups.removeSlot(d.id); logWho('schedule_slot_removed', { who: by, slot: slotWhen(r.slot), unbooked: r.unbooked.map((s) => s.name) }); return { message: r.unbooked.length ? `Removed. Now without a time: ${r.unbooked.map((s) => s.name).join(', ')}` : 'Removed' }; }
+  else if (d.op === 'book') {
+    const s = signups.book(d.id, d.slot, by), x = signups.slot(d.slot); logWho('booking', { who: s.name, slot: slotWhen(x), by });
+    const sent = d.email !== false && await mailSignup(s, signupEmails.booked(s, signups.page(), bookLink(s), x), 'booked');
+    return { message: `${s.name}: ${slotWhen(x)}${sent ? '. Confirmation emailed.' : ''}` };
+  } else if (d.op === 'cancel') { const r = signups.cancel(d.id, by); if (r.was) logWho('booking_cancelled', { who: r.signup.name, by }); }
+  else if (d.op === 'notes') signups.update(d.id, { notes: d.notes });
+  else if (d.op === 'remove') logWho('signup_removed', { who: signups.remove(d.id).name, by });
+  else if (d.op === 'invite') {
+    if (!mailOn()) throw Error('Email is not set up yet (Team page). Copy each person\'s booking link instead.');
+    const open = signups.slots().filter((x) => !x.closed); if (!open.length) throw Error('Add some times to the schedule first.');
+    const people = (d.ids || []).map((id) => signups.get(id)).filter(Boolean); if (!people.length) throw Error('Choose who to send it to.');
+    const failed = [];
+    for (const s of people) { if (await mailSignup(s, signupEmails.schedule(s, signups.page(), bookLink(s), open), 'schedule')) signups.markInvited(s.id); else failed.push(s.name); }
+    logWho('schedule_sent', { who: by, count: people.length - failed.length, failed });
+    return { message: failed.length ? `Sent to ${people.length - failed.length}. Failed: ${failed.join(', ')} (see the activity log).` : `Schedule sent to ${people.length} ${people.length === 1 ? 'person' : 'people'}` };
+  } else throw Error('Choose a sign-up action.');
+  return {};
+}
 const runningAction = () => (session.actions || []).find((a) => a.key === session.activeAction) || null;
 const protocolsNow = () => protocolPrompt({ voice: session.caregiver, action: runningAction() });
 function protocolsView() {
@@ -619,6 +693,8 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   let p = u.pathname;
   if (p === '/privacy') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(PUB, 'privacy.html')).pipe(res); }
+  if (p === '/signup' || p === '/book') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return fs.createReadStream(path.join(PUB, p.slice(1) + '.html')).pipe(res); }
+  if (p.startsWith('/signup-api/')) return signupApi(req, res, u, p);
   const who = access.check(req);
   if (who.blocked) { res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return res.end(access.page(who.blocked, who.email)); }
   // Outside the studio, once logins are required, only a logged-in director gets the desk: a link key is not enough.
@@ -751,6 +827,10 @@ const server = http.createServer(async (req, res) => {
         if (d.op === 'stop') { stopSound(d, whoLabel(who)); return json(res, { ok: true }); }
         return json(res, { ok: true, phones: playSound(d, whoLabel(who)) });
       } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/signups') {
+      try { const out = req.method === 'POST' ? await signupsAction(await readBody(req, 50e3), who) : {}; return json(res, { ...(await signupsView()), ...out }); }
+      catch (e) { return json(res, { error: e.message }, 400); }
     }
     if (p === '/api/protocols') {
       if (req.method !== 'POST') return json(res, protocolsView());
@@ -1197,6 +1277,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/team') p = '/team.html';
   if (p === '/debrief') p = '/debrief.html';
   if (p === '/protocols') p = '/protocols.html';
+  if (p === '/signups') p = '/signups.html';
   if (p === '/library') p = '/library.html';
   if (p === '/monitor') p = '/monitor.html';
   if (p === '/files') p = '/files.html';

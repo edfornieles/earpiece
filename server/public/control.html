@@ -257,6 +257,7 @@
           <button id="all" class="padbtn"><b>All</b><small>everyone</small><kbd>space</kbd></button>
         </div>
         <input id="speakall" placeholder="Type a line for everyone → they hear it in the AI voice (Enter)">
+        <div id="soundpad" class="soundpad" aria-label="Sounds"></div>
         <div class="hint cs-keys" id="cs-keys" hidden>Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone (several together) · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>⇧</kbd>+arrows move the camera · <kbd>⇧</kbd>+<kbd>1</kbd>… camera positions · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
         <div class="cam-strip" id="camstrip" hidden>
           <img id="cs-cam" alt="Turning camera, live" title="Click to enlarge">
@@ -953,7 +954,7 @@ document.addEventListener('keyup', (e) => {
   if (/^Digit[1-9]$/.test(e.code)) holdOff(Number(e.code.slice(5)));
 });
 </script>
-<script src="follow-core.js"></script><script src="desk-room.js"></script><script src="desk-camera.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>
+<script src="follow-core.js"></script><script src="desk-room.js"></script><script src="desk-camera.js"></script><script src="desk-sounds.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>
 <script src="nav.js"></script>
 </body>
 </html>

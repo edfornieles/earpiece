@@ -321,6 +321,9 @@ function logDeskCommand(ws, m) {
   if (typeof m.text === 'string' && ['speak', 'instruct', 'mark'].includes(m.type)) d.text = m.text.slice(0, 200);
   logWho('desk_command', { ...deskWho(ws), ...d });
 }
+// Sound library (uploaded tracks + the beep), played into participants' ears from the desk. See sounds.js.
+const { Sounds, Playing, MAX_BYTES: SOUND_MAX } = require('./sounds');
+const soundLib = new Sounds(path.join(__dirname, 'sounds')), soundsPlaying = new Playing();
 function logEvent(type, data = {}) { events.write(JSON.stringify({ t: clock(), type, ...data }) + '\n'); }
 
 class WavTrack {
@@ -613,6 +616,14 @@ const server = http.createServer(async (req, res) => {
     if (range) { const a = Number(range[1] || 0), b = range[2] ? Number(range[2]) : size - 1; res.writeHead(206, { 'content-type': type, 'content-range': `bytes ${a}-${b}/${size}`, 'accept-ranges': 'bytes', 'content-length': b - a + 1 }); return fs.createReadStream(f, { start: a, end: b }).pipe(res); }
     res.writeHead(200, { 'content-type': type, 'content-length': size, 'accept-ranges': 'bytes' }); return fs.createReadStream(f).pipe(res);
   }
+  const soundFile = /^\/sounds\/([a-z0-9-]+)\.mp3$/.exec(p);
+  if (soundFile) {
+    if (!mon && u.searchParams.get('k') !== PHONE_KEY) { res.writeHead(403); return res.end(); }
+    const f = soundLib.file(soundFile[1]);
+    if (!f || !fs.existsSync(f)) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': fs.statSync(f).size, 'cache-control': 'private, max-age=3600' });
+    return fs.createReadStream(f).pipe(res);
+  }
   if (p.startsWith('/participants/')) {   // registration photos and signed consent: control room only
     const [, , pid, f] = p.split('/');
     const file = registry.get(pid) && ['photo.jpg', 'consent.md'].includes(f) && path.join(registry.dir, pid, f);
@@ -637,7 +648,41 @@ const server = http.createServer(async (req, res) => {
   if (p.startsWith('/api/')) {
     if (!ctl) { res.writeHead(403); return res.end(); }
     // Changes made from a page (library, team, programs…) go in the log with who made them. Room actions log below.
-    if (req.method === 'POST' && p !== '/api/room') logWho('desk_request', { ...whoLabel(who), path: p, ...(u.searchParams.get('s') ? { folder: u.searchParams.get('s') } : {}) });
+    if (p === '/api/sounds' && req.method === 'GET') return json(res, soundsView());
+    if (p === '/api/sounds' && req.method === 'POST') {   // raw file body, ?name=original-file-name
+      const tmp = path.join(require('os').tmpdir(), `mother-sound-${process.pid}-${Date.now()}`);
+      let size = 0, tooBig = false;
+      await new Promise((ok) => {
+        const out = fs.createWriteStream(tmp);
+        req.on('data', (c) => { size += c.length; if (size > SOUND_MAX && !tooBig) { tooBig = true; req.unpipe(out); out.destroy(); ok(); } });
+        req.pipe(out); out.on('finish', ok); out.on('close', ok); req.on('error', ok);
+      });
+      try {
+        if (tooBig) return json(res, { error: 'Sounds can be up to 200 MB.' }, 413);
+        if (!size) return json(res, { error: 'That file is empty.' }, 400);
+        const item = await soundLib.add(u.searchParams.get('name'), tmp, whoLabel(who).who);
+        logWho('sound_added', { ...whoLabel(who), sound: item.id, name: item.name, duration: item.duration });
+        toControls(soundsView());
+        return json(res, { ok: true, sound: item });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+      finally { fs.unlink(tmp, () => {}); }
+    }
+    if (p === '/api/sounds-delete' && req.method === 'POST') {
+      try {
+        const d = await readBody(req, 10e3), x = soundLib.remove(String(d.id || ''));
+        stopSound({ sound: x.id }, whoLabel(who));
+        logWho('sound_deleted', { ...whoLabel(who), sound: x.id, name: x.name });
+        return json(res, { ok: true });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/sound' && req.method === 'POST') {   // {op:'play'|'stop', sound, targets:'all'|[phone…], loop}
+      try {
+        const d = await readBody(req, 10e3);
+        if (d.op === 'stop') { stopSound(d, whoLabel(who)); return json(res, { ok: true }); }
+        return json(res, { ok: true, phones: playSound(d, whoLabel(who)) });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (req.method === 'POST' && p !== '/api/room' && p !== '/api/sound') logWho('desk_request', { ...whoLabel(who), path: p, ...(u.searchParams.get('s') ? { folder: u.searchParams.get('s') } : {}) });
     // Your own profile (anyone signed in), and the team (owners, and the studio itself).
     if (p === '/api/me') {
       if (req.method === 'POST') {
@@ -1051,6 +1096,42 @@ const server = http.createServer(async (req, res) => {
 const sessions = new Map();   // phone slot -> Session
 const controls = new Set();
 const monitors = new Set();   // camera screens: they see pictures, names and captions, and can't do anything
+// ---------- sounds: tracks and the beep, to every phone or chosen ones, once or looping ----------
+// Phones fetch the track and play it themselves, mixed over Mother's voice. The beep is made on the phone.
+function soundsView() { soundsPlaying.expire((id) => soundLib.get(id)?.duration); return { type: 'sounds', list: soundLib.list(), playing: soundsPlaying.view() }; }
+function soundTargets(targets) {
+  const live = [...sessions.values()].filter((s) => s.ws && s.ws.readyState === 1);
+  return Array.isArray(targets) ? live.filter((s) => targets.map(Number).includes(s.id)) : live;
+}
+const soundMsg = (x, loop) => JSON.stringify({ type: 'sound', op: 'play', id: x.id, loop: !!loop, beep: !!x.builtIn, url: x.builtIn ? '' : `/sounds/${encodeURIComponent(x.id)}.mp3?k=${PHONE_KEY}` });
+function playSound({ sound, targets = 'all', loop = false }, who) {
+  const x = soundLib.get(String(sound || '')); if (!x) throw Error('No such sound.');
+  const to = soundTargets(targets); if (!to.length) throw Error('No phone is connected to hear it.');
+  for (const s of to) { s.ws.send(soundMsg(x, loop)); soundsPlaying.start(s.id, x.id, loop, who.who); }
+  logWho('sound_play', { ...who, sound: x.id, name: x.name, loop: !!loop, phones: to.map((s) => s.id) });
+  toControls(soundsView());
+  return to.map((s) => s.id);
+}
+function stopSound({ sound = '', targets = 'all' }, who) {
+  const id = String(sound || ''), to = soundTargets(targets);
+  for (const s of to) { s.ws.send(JSON.stringify({ type: 'sound', op: 'stop', id })); soundsPlaying.stop(s.id, id || undefined); }
+  if (!Array.isArray(targets)) for (const x of soundsPlaying.view()) if (!id || x.id === id) soundsPlaying.stop(x.phone, x.id);   // phones that dropped out
+  logWho('sound_stop', { ...who, sound: id || 'all', phones: to.map((s) => s.id) });
+  toControls(soundsView());
+}
+// A phone that dropped out and came back picks its looping sounds up again; one-off sounds are over.
+function resumeSounds(s) {
+  for (const x of soundsPlaying.view().filter((y) => y.phone === s.id)) {
+    const item = soundLib.get(x.id);
+    if (x.loop && item && s.ws?.readyState === 1) s.ws.send(soundMsg(item, true)); else soundsPlaying.stop(s.id, x.id);
+  }
+  toControls(soundsView());
+}
+async function readBody(req, max) {
+  let body = '', size = 0;
+  for await (const c of req) { size += c.length; if (size > max) throw Error('Too large.'); body += c; }
+  try { return JSON.parse(body || '{}'); } catch { throw Error('Send JSON.'); }
+}
 const FOR_MONITORS = new Set(['transcript', 'cameras', 'participants', 'state', 'session', 'marked']);
 const toControls = (obj) => {
   const s = JSON.stringify(obj);
@@ -1755,6 +1836,7 @@ wss.on('connection', (ws, req) => {
   if (role === 'control' && (who.director || (keyed && key === CONTROL_KEY))) {
     controls.add(ws);
     logWho('desk_join', { ...deskWho(ws), remote: !!ws.remote, desks: controls.size });
+    send(ws, soundsView());
     if (who.director) access.seen(who.email);
     accessChanged();
     send(ws, { type: 'phonesChanged', maxPhones: MAX_PHONES });
@@ -1930,6 +2012,8 @@ wss.on('connection', (ws, req) => {
       if (!m || typeof m !== 'object' || Array.isArray(m)) return;
       // Phones are desk equipment: only the control room can start a participant visit.
       if (m.type === 'ping') { send(ws, { type: 'pong', t: m.t }); return; }
+      if (m.type === 'soundEnded') { soundsPlaying.stop(id, String(m.id || '')); toControls(soundsView()); return; }
+      if (m.type === 'hello') resumeSounds(s);
       if (m.type === 'caps') { s.jitterBuffer = !!m.jitterBuffer; return; }   // this phone buffers: send speech further ahead
       if (m.type === 'telemetry') { const t = { ...m, at: Date.now() }; delete t.type; phoneTelemetry.set(id, t); diag('phone_telemetry', { phone: id, ...t }); return; }
       if (m.type === 'hello') { s.audioReady = true; state(s); }

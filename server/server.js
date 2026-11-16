@@ -329,6 +329,30 @@ const DESK_LOGGED = new Set(['talk', 'mode', 'nudge', 'end', 'voice', 'speak', '
   'sessionMeta', 'personSave', 'personDelete', 'arrivalAdd', 'arrivalStart', 'linkRegistration', 'personStart', 'visitStart', 'saveBrief']);
 // Who did what is also kept outside recordings, one file a day in logs/ (not in git), so it survives standby.
 const ACTIVITY_DIR = path.join(__dirname, 'logs');
+// Firefox (desktop, Android and iPhone) gets a page sending people to Chrome. Logged once an hour per person.
+const isFirefox = (req) => /\b(Firefox|FxiOS)\//.test(req.headers['user-agent'] || '');
+const firefoxSeen = new Map();
+function firefoxPage(req) {
+  const ua = req.headers['user-agent'] || '', host = String(req.headers.host || 'mother.edfornieles.com').replace(/[^\w.:-]/g, '');
+  const rest = req.url.replace(/[<>"'\s]/g, ''), url = 'https://' + host + rest, safe = url.replace(/&/g, '&amp;');
+  const android = /Android/.test(ua), ios = /FxiOS/.test(ua);
+  const open = android ? `<a class="btn" href="intent://${host}${rest.replace(/&/g, '&amp;')}#Intent;scheme=https;package=com.android.chrome;end">Open in Chrome</a>`
+    : ios ? `<a class="btn" href="googlechromes://${host}${rest.replace(/&/g, '&amp;')}">Open in Chrome</a>` : '';
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Please use Chrome — Mother</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f5f2;color:#1d1d1b;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;padding:16px;box-sizing:border-box}
+@media (prefers-color-scheme:dark){body{background:#121211;color:#ecebe7}.box{background:#1b1b1a!important;border-color:#34332f!important}.btn{background:#ecebe7!important;color:#121211!important}}
+.box{max-width:460px;background:#fff;border:1px solid #dedbd3;border-radius:14px;padding:28px 24px}h1{font-size:22px;margin:0 0 10px}p{margin:0 0 14px}
+code{display:block;word-break:break-all;background:rgba(127,127,127,.12);padding:10px 12px;border-radius:8px;font-size:14px;margin:0 0 14px}
+.btn{display:inline-block;font:inherit;font-weight:600;background:#1d1d1b;color:#f6f5f2;border:0;border-radius:10px;padding:12px 18px;cursor:pointer;text-decoration:none;margin:0 8px 8px 0}
+a{color:inherit}</style>
+<div class="box"><h1>Please open Mother in Chrome</h1>
+<p>Mother does not work in Firefox: the live connection for talking and the desk is blocked there.</p>
+<p>Open this address in <b>Google Chrome</b>:</p>
+<code id="u">${safe}</code>
+${open}<button class="btn" id="c" type="button">Copy the address</button>
+<p style="font-size:14px;opacity:.75;margin-top:10px">No Chrome? <a href="https://www.google.com/chrome/">Download it here</a>. You will sign in with Google again there.</p></div>
+<script>document.getElementById('c').onclick=function(){var u=document.getElementById('u').textContent;(navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(function(){document.getElementById('c').textContent='Copied ✓'},function(){var r=document.createRange();r.selectNodeContents(document.getElementById('u'));var s=getSelection();s.removeAllRanges();s.addRange(r)})}</script></html>`;
+}
 function logWho(type, data) {
   logEvent(type, data);
   const now = new Date(), day = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -697,6 +721,14 @@ const server = http.createServer(async (req, res) => {
   if (p.startsWith('/signup-api/')) return signupApi(req, res, u, p);
   const who = access.check(req);
   if (who.blocked) { res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return res.end(access.page(who.blocked, who.email)); }
+  // Firefox is not supported: its live desk connection fails through the tunnel, and nobody can tell why.
+  // Pages (not the public sign-up, which comes earlier) show how to open the same address in Chrome instead.
+  if (isFirefox(req) && !p.startsWith('/api/') && !p.startsWith('/ws') && /text\/html|\*\/\*/.test(req.headers.accept || '') && !/\.(js|css|png|jpg|svg|webmanifest|mp4|ico|json)$/.test(p)) {
+    const key = who.email || 'anon:' + (req.headers['cf-connecting-ip'] || 'studio');
+    if (Date.now() - (firefoxSeen.get(key) || 0) > 3600e3) { firefoxSeen.set(key, Date.now()); logWho('firefox_blocked', { ...whoLabel({ ...who, remote: who.remote }), path: p }); }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(firefoxPage(req));
+  }
   if (who.director) access.seen(who.email);   // any page a signed-in director opens counts as being here
   // Outside the studio, once logins are required, only a logged-in director gets the desk: a link key is not enough.
   const keyed = !who.needsLogin;

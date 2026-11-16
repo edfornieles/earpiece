@@ -25,7 +25,7 @@ class Access {
     this.file = file; this.fetch = fetchImpl; this.now = now;
     this.cfg = { users: [], requireLogin: false, privacy: false, teamDomain: '', aud: '' };
     try { Object.assign(this.cfg, JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
-    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director', ...(u.addedAt ? { addedAt: u.addedAt } : {}), ...(u.lastSeenAt ? { lastSeenAt: u.lastSeenAt } : {}), ...(u.welcomedAt ? { welcomedAt: u.welcomedAt } : {}) })).filter((u) => u.email);
+    this.cfg.users = (this.cfg.users || []).map((u) => ({ email: String(u.email || '').trim().toLowerCase(), name: String(u.name || u.email || '').trim(), role: u.role === 'owner' ? 'owner' : 'director', ...(u.addedAt ? { addedAt: u.addedAt } : {}), ...(u.firstSeenAt || u.lastSeenAt ? { firstSeenAt: u.firstSeenAt || u.lastSeenAt } : {}), ...(u.lastSeenAt ? { lastSeenAt: u.lastSeenAt } : {}), ...(u.welcomedAt ? { welcomedAt: u.welcomedAt } : {}) })).filter((u) => u.email);
     this.keys = new Map(); this.keysAt = 0;
     this.kicked = new Map();   // email -> until: disconnected by an owner, kept out for a while
     this.onPrivacy = null;
@@ -74,9 +74,14 @@ class Access {
   }
   unkick(email) { this.kicked.delete(String(email || '').trim().toLowerCase()); }
   kickedUntil(email) { const t = this.kicked.get(email) || 0; return t > this.now() ? t : 0; }
-  seen(email) {
+  // A signed-in person used Mother. firstSeenAt is their first ever sign-in; lastSeenAt the latest.
+  // Written at most once a minute per person (every page they open calls this), unless force.
+  seen(email, { force = false } = {}) {
     const user = this.cfg.users.find((u) => u.email === email); if (!user) return;
-    user.lastSeenAt = new Date(this.now()).toISOString(); this.save();
+    const now = this.now(), iso = new Date(now).toISOString();
+    if (!force && user.firstSeenAt && now - Date.parse(user.lastSeenAt || 0) < 60e3) return;
+    if (!user.firstSeenAt) user.firstSeenAt = iso;
+    user.lastSeenAt = iso; this.save();
   }
   setRequireLogin(on) { this.cfg.requireLogin = !!on; this.save(); }
   // Cloudflare's signing keys for this team, refreshed hourly (and on an unknown key id).

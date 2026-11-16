@@ -697,6 +697,7 @@ const server = http.createServer(async (req, res) => {
   if (p.startsWith('/signup-api/')) return signupApi(req, res, u, p);
   const who = access.check(req);
   if (who.blocked) { res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return res.end(access.page(who.blocked, who.email)); }
+  if (who.director) access.seen(who.email);   // any page a signed-in director opens counts as being here
   // Outside the studio, once logins are required, only a logged-in director gets the desk: a link key is not enough.
   const keyed = !who.needsLogin;
   const ctl = !!who.director || (keyed && u.searchParams.get('k') === CONTROL_KEY);
@@ -892,7 +893,7 @@ const server = http.createServer(async (req, res) => {
         if (error) return json(res, { error }, 400);
       }
       const u = who.director ? access.cfg.users.find((x) => x.email === who.email) : null;
-      return json(res, { studio: !who.remote, email: who.email || '', name: u?.name || '', role: u?.role || (who.remote ? 'link' : 'studio'), lastSeenAt: u?.lastSeenAt || null, canManage: !who.remote || !!who.owner, logout: who.director ? '/cdn-cgi/access/logout' : '' });
+      return json(res, { studio: !who.remote, email: who.email || '', name: u?.name || '', role: u?.role || (who.remote ? 'link' : 'studio'), lastSeenAt: u?.lastSeenAt || null, firstSeenAt: u?.firstSeenAt || null, canManage: !who.remote || !!who.owner, logout: who.director ? '/cdn-cgi/access/logout' : '' });
     }
     if (p === '/api/team') {
       if (who.remote && !who.owner) return json(res, { error: 'Only owners can manage the team.' }, 403);
@@ -2170,7 +2171,7 @@ wss.on('connection', (ws, req) => {
         saveBriefText(m.text);
       }
     });
-    ws.on('close', () => { controls.delete(ws); talkStop(ws); if (ws.remote) accessChanged(); logWho('desk_leave', { ...deskWho(ws), minutes: Math.round((Date.now() - ws.since) / 60000), desks: controls.size }); });
+    ws.on('close', () => { controls.delete(ws); talkStop(ws); if (ws.who) access.seen(ws.who.email, { force: true }); if (ws.remote) accessChanged(); logWho('desk_leave', { ...deskWho(ws), minutes: Math.round((Date.now() - ws.since) / 60000), desks: controls.size }); });
     return;
   }
 

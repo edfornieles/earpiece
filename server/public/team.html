@@ -17,6 +17,7 @@
   #people select, #add select { width:auto; } #people .acts { align-items:center; }
   #add input, #add select, #add button { margin:0; }
   #people .mail { display:block; font-size:12px; color:var(--dim); } #people .mail.bad { color:var(--hot, #a2522a); white-space:normal; }
+  .never { color:var(--warn, #b7791f); font-weight:500; } .seen { cursor:default; }
   .welcome-opt { display:flex; gap:8px; align-items:center; margin:10px 0 0; font-weight:400; font-size:14px; } .welcome-opt input { width:auto; margin:0; }
   #mailtext { min-height:280px; font-size:13px; }
   @media (max-width:700px) { #people li { grid-template-columns:10px minmax(0,1fr); } #people .acts { grid-column:1 / -1; justify-content:flex-start; } }
@@ -55,21 +56,30 @@
 <div id="toast" role="status"></div><script src="setup.js"></script><script>
 const { $, esc, api, toast } = Setup;
 let me = null, team = null, busy = false;
-const ago = (t) => { if (!t) return 'never signed in'; const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 2 ? 'here just now' : m < 90 ? `last here ${m} min ago` : m < 2880 ? `last here ${Math.round(m / 60)} h ago` : 'last here ' + new Date(t).toLocaleDateString(); };
+const ago = (t) => { if (!t) return 'never signed in'; const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 2 ? 'here just now' : m < 90 ? `last here ${m} min ago` : m < 2880 ? `last here ${Math.round(m / 60)} h ago` : 'last here ' + new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short' }); };
+const stamp = (t) => new Date(t).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const day = (t) => new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short' });
+// Whether and when someone has signed in: connected now, last here (first sign-in on hover), or never.
+function seenLine(u) {
+  if (u.online) return `<span class="seen" title="${u.firstSeenAt ? 'First signed in ' + esc(stamp(u.firstSeenAt)) : ''}">connected now</span>`;
+  if (!u.lastSeenAt) return `<span class="never">Never signed in${u.addedAt ? ' · added ' + esc(day(u.addedAt)) : ''}</span>`;
+  return `<span class="seen" title="Last here ${esc(stamp(u.lastSeenAt))}${u.firstSeenAt ? '\nFirst signed in ' + esc(stamp(u.firstSeenAt)) : ''}">${esc(ago(u.lastSeenAt))}${u.firstSeenAt ? ' · first signed in ' + esc(day(u.firstSeenAt)) : ''}</span>`;
+}
 function renderMe() {
   const roles = { owner: 'Owner', director: 'Director', studio: 'Studio computer', link: 'Desk link (no sign-in)' };
   $('mehint').textContent = me.studio ? 'This is the studio computer, so it has no personal profile. It can manage the team below.' : me.email ? 'Signed in with Google.' : 'Opened with a desk link, not a sign-in.';
-  $('medl').innerHTML = (me.email ? `<dt>Email</dt><dd>${esc(me.email)}</dd>` : '') + `<dt>Role</dt><dd>${esc(roles[me.role] || me.role)}</dd>` + (me.email ? `<dt>Last here</dt><dd>${esc(ago(me.lastSeenAt).replace(/^last here /, ''))}</dd>` : '');
+  $('medl').innerHTML = (me.email ? `<dt>Email</dt><dd>${esc(me.email)}</dd>` : '') + `<dt>Role</dt><dd>${esc(roles[me.role] || me.role)}</dd>` + (me.email ? `<dt>Last here</dt><dd>${me.lastSeenAt ? esc(stamp(me.lastSeenAt)) : 'now'}</dd>${me.firstSeenAt ? `<dt>First signed in</dt><dd>${esc(stamp(me.firstSeenAt))}</dd>` : ''}` : '');
   $('meform').hidden = !me.email; if (me.email && document.activeElement !== $('myname')) $('myname').value = me.name;
   $('logout').hidden = !me.logout; if (me.logout) $('logout').href = me.logout;
 }
 function renderTeam() {
   $('teampanel').hidden = false;
   const online = team.users.filter((u) => u.online).length;
-  $('count').textContent = `${team.users.length} ${team.users.length === 1 ? 'person' : 'people'} · ${online} connected now`;
+  const never = team.users.filter((u) => !u.lastSeenAt && !u.online).length;
+  $('count').textContent = `${team.users.length} ${team.users.length === 1 ? 'person' : 'people'} · ${online} connected now` + (never ? ` · ${never} never signed in` : '');
   $('people').innerHTML = team.users.map((u) => `<li data-email="${esc(u.email)}">
     <span class="on-dot${u.online ? ' on' : ''}" title="${u.online ? 'Connected now' : 'Not connected'}"></span>
-    <span class="who"><b>${esc(u.name)}</b>${me?.email === u.email ? ' (you)' : ''}<small>${esc(u.email)} · ${u.online ? 'connected now' : ago(u.lastSeenAt)}</small>${mailLine(u)}${u.kickedUntil ? `<span class="out">Disconnected until ${new Date(u.kickedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>` : ''}</span>
+    <span class="who"><b>${esc(u.name)}</b>${me?.email === u.email ? ' (you)' : ''}<small>${esc(u.email)}</small><small>${seenLine(u)}</small>${mailLine(u)}${u.kickedUntil ? `<span class="out">Disconnected until ${new Date(u.kickedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>` : ''}</span>
     <span class="acts"><select class="role"><option value="director"${u.role === 'director' ? ' selected' : ''}>Director</option><option value="owner"${u.role === 'owner' ? ' selected' : ''}>Owner</option></select>
       ${u.kickedUntil ? '<button class="unkick">Allow back</button>' : `<button class="kick"${me?.email === u.email ? ' disabled' : ''}>Disconnect</button>`}
       ${team.mail?.configured && me?.email !== u.email ? `<button class="welcome"${u.welcome?.sending ? ' disabled' : ''}>${u.welcomedAt ? 'Email again' : 'Send welcome'}</button>` : ''}

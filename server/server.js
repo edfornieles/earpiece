@@ -339,7 +339,7 @@ function logDeskCommand(ws, m) {
   if (!DESK_LOGGED.has(m.type)) return;
   const d = { cmd: m.type };
   if (m.id !== undefined) d.phone = m.id;
-  for (const k of ['target', 'as', 'on', 'mode', 'op', 'email', 'role', 'voice', 'phone']) if (m[k] !== undefined && typeof m[k] !== 'object') d[k] = m[k];
+  for (const k of ['target', 'as', 'on', 'mode', 'op', 'email', 'role', 'voice', 'phone']) if (m[k] !== undefined && (typeof m[k] !== 'object' || Array.isArray(m[k]))) d[k] = Array.isArray(m[k]) ? m[k].join(',') : m[k];
   if (typeof m.text === 'string' && ['speak', 'instruct', 'mark'].includes(m.type)) d.text = m.text.slice(0, 200);
   logWho('desk_command', { ...deskWho(ws), ...d });
 }
@@ -1950,6 +1950,8 @@ async function talkStop(owner) {
   for (const id of t.targets) {
     const s = sessions.get(id);
     // Talking in the AI voice to a waiting phone during a recorded session starts its visit, so the words go through.
+    // Before Start session (rehearsal), the AI voice still speaks the words, like a typed line: nothing is recorded and no visit starts.
+    if (s && s.waiting && t.as === 'voice' && STANDBY && s.visitToken === t.visits.get(id)) { speakAs(s, text, 'voiced'); note(id, 'Rehearsal: spoken in the AI voice, nothing is being recorded.'); continue; }
     const started = s && s.waiting && t.as === 'voice' && s.visitToken === t.visits.get(id) && beginParticipant(s, '', null, { quiet: true }) !== false && !s.waiting;
     if (!s || (!started && s.visitToken !== t.visits.get(id))) { note(id, `Not passed on (the visit changed while you were talking): “${text}”`); continue; }
     if (s.waiting) { if (t.as === 'voice') note(id, `Not passed on (nothing is being recorded yet; press Start session first): “${text}”`); continue; }

@@ -298,6 +298,29 @@ const transcriptFile = STANDBY ? NULL_STREAM : fs.createWriteStream(path.join(SE
 const lastPerception = new Map(), lastLook = new Map(), connLog = [], phoneTelemetry = new Map();
 const diagFile = fs.createWriteStream(path.join(SESSION_DIR, 'diagnostics.jsonl'), { flags: 'a' });
 function diag(type, data) { const e = { at: new Date().toISOString(), type, ...data }; diagFile.write(JSON.stringify(e) + '\n'); return e; }
+// Who did it, for the logs: the signed-in person, or which kind of desk it was.
+const ROOM_QUIET = new Set(['track', 'trackingView', 'bindTrack', 'bindObject']);
+const whoLabel = (w) => w?.email ? { who: w.name || w.email, email: w.email } : { who: w?.remote ? 'outside desk link' : 'studio desk' };
+const deskWho = (ws) => whoLabel(ws.who ? { ...ws.who, remote: ws.remote } : { remote: ws.remote });
+// Desk commands worth a line in the log (with who sent them). Text is kept short.
+const DESK_LOGGED = new Set(['talk', 'mode', 'nudge', 'end', 'voice', 'speak', 'instruct', 'mark', 'privacy', 'people', 'endSession', 'startSession',
+  'sessionMeta', 'personSave', 'personDelete', 'arrivalAdd', 'arrivalStart', 'linkRegistration', 'personStart', 'visitStart', 'saveBrief']);
+// Who did what is also kept outside recordings, one file a day in logs/ (not in git), so it survives standby.
+const ACTIVITY_DIR = path.join(__dirname, 'logs');
+function logWho(type, data) {
+  logEvent(type, data);
+  const now = new Date(), day = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  try { fs.mkdirSync(ACTIVITY_DIR, { recursive: true }); } catch {}
+  fs.appendFile(path.join(ACTIVITY_DIR, `activity-${day}.jsonl`), JSON.stringify({ at: now.toISOString(), session: STANDBY ? null : stamp, type, ...data }) + '\n', () => {});
+}
+function logDeskCommand(ws, m) {
+  if (!DESK_LOGGED.has(m.type)) return;
+  const d = { cmd: m.type };
+  if (m.id !== undefined) d.phone = m.id;
+  for (const k of ['target', 'as', 'on', 'mode', 'op', 'email', 'role', 'voice', 'phone']) if (m[k] !== undefined && typeof m[k] !== 'object') d[k] = m[k];
+  if (typeof m.text === 'string' && ['speak', 'instruct', 'mark'].includes(m.type)) d.text = m.text.slice(0, 200);
+  logWho('desk_command', { ...deskWho(ws), ...d });
+}
 function logEvent(type, data = {}) { events.write(JSON.stringify({ t: clock(), type, ...data }) + '\n'); }
 
 class WavTrack {
@@ -613,6 +636,8 @@ const server = http.createServer(async (req, res) => {
   }
   if (p.startsWith('/api/')) {
     if (!ctl) { res.writeHead(403); return res.end(); }
+    // Changes made from a page (library, team, programs…) go in the log with who made them. Room actions log below.
+    if (req.method === 'POST' && p !== '/api/room') logWho('desk_request', { ...whoLabel(who), path: p, ...(u.searchParams.get('s') ? { folder: u.searchParams.get('s') } : {}) });
     // Your own profile (anyone signed in), and the team (owners, and the studio itself).
     if (p === '/api/me') {
       if (req.method === 'POST') {
@@ -637,6 +662,7 @@ const server = http.createServer(async (req, res) => {
       try {
         if(req.method==='POST'){
           const d=await readSetupBody(req);
+          if(!ROOM_QUIET.has(d.action)&&d.op!=='probe')logWho('desk_request',{...whoLabel({...who,remote:who.remote}),path:p,action:d.action,...(d.name?{name:String(d.name).slice(0,100)}:{}),...(d.cameraId?{camera:d.cameraId}:{}),...(typeof d.op==='string'?{op:d.op}:{})});
           if(d.action==='observe')await roomObserver.observe(d.cameraId,d.question);
           else if(d.action==='start')roomObserver.start(d.cameraId,d.interval);
           else if(d.action==='stop')roomObserver.stop();
@@ -1728,6 +1754,7 @@ wss.on('connection', (ws, req) => {
   const keyed = !who.needsLogin;
   if (role === 'control' && (who.director || (keyed && key === CONTROL_KEY))) {
     controls.add(ws);
+    logWho('desk_join', { ...deskWho(ws), remote: !!ws.remote, desks: controls.size });
     if (who.director) access.seen(who.email);
     accessChanged();
     send(ws, { type: 'phonesChanged', maxPhones: MAX_PHONES });
@@ -1756,6 +1783,7 @@ wss.on('connection', (ws, req) => {
       }
       let m; try { m = JSON.parse(data); } catch { return; }
       if (!m || typeof m !== 'object' || Array.isArray(m)) return;
+      logDeskCommand(ws, m);
       const s = sessions.get(m.id);
       if (m.type === 'talk') { logEvent(m.on ? 'talk_start' : 'talk_stop', { target: m.target, as: m.as }); if (m.on) talkStart(m.target, m.as, ws); else talkStop(ws); }
       if (m.type === 'endSession' && !STANDBY) { toControls({ type: 'sessionEnding' }); shutdown(true); }
@@ -1851,7 +1879,7 @@ wss.on('connection', (ws, req) => {
         saveBriefText(m.text);
       }
     });
-    ws.on('close', () => { controls.delete(ws); talkStop(ws); if (ws.remote) accessChanged(); });
+    ws.on('close', () => { controls.delete(ws); talkStop(ws); if (ws.remote) accessChanged(); logWho('desk_leave', { ...deskWho(ws), minutes: Math.round((Date.now() - ws.since) / 60000), desks: controls.size }); });
     return;
   }
 

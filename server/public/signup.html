@@ -1,0 +1,114 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Take part — Mother</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --fg:#1d1d1b; --dim:#6d6a63; --line:#dedbd3; --accent:#1d1d1b; --bad:#a2522a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121211; --card:#1b1b1a; --fg:#ecebe7; --dim:#9c998f; --line:#34332f; --accent:#ecebe7; --bad:#e08a5f; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  main { max-width:620px; margin:0 auto; padding:40px 16px 80px; }
+  h1 { font-size:30px; font-weight:600; letter-spacing:-.01em; margin:0 0 12px; }
+  h2 { font-size:18px; font-weight:600; margin:0 0 4px; }
+  .intro { color:var(--dim); margin:0 0 28px; white-space:pre-line; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin:0 0 16px; }
+  label { display:block; font-size:14px; margin:14px 0 6px; } label small, .hint { color:var(--dim); font-size:13px; }
+  input[type=text], input[type=email], input[type=tel], textarea { width:100%; font:inherit; color:inherit; background:transparent; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  textarea { min-height:80px; resize:vertical; }
+  input:focus, textarea:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .checks { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .checks label { display:flex; align-items:center; gap:8px; margin:0; padding:8px 12px; border:1px solid var(--line); border-radius:20px; cursor:pointer; font-size:14px; }
+  .checks input { margin:0; accent-color:var(--accent); }
+  .checks label:has(input:checked) { border-color:var(--accent); }
+  .agree label { display:flex; gap:10px; align-items:flex-start; margin:12px 0 0; font-size:15px; cursor:pointer; } .agree input { margin:4px 0 0; width:18px; height:18px; accent-color:var(--accent); flex:0 0 auto; }
+  .consent { max-height:320px; overflow-y:auto; border:1px solid var(--line); border-radius:8px; padding:4px 14px; font-size:14px; margin-top:10px; }
+  .consent h3 { font-size:15px; margin:14px 0 4px; } .consent p, .consent ul { margin:8px 0; } .consent ul { padding-left:20px; }
+  button { font:inherit; font-weight:600; background:var(--accent); color:var(--bg); border:0; border-radius:10px; padding:14px 22px; cursor:pointer; width:100%; margin-top:6px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .err { color:var(--bad); margin:12px 0 0; min-height:1em; }
+  .hp { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
+  .done { text-align:center; padding:40px 20px; } .done h1 { margin-bottom:8px; }
+</style></head><body><main>
+<div id="form-wrap">
+  <h1 id="title">Take part</h1>
+  <p class="intro" id="intro"></p>
+  <form id="f" novalidate>
+    <section>
+      <h2>About you</h2>
+      <label for="name">Name</label><input type="text" id="name" autocomplete="name" required maxlength="80">
+      <label for="email">Email</label><input type="email" id="email" autocomplete="email" required maxlength="120">
+      <label for="phone">Phone <small>(optional)</small></label><input type="tel" id="phone" autocomplete="tel" maxlength="40">
+      <label for="pronouns">Pronouns <small>(optional)</small></label><input type="text" id="pronouns" maxlength="40" placeholder="e.g. she/her, they/them">
+    </section>
+    <section>
+      <h2>Your experience</h2>
+      <p class="hint" style="margin:0">Have you done any acting, dance or other performing arts? No experience is needed to take part.</p>
+      <div class="checks" id="kinds"></div>
+      <label>How much experience?</label>
+      <div class="checks" id="levels"></div>
+      <label for="details">Tell us a little more <small>(optional)</small></label><textarea id="details" maxlength="2000" placeholder="Training, groups, productions, anything you like."></textarea>
+    </section>
+    <section>
+      <h2>Practical things</h2>
+      <label for="availability">When are you usually free? <small>(optional)</small></label><textarea id="availability" maxlength="1000" placeholder="e.g. weekday evenings, Saturdays"></textarea>
+      <label for="access">Anything we should know so you can take part comfortably? <small>(optional)</small></label><textarea id="access" maxlength="1000" placeholder="Access needs, hearing, mobility, anything else."></textarea>
+      <label for="heard">How did you hear about this? <small>(optional)</small></label><input type="text" id="heard" maxlength="200">
+      <div class="hp" aria-hidden="true"><label for="website">Leave this empty</label><input type="text" id="website" tabindex="-1" autocomplete="off"></div>
+    </section>
+    <section>
+      <h2>What taking part involves</h2>
+      <p class="hint" style="margin:0">Please read this. On the day you will be asked to sign it again.</p>
+      <div class="consent" id="consent">Loading…</div>
+      <div class="agree">
+        <label><input type="checkbox" id="adult"> I am 18 or over.</label>
+        <label><input type="checkbox" id="agree"> I have read what taking part involves and I agree to it.</label>
+        <label><input type="checkbox" id="contact"> You can email me about the schedule and my booking.</label>
+      </div>
+    </section>
+    <button type="submit" id="go">Sign up</button>
+    <p class="err" id="err" role="alert"></p>
+  </form>
+</div>
+<div class="done" id="done" hidden><h1>Thank you</h1><p id="donetext"></p></div>
+</main><script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// The consent text is simple Markdown: headings, paragraphs, lists and **bold**.
+function md(text) {
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  const out = []; let list = null;
+  for (const raw of String(text).split('\n')) {
+    const l = raw.trim();
+    if (/^[-*] /.test(l)) { if (!list) { list = []; } list.push(`<li>${inline(l.slice(2))}</li>`); continue; }
+    if (list) { out.push(`<ul>${list.join('')}</ul>`); list = null; }
+    if (!l) continue;
+    if (/^#{1,6} /.test(l)) out.push(`<h3>${inline(l.replace(/^#+ /, ''))}</h3>`); else out.push(`<p>${inline(l)}</p>`);
+  }
+  if (list) out.push(`<ul>${list.join('')}</ul>`);
+  return out.join('');
+}
+let info = null;
+fetch('/signup-api/info').then((r) => r.json()).then((d) => {
+  info = d;
+  document.title = d.page.title; $('title').textContent = d.page.title; $('intro').textContent = d.page.intro + (d.page.where ? '\n\nWhere: ' + d.page.where : '');
+  $('kinds').innerHTML = d.experience.map((k) => `<label><input type="checkbox" name="kind" value="${esc(k)}"> ${esc(k)}</label>`).join('');
+  $('levels').innerHTML = d.levels.map((k, i) => `<label><input type="radio" name="level" value="${esc(k)}"${i ? '' : ' checked'}> ${esc(k)}</label>`).join('');
+  $('consent').innerHTML = md(d.consent);
+}).catch(() => { $('consent').textContent = 'Could not load. Please reload the page.'; });
+
+$('f').onsubmit = async (e) => {
+  e.preventDefault(); $('err').textContent = '';
+  const body = {
+    name: $('name').value, email: $('email').value, phone: $('phone').value, pronouns: $('pronouns').value,
+    experience: { kinds: [...document.querySelectorAll('input[name=kind]:checked')].map((x) => x.value), level: document.querySelector('input[name=level]:checked')?.value, details: $('details').value },
+    availability: $('availability').value, access: $('access').value, heard: $('heard').value, website: $('website').value,
+    adult: $('adult').checked, agree: $('agree').checked, contact: $('contact').checked, version: info?.version,
+  };
+  $('go').disabled = true;
+  try {
+    const r = await fetch('/signup-api/submit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) throw Error(d.error || 'Something went wrong. Please try again.');
+    $('form-wrap').hidden = true; $('done').hidden = false;
+    $('donetext').textContent = `You are signed up, ${d.name}. We will email you the schedule so you can choose a time.` + (d.mail ? ' Look out for a confirmation email now (check your spam folder too).' : '');
+    window.scrollTo(0, 0);
+  } catch (err) { $('err').textContent = err.message; $('go').disabled = false; }
+};
+</script></body></html>

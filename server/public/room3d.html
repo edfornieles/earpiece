@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Room in 3D — Mother</title><link rel="stylesheet" href="setup.css">
+<style>
+body{margin:0;overflow:hidden;background:#101112}
+#view{position:fixed;inset:0}
+.hud{position:fixed;top:14px;left:14px;max-width:340px;background:rgba(20,21,23,.86);border:1px solid #333;border-radius:10px;padding:12px 14px;color:#ddd;font:13px/1.45 system-ui;backdrop-filter:blur(6px)}
+.hud h1{font-size:16px;margin:0 0 6px;color:#fff}.hud p{margin:4px 0}.hud .dim{color:#999}
+.hud .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.hud button{font:12px system-ui;padding:6px 10px;border-radius:6px;border:1px solid #444;background:#222;color:#eee;cursor:pointer}.hud button.on{background:#e8c27a;color:#111;border-color:#e8c27a}
+#who p{margin:3px 0}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.legend{position:fixed;bottom:14px;left:14px;color:#aaa;font:12px system-ui;background:rgba(20,21,23,.8);padding:8px 12px;border-radius:8px;border:1px solid #333}
+@media(max-width:600px){.hud{max-width:none;right:14px}}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+</head><body>
+<div id="view"></div>
+<div class="hud"><h1>Room in 3D</h1>
+<p class="dim" id="status">Loading the room…</p>
+<div class="row"><button id="v-persp" class="on">Overview</button><button id="v-top">From above</button><button id="v-cam">From the camera</button><button id="v-coverage" class="on">What the camera sees</button><button id="v-scan" hidden>Scan of the room</button></div>
+<div id="who"></div>
+<p class="dim">Built from the floor plan (walls, door, furniture heights), the calibrated camera and live tracking. Drag to turn, scroll to zoom.</p>
+</div>
+<div class="legend"><span class="dot" style="background:#e3c28f"></span>person (feet seen) <span class="dot" style="background:#8fd19e;margin-left:10px"></span>seated <span class="dot" style="background:#f08a6c;margin-left:10px"></span>from head <span class="dot" style="background:#777;margin-left:10px"></span>last seen <span class="dot" style="background:#ffd27a;margin-left:10px"></span>object found <span class="dot" style="background:#7fe0c0;margin-left:10px"></span>animal</div>
+<script src="setup.js"></script>
+<script type="module" src="room3d.js"></script>
+</body></html>

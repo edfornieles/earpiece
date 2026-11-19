@@ -1,0 +1,156 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign-ups — Mother</title><link rel="stylesheet" href="setup.css">
+<style>
+  .su-grid { display:grid; grid-template-columns:minmax(380px,1.7fr) minmax(300px,1fr); gap:20px; align-items:start; }
+  @media (max-width:1100px) { .su-grid { grid-template-columns:1fr; } }
+  .linkrow { display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  .linkrow .qr { width:92px; height:92px; flex:0 0 auto; background:#fff; padding:4px; border-radius:6px; } .linkrow .qr svg { width:100%; height:100%; display:block; }
+  .linkrow code { font-size:15px; overflow-wrap:anywhere; }
+  .tools { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:12px 0 0; } .tools input[type=search] { flex:1 1 200px; margin:0; } .tools select { width:auto; margin:0; }
+  #people { list-style:none; padding:0; margin:12px 0 0; display:flex; flex-direction:column; gap:6px; }
+  #people > li { border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .prow { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:10px; align-items:center; }
+  .prow input[type=checkbox] { width:auto; margin:0; }
+  .prow .who { cursor:pointer; } .prow .who b { font-weight:500; } .prow .who small { display:block; color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pill { font-size:11px; border:1px solid var(--line); border-radius:20px; padding:1px 8px; margin-left:6px; color:var(--dim); white-space:nowrap; }
+  .pill.ok { border-color:#417358; color:#417358; } .pill.wait { border-color:#a2822a; color:#a2822a; }
+  .prow select { width:auto; max-width:220px; margin:0; font-size:13px; padding:5px 8px; }
+  .more { margin:10px 0 2px 28px; font-size:14px; display:grid; grid-template-columns:auto 1fr; gap:4px 14px; } .more dt { color:var(--dim); } .more dd { margin:0; white-space:pre-line; overflow-wrap:anywhere; }
+  .more .acts { grid-column:1 / -1; display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; } .more .acts button { font-size:12px; padding:5px 9px; }
+  .more textarea { min-height:50px; font-size:13px; }
+  .addslots { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px,1fr)); gap:8px; align-items:end; } .addslots label { margin:0 0 4px; font-size:12px; } .addslots input { margin:0; }
+  #slots { margin-top:14px; } #slots h3 { margin:16px 0 6px; font-size:14px; }
+  #slots ul { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:4px; }
+  #slots li { display:flex; gap:8px; align-items:center; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  #slots li.closed { opacity:.55; } #slots li span.t { font-variant-numeric:tabular-nums; flex:0 0 auto; } #slots li span.n { flex:1; min-width:0; color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #slots li b.c { font-weight:500; font-size:12px; flex:0 0 auto; } #slots li.full b.c { color:#417358; }
+  #slots li button { font-size:11px; padding:3px 7px; }
+</style></head><body>
+<header class="pagehead"><div><div class="eyebrow">Setup</div><h1>Sign-ups</h1><p>People sign up to take part on a public page. Add times to the schedule, then email them their own link to book, change or cancel.</p></div></header>
+<main><div id="notice" class="notice" role="status"></div>
+<section class="panel">
+  <div class="linkrow"><span class="qr" id="qr"></span><div style="flex:1;min-width:220px"><h2 style="margin:0 0 4px">Sign-up page</h2><code id="url"></code>
+    <div class="tools" style="margin-top:8px"><button id="copyurl">Copy link</button><a id="openurl" class="link" target="_blank" rel="noopener">Open</a><span class="hint" id="mailstate"></span></div></div></div>
+  <details style="margin-top:12px"><summary>Page wording</summary>
+    <label for="p-title">Title</label><input id="p-title" maxlength="120">
+    <label for="p-intro">Introduction</label><textarea id="p-intro" style="min-height:90px"></textarea>
+    <label for="p-where">Where <span class="hint">(shown on the pages and in emails)</span></label><input id="p-where" maxlength="300" placeholder="Studio address">
+    <div class="tools"><button id="savepage">Save wording</button><span class="hint">The consent text comes from the welcome station's consent form.</span></div>
+  </details>
+</section>
+<div class="su-grid">
+  <section class="panel">
+    <div class="row between"><h2>People</h2><span class="hint" id="count"></span></div>
+    <div class="tools">
+      <input id="q" type="search" placeholder="Search names, emails, experience" autocomplete="off">
+      <select id="show"><option value="all">Everyone</option><option value="new">Not sent the schedule</option><option value="waiting">Sent, not booked</option><option value="booked">Booked</option></select>
+      <select id="exp"><option value="">Any experience</option><option value="some">Some experience</option><option value="none">No experience</option></select>
+    </div>
+    <div class="tools"><button id="selnew">Select everyone not yet sent</button><button id="invite" class="primary" disabled>Email the schedule</button><span class="hint" id="selcount"></span></div>
+    <ul id="people"></ul>
+  </section>
+  <section class="panel">
+    <h2>Schedule</h2>
+    <div class="addslots">
+      <div><label for="s-date">Day</label><input id="s-date" type="date"></div>
+      <div><label for="s-start">From</label><input id="s-start" type="time" value="10:00"></div>
+      <div><label for="s-end">Until <span class="hint">(optional)</span></label><input id="s-end" type="time"></div>
+      <div><label for="s-min">Each slot</label><input id="s-min" type="number" min="5" max="600" value="30" title="minutes"></div>
+      <div><label for="s-places">Places</label><input id="s-places" type="number" min="1" max="200" value="1"></div>
+      <div><label for="s-note">Note <span class="hint">(optional)</span></label><input id="s-note" maxlength="200" placeholder="e.g. group"></div>
+    </div>
+    <div class="tools"><button id="addslots" class="primary">Add times</button><span class="hint">With “Until”, the day is filled with back-to-back slots.</span></div>
+    <div id="slots"></div>
+  </section>
+</div></main>
+<div id="toast" role="status"></div><script src="setup.js"></script><script>
+const { $, esc, api, toast } = Setup;
+let data = null, open = new Set(), sel = new Set(), busy = false, pageDirty = false;
+const status = (s) => s.booking ? 'booked' : s.invitedAt ? 'waiting' : 'new';
+const expText = (e) => [e?.kinds?.join(', '), e?.level && e.level !== 'None' ? e.level : ''].filter(Boolean).join(' · ') || 'No experience given';
+const hasExp = (s) => (s.experience?.kinds?.length || 0) > 0 || (s.experience?.level && s.experience.level !== 'None');
+const day = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+function renderTop() {
+  $('url').textContent = data.url; $('openurl').href = data.url; $('qr').innerHTML = data.qr;
+  $('mailstate').textContent = data.mail.configured ? `Emails go from ${data.mail.from}.` : 'Email is not set up (see the Team page): copy each person\'s booking link instead.';
+  if (!pageDirty) { $('p-title').value = data.page.title; $('p-intro').value = data.page.intro; $('p-where').value = data.page.where; }
+}
+function slotOptions(s) {
+  return `<option value="">${s.booking ? 'Booked: ' + esc(s.booking.when) : 'Book into…'}</option>` + data.slots.map((x) => `<option value="${x.id}" ${x.id === s.booking?.slot ? 'disabled' : ''} ${x.taken >= x.places && x.id !== s.booking?.slot ? 'disabled' : ''}>${esc(day(x.date))} ${x.start} (${x.taken}/${x.places})</option>`).join('') + (s.booking ? '<option value="-">Cancel the booking</option>' : '');
+}
+function renderPeople() {
+  const q = $('q').value.toLowerCase(), show = $('show').value, exp = $('exp').value;
+  const rows = data.signups.filter((s) => (show === 'all' || status(s) === show) && (!exp || (exp === 'some') === hasExp(s)) &&
+    (!q || `${s.name} ${s.email} ${s.phone} ${expText(s.experience)} ${s.experience?.details || ''} ${s.notes || ''}`.toLowerCase().includes(q)));
+  const booked = data.signups.filter((s) => s.booking).length;
+  $('count').textContent = `${data.signups.length} signed up · ${booked} booked`;
+  $('people').innerHTML = rows.map((s) => {
+    const st = status(s), pill = st === 'booked' ? `<span class="pill ok">${esc(s.booking.when)}</span>` : st === 'waiting' ? '<span class="pill wait">sent, not booked</span>' : '<span class="pill">not sent yet</span>';
+    const e = s.experience || {};
+    return `<li data-id="${s.id}"><div class="prow"><input type="checkbox" class="sel" ${sel.has(s.id) ? 'checked' : ''} aria-label="Select ${esc(s.name)}">
+      <span class="who"><b>${esc(s.name)}</b>${s.pronouns ? ` <span class="hint">(${esc(s.pronouns)})</span>` : ''}${pill}${s.registered ? '<span class="pill ok">registered on the day</span>' : ''}<small>${esc(expText(e))} · ${esc(s.email)}</small></span>
+      <select class="book" aria-label="Booking for ${esc(s.name)}">${slotOptions(s)}</select></div>
+      ${open.has(s.id) ? `<dl class="more"><dt>Email</dt><dd>${esc(s.email)}</dd>${s.phone ? `<dt>Phone</dt><dd>${esc(s.phone)}</dd>` : ''}
+        <dt>Experience</dt><dd>${esc(expText(e))}${e.details ? '\n' + esc(e.details) : ''}</dd>
+        ${s.availability ? `<dt>Free</dt><dd>${esc(s.availability)}</dd>` : ''}${s.access ? `<dt>Access</dt><dd>${esc(s.access)}</dd>` : ''}${s.heard ? `<dt>Heard via</dt><dd>${esc(s.heard)}</dd>` : ''}
+        <dt>Signed up</dt><dd>${new Date(s.createdAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${s.invitedAt ? ' · schedule sent ' + new Date(s.invitedAt).toLocaleDateString([], { day: 'numeric', month: 'short' }) : ''}${s.cancelledAt && !s.booking ? ' · cancelled a booking' : ''}</dd>
+        <dt>Notes</dt><dd><textarea class="notes" placeholder="Private notes for the team">${esc(s.notes || '')}</textarea></dd>
+        <div class="acts"><button class="copy">Copy their booking link</button><button class="savenotes">Save notes</button><button class="remove link">Remove</button></div></dl>` : ''}</li>`;
+  }).join('') || `<li class="hint">${data.signups.length ? 'Nobody matches.' : 'Nobody has signed up yet. Share the sign-up link above.'}</li>`;
+  for (const id of [...sel]) if (!data.signups.some((s) => s.id === id)) sel.delete(id);
+  $('selcount').textContent = sel.size ? `${sel.size} selected` : '';
+  $('invite').disabled = !sel.size || !data.mail.configured;
+  $('invite').title = data.mail.configured ? '' : 'Set up email on the Team page first';
+}
+function renderSlots() {
+  const days = [...new Set(data.slots.map((x) => x.date))];
+  $('slots').innerHTML = days.map((d) => `<h3>${esc(day(d))}</h3><ul>${data.slots.filter((x) => x.date === d).map((x) => {
+    const endM = +x.start.slice(0, 2) * 60 + +x.start.slice(3) + x.minutes, end = `${String(Math.floor(endM / 60) % 24).padStart(2, '0')}:${String(endM % 60).padStart(2, '0')}`;
+    return `<li data-id="${x.id}" class="${x.closed ? 'closed' : ''} ${x.taken >= x.places ? 'full' : ''}"><span class="t">${x.start}–${end}</span><b class="c">${x.taken}/${x.places}</b><span class="n" title="${esc(x.people.map((p) => p.name).join(', '))}">${esc(x.people.map((p) => p.name).join(', ') || x.note || '')}</span>
+      <button class="toggle" title="${x.closed ? 'Open it for booking' : 'Stop new bookings'}">${x.closed ? 'Open' : 'Close'}</button><button class="rm" title="Remove this time">×</button></li>`; }).join('')}</ul>`).join('') || '<p class="hint">No times yet. Add a day above.</p>';
+}
+function render() { renderTop(); renderPeople(); renderSlots(); }
+async function act(body) {
+  busy = true;
+  try { const r = await api('signups', body); data = r; render(); if (r.message) toast(r.message); return r; }
+  catch (e) { toast(e.message); return null; } finally { busy = false; }
+}
+async function load() { if (busy) return; try { data = await api('signups'); render(); $('notice').textContent = ''; } catch (e) { $('notice').textContent = e.message; } }
+
+$('copyurl').onclick = () => navigator.clipboard.writeText(data.url).then(() => toast('Sign-up link copied'));
+['p-title', 'p-intro', 'p-where'].forEach((id) => $(id).addEventListener('input', () => { pageDirty = true; }));
+$('savepage').onclick = async () => { if (await act({ op: 'page', page: { title: $('p-title').value, intro: $('p-intro').value, where: $('p-where').value } })) { pageDirty = false; toast('Wording saved'); } };
+['q', 'show', 'exp'].forEach((id) => $(id).addEventListener('input', renderPeople));
+$('selnew').onclick = () => { data.signups.filter((s) => status(s) === 'new').forEach((s) => sel.add(s.id)); renderPeople(); };
+$('invite').onclick = () => {
+  const people = data.signups.filter((s) => sel.has(s.id)), again = people.filter((s) => s.invitedAt).length;
+  if (!confirm(`Email the schedule to ${people.length} ${people.length === 1 ? 'person' : 'people'}?${again ? `\n\n${again} of them were sent it before and will get it again.` : ''}\n\nEach gets their own link to book.`)) return;
+  act({ op: 'invite', ids: [...sel] }).then((r) => { if (r) { sel.clear(); renderPeople(); } });
+};
+$('people').addEventListener('change', (e) => {
+  const li = e.target.closest('li[data-id]'); if (!li) return; const s = data.signups.find((x) => x.id === li.dataset.id);
+  if (e.target.matches('.sel')) { e.target.checked ? sel.add(s.id) : sel.delete(s.id); renderPeople(); }
+  if (e.target.matches('.book')) {
+    const v = e.target.value; e.target.value = '';
+    if (v === '-') { if (confirm(`Cancel ${s.name}'s booking?`)) act({ op: 'cancel', id: s.id }); else renderPeople(); return; }
+    const x = data.slots.find((y) => y.id === v); if (!x) return;
+    const email = data.mail.configured && confirm(`Book ${s.name} for ${x.label}.\n\nEmail them a confirmation? (Cancel = book without emailing)`);
+    act({ op: 'book', id: s.id, slot: v, email });
+  }
+});
+$('people').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-id]'); if (!li) return; const id = li.dataset.id, s = data.signups.find((x) => x.id === id);
+  if (e.target.closest('.who')) { open.has(id) ? open.delete(id) : open.add(id); renderPeople(); }
+  if (e.target.matches('.copy')) navigator.clipboard.writeText(s.link).then(() => toast(`${s.name}'s booking link copied. It is private to them.`));
+  if (e.target.matches('.savenotes')) act({ op: 'notes', id, notes: li.querySelector('.notes').value }).then((r) => r && toast('Notes saved'));
+  if (e.target.matches('.remove') && confirm(`Remove ${s.name}? Their details and booking are deleted.`)) act({ op: 'remove', id });
+});
+$('addslots').onclick = () => act({ op: 'addSlots', date: $('s-date').value, start: $('s-start').value, end: $('s-end').value, minutes: $('s-min').value, places: $('s-places').value, note: $('s-note').value });
+$('slots').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-id]'); if (!li) return; const x = data.slots.find((y) => y.id === li.dataset.id);
+  if (e.target.matches('.toggle')) act({ op: 'editSlot', id: x.id, closed: !x.closed });
+  if (e.target.matches('.rm') && confirm(`Remove ${x.label}?${x.people.length ? `\n\n${x.people.map((p) => p.name).join(', ')} will no longer have a time (they are not emailed).` : ''}`)) act({ op: 'removeSlot', id: x.id });
+});
+$('s-date').value = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+load(); setInterval(() => { if (!document.hidden && !document.activeElement?.matches?.('textarea, input:not([type=checkbox])')) load(); }, 6000);
+</script><script src="nav.js"></script></body></html>

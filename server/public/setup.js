@@ -7,7 +7,7 @@ const Setup = (() => {
   async function api(route, body, options = {}) {
     const res = await fetch(url('/api/' + route), { ...(body === undefined ? {} : { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body) }), signal:options.signal });
     let data; try { data = await res.json(); } catch { throw new Error(res.status === 403 ? 'Open this page from the control room using its current link.' : 'The server could not complete this request.'); }
-    if (!res.ok || data.error) throw new Error(data.error || 'Request failed.');
+    if (!res.ok || (data.error && !options.allowStatusError)) throw new Error(data.error || 'Request failed.');
     return data;
   }
   function toast(message) { $('toast').textContent = message; $('toast').style.display = 'block'; clearTimeout(toast.timer); toast.timer = setTimeout(() => { $('toast').style.display = 'none'; }, 4500); }

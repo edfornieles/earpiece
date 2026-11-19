@@ -1,0 +1,129 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Team — Mother</title><link rel="stylesheet" href="setup.css">
+<style>
+  .team-grid { display:grid; grid-template-columns:minmax(260px,1fr) minmax(320px,2fr); gap:20px; align-items:start; }
+  @media (max-width:1000px) { .team-grid { grid-template-columns:1fr; } }
+  .me dl { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; margin:12px 0 16px; font-size:14px; } .me dt { color:var(--dim); } .me dd { margin:0; overflow-wrap:anywhere; }
+  .me .row { gap:8px; } .me input { flex:1; min-width:0; }
+  #people { list-style:none; margin:14px 0; padding:0; display:flex; flex-direction:column; gap:8px; }
+  #people li { display:grid; grid-template-columns:10px minmax(0,1fr) auto; gap:12px; align-items:center; padding:10px 12px; border:1px solid var(--line); border-radius:8px; }
+  #people .on-dot { width:8px; height:8px; border-radius:50%; background:var(--line); } #people .on-dot.on { background:var(--ok, #417358); }
+  #people .who b { font-weight:500; } #people .who small { display:block; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #people .acts { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; } #people .acts > * { font-size:12px; padding:5px 9px; }
+  #people .out { color:var(--hot, #a2522a); font-size:12px; }
+  #add { display:flex; gap:8px; flex-wrap:wrap; } #add input { flex:1 1 200px; min-width:0; } #add select, #add button { flex:0 0 auto; }
+  .switches label { display:flex; gap:10px; align-items:flex-start; margin:10px 0; font-weight:400; } .switches b { font-weight:500; }
+  .switches input[type=checkbox] { width:auto; flex:0 0 auto; margin:3px 0 0; }
+  .switches label span { flex:1; text-align:left; }
+  #people select, #add select { width:auto; } #people .acts { align-items:center; }
+  #add input, #add select, #add button { margin:0; }
+  #people .mail { display:block; font-size:12px; color:var(--dim); } #people .mail.bad { color:var(--hot, #a2522a); white-space:normal; }
+  .never { color:var(--warn, #b7791f); font-weight:500; } .seen { cursor:default; }
+  .welcome-opt { display:flex; gap:8px; align-items:center; margin:10px 0 0; font-weight:400; font-size:14px; } .welcome-opt input { width:auto; margin:0; }
+  #mailtext { min-height:280px; font-size:13px; }
+  @media (max-width:700px) { #people li { grid-template-columns:10px minmax(0,1fr); } #people .acts { grid-column:1 / -1; justify-content:flex-start; } }
+  details.mailbox { margin-top:14px; } details.mailbox summary { cursor:pointer; }
+</style></head><body>
+<header class="pagehead"><div><div class="eyebrow">People</div><h1>Team</h1><p>Your profile, and who can direct Mother from outside the studio. Everyone signs in with Google at <b>mother.edfornieles.com</b>.</p></div></header>
+<main><div id="notice" class="notice" role="status"></div>
+<div class="team-grid">
+  <section class="panel me" id="mepanel">
+    <h2>Your profile</h2>
+    <p class="hint" id="mehint">Loading…</p>
+    <dl id="medl"></dl>
+    <form class="row" id="meform" hidden><input id="myname" type="search" maxlength="60" placeholder="Your name" autocomplete="off"><button type="submit">Save name</button></form>
+    <p class="hint">Your name is what other directors see while you are connected.</p>
+    <p><a id="logout" class="link" hidden>Sign out</a></p>
+  </section>
+  <section class="panel" id="teampanel" hidden>
+    <div class="row between"><h2>Team</h2><span class="hint" id="count"></span></div>
+    <p class="hint"><b>Directors</b> get the desk. <b>Owners</b> also manage this list and switch privacy mode. <b>Disconnect</b> closes someone's desk and keeps them out for 15 minutes; <b>Remove</b> takes them off the list for good.</p>
+    <ul id="people"></ul>
+    <h3>Add someone</h3>
+    <form id="add"><input id="email" type="search" placeholder="their.gmail@gmail.com" autocomplete="off" required><input id="name" type="search" placeholder="Name (optional)" autocomplete="off"><select id="role"><option value="director">Director</option><option value="owner">Owner</option></select><button type="submit" class="primary">Add</button></form>
+    <label class="welcome-opt"><input type="checkbox" id="welcome" checked> <span id="welcomelbl">Email them a welcome: what Mother is and how to sign in</span></label>
+    <p class="hint" id="mailhint">They can sign in straight away.</p>
+    <details class="mailbox"><summary>The welcome email</summary>
+      <p class="hint">The first line is the subject. <b>{name}</b>, <b>{email}</b>, <b>{role}</b>, <b>{inviter}</b> and <b>{link}</b> are filled in for each person.</p>
+      <textarea id="mailtext" spellcheck="true"></textarea>
+      <div class="row" style="gap:8px;margin-top:8px"><button id="savemail">Save wording</button><button id="resetmail" class="link">Back to the default</button><span id="mailstate" class="save-state"></span></div>
+    </details>
+    <div class="switches divider">
+      <label><input type="checkbox" id="require"><span><b>Logins required.</b> Outside the studio, only people on this list get in. Old desk links with a key stop working. Phones and the sign-up form are not affected.</span></label>
+      <label><input type="checkbox" id="privacy"><span><b>Private.</b> Everyone outside the studio except owners is shut out until you switch this off.</span></label>
+    </div>
+  </section>
+</div></main>
+<div id="toast" role="status"></div><script src="setup.js"></script><script>
+const { $, esc, api, toast } = Setup;
+let me = null, team = null, busy = false;
+const ago = (t) => { if (!t) return 'never signed in'; const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 2 ? 'here just now' : m < 90 ? `last here ${m} min ago` : m < 2880 ? `last here ${Math.round(m / 60)} h ago` : 'last here ' + new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short' }); };
+const stamp = (t) => new Date(t).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const day = (t) => new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short' });
+// Whether and when someone has signed in: connected now, last here (first sign-in on hover), or never.
+function seenLine(u) {
+  if (u.online) return `<span class="seen" title="${u.firstSeenAt ? 'First signed in ' + esc(stamp(u.firstSeenAt)) : ''}">connected now</span>`;
+  if (!u.lastSeenAt) return `<span class="never">Never signed in${u.addedAt ? ' · added ' + esc(day(u.addedAt)) : ''}</span>`;
+  return `<span class="seen" title="Last here ${esc(stamp(u.lastSeenAt))}${u.firstSeenAt ? '\nFirst signed in ' + esc(stamp(u.firstSeenAt)) : ''}">${esc(ago(u.lastSeenAt))}${u.firstSeenAt ? ' · first signed in ' + esc(day(u.firstSeenAt)) : ''}</span>`;
+}
+function renderMe() {
+  const roles = { owner: 'Owner', director: 'Director', studio: 'Studio computer', link: 'Desk link (no sign-in)' };
+  $('mehint').textContent = me.studio ? 'This is the studio computer, so it has no personal profile. It can manage the team below.' : me.email ? 'Signed in with Google.' : 'Opened with a desk link, not a sign-in.';
+  $('medl').innerHTML = (me.email ? `<dt>Email</dt><dd>${esc(me.email)}</dd>` : '') + `<dt>Role</dt><dd>${esc(roles[me.role] || me.role)}</dd>` + (me.email ? `<dt>Last here</dt><dd>${me.lastSeenAt ? esc(stamp(me.lastSeenAt)) : 'now'}</dd>${me.firstSeenAt ? `<dt>First signed in</dt><dd>${esc(stamp(me.firstSeenAt))}</dd>` : ''}` : '');
+  $('meform').hidden = !me.email; if (me.email && document.activeElement !== $('myname')) $('myname').value = me.name;
+  $('logout').hidden = !me.logout; if (me.logout) $('logout').href = me.logout;
+}
+function renderTeam() {
+  $('teampanel').hidden = false;
+  const online = team.users.filter((u) => u.online).length;
+  const never = team.users.filter((u) => !u.lastSeenAt && !u.online).length;
+  $('count').textContent = `${team.users.length} ${team.users.length === 1 ? 'person' : 'people'} · ${online} connected now` + (never ? ` · ${never} never signed in` : '');
+  $('people').innerHTML = team.users.map((u) => `<li data-email="${esc(u.email)}">
+    <span class="on-dot${u.online ? ' on' : ''}" title="${u.online ? 'Connected now' : 'Not connected'}"></span>
+    <span class="who"><b>${esc(u.name)}</b>${me?.email === u.email ? ' (you)' : ''}<small>${esc(u.email)}</small><small>${seenLine(u)}</small>${mailLine(u)}${u.kickedUntil ? `<span class="out">Disconnected until ${new Date(u.kickedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>` : ''}</span>
+    <span class="acts"><select class="role"><option value="director"${u.role === 'director' ? ' selected' : ''}>Director</option><option value="owner"${u.role === 'owner' ? ' selected' : ''}>Owner</option></select>
+      ${u.kickedUntil ? '<button class="unkick">Allow back</button>' : `<button class="kick"${me?.email === u.email ? ' disabled' : ''}>Disconnect</button>`}
+      ${team.mail?.configured && me?.email !== u.email ? `<button class="welcome"${u.welcome?.sending ? ' disabled' : ''}>${u.welcomedAt ? 'Email again' : 'Send welcome'}</button>` : ''}
+      <button class="remove"${me?.email === u.email ? ' disabled' : ''}>Remove</button></span></li>`).join('') || '<li class="hint">Nobody yet.</li>';
+  $('require').checked = !!team.requireLogin; $('privacy').checked = !!team.privacy;
+  const mail = team.mail || {};
+  $('welcome').disabled = !mail.configured; if (!mail.configured) $('welcome').checked = false;
+  $('welcomelbl').textContent = mail.configured ? `Email them a welcome from ${mail.from}: what Mother is and how to sign in` : 'Welcome email: not set up yet';
+  $('mailhint').innerHTML = mail.configured ? 'They can sign in straight away.' : 'They can sign in straight away. To email them automatically, add <b>GMAIL_USER</b> and <b>GMAIL_APP_PASSWORD</b> (a Google app password) to server/.env and restart Mother. Until then, tell them: “Open mother.edfornieles.com and sign in with Google.”';
+  if (!mailDirty && document.activeElement !== $('mailtext')) $('mailtext').value = mail.text || '';
+}
+function mailLine(u) {
+  if (u.welcome?.sending) return '<span class="mail">Sending the welcome email…</span>';
+  if (u.welcome?.error) return `<span class="mail bad">Welcome email failed: ${esc(u.welcome.error)}</span>`;
+  if (u.welcomedAt) return `<span class="mail">Welcome email sent ${esc(new Date(u.welcomedAt).toLocaleDateString([], { day: 'numeric', month: 'short' }))}</span>`;
+  return '';
+}
+let mailDirty = false;
+async function load() {
+  try {
+    me = await api('me'); renderMe();
+    if (me.canManage) { if (!busy) { team = await api('team'); renderTeam(); } } else $('teampanel').hidden = true;
+    $('notice').textContent = '';
+  } catch (e) { $('notice').textContent = e.message; }
+}
+async function act(body, done) {
+  busy = true;
+  try { team = await api('team', body); renderTeam(); if (done) toast(done); }
+  catch (e) { toast(e.message); } finally { busy = false; }
+}
+$('meform').onsubmit = async (e) => { e.preventDefault(); try { me = await api('me', { name: $('myname').value }); renderMe(); toast('Name saved'); } catch (err) { toast(err.message); } };
+$('add').onsubmit = (e) => { e.preventDefault(); const email = $('email').value.trim(); act({ op: 'add', email, name: $('name').value, role: $('role').value, welcome: $('welcome').checked }, $('welcome').checked ? `Added ${email}. Sending the welcome email…` : `Added ${email}`).then(() => { $('email').value = ''; $('name').value = ''; }); };
+$('people').addEventListener('change', (e) => { const li = e.target.closest('li[data-email]'); if (li && e.target.matches('.role')) act({ op: 'role', email: li.dataset.email, role: e.target.value }, 'Role changed'); });
+$('people').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-email]'); if (!li) return; const email = li.dataset.email;
+  if (e.target.matches('.kick') && confirm(`Disconnect ${email}? Their desk closes now and they can sign in again in 15 minutes.`)) act({ op: 'kick', email }, `Disconnected ${email}`);
+  if (e.target.matches('.welcome')) act({ op: 'welcome', email }, `Sending the welcome email to ${email}…`);
+  if (e.target.matches('.unkick')) act({ op: 'unkick', email }, `${email} can sign in again`);
+  if (e.target.matches('.remove') && confirm(`Remove ${email}? Their desk closes now and they can no longer sign in.`)) act({ op: 'remove', email }, `Removed ${email}`);
+});
+$('require').onchange = (e) => act({ op: 'requireLogin', on: e.target.checked }, e.target.checked ? 'Logins required' : 'Desk links work again');
+$('privacy').onchange = (e) => act({ op: 'privacy', on: e.target.checked }, e.target.checked ? 'Private: everyone outside is shut out' : 'Privacy off');
+$('mailtext').oninput = () => { mailDirty = true; $('mailstate').textContent = 'Not saved'; };
+$('savemail').onclick = async () => { await act({ op: 'welcomeText', text: $('mailtext').value }, 'Welcome email saved'); mailDirty = false; $('mailstate').textContent = 'Saved ✓'; $('mailtext').value = team.mail?.text || ''; };
+$('resetmail').onclick = () => { $('mailtext').value = team.mail?.defaultText || ''; mailDirty = true; $('mailstate').textContent = 'Not saved'; };
+load(); setInterval(() => { if (!document.hidden) load(); }, 5000);
+</script><script src="nav.js"></script></body></html>

@@ -1314,6 +1314,7 @@ const server = http.createServer(async (req, res) => {
 
   if (p === '/' || p === '/p') p = '/phone.html';
   if (p === '/control') p = '/control.html';
+  if (p === '/talk') p = '/talk.html';
   if (p === '/team') p = '/team.html';
   if (p === '/debrief') p = '/debrief.html';
   if (p === '/protocols') p = '/protocols.html';

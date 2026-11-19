@@ -137,6 +137,7 @@
     html body #sitenav .brand { padding:0 12px 0 0; font-size:20px; width:auto; } html body #sitenav .nav-group, html body #sitenav .sp { display:none; } html body #sitenav a { padding:7px 8px; font-size:13px; }
   }
   .cs-label { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+  #talkpage { display:none; } @media (max-width:700px) { #talkpage { display:block; background:var(--hot); color:#000; text-decoration:none; padding:14px 16px; font-size:15px; } }
   .phone-row .chip { font-size:10px; border:1px solid var(--line); border-radius:20px; padding:1px 7px; color:var(--dim); white-space:nowrap; }
   .phone-row .chip.on { color:var(--ok); border-color:currentColor; }
   .phone-row.talking { outline:2px solid var(--hot); outline-offset:-2px; }
@@ -216,6 +217,7 @@
 </head>
 <body class="live-desk">
 <div id="privatewall"></div>
+<a id="talkpage" href="/talk">On a phone? Open the <b>Talk</b> page: one big button to hold and speak, in the AI voice or your own. →</a>
 <div id="nolink" hidden>Not connected to Mother: you cannot talk, type lines or see live status yet. Trying again… If this stays, reload the page, or open it in Chrome or Safari (some Firefox settings and browser extensions block the live connection).</div>
 <header>
   <div class="titlebox"><h1>Live desk <span id="mock" class="hint"></span></h1>
@@ -633,6 +635,7 @@ function connect() {
 }
 // Team: owners and the studio desk get a People button that opens the Team page.
 function paintPeople(a) { $('peoplebtn').hidden = !a.canManage; }
+$('talkpage').href = '/talk' + (KEY ? '?k=' + KEY : '');
 $('peoplebtn').onclick = () => window.open('/team' + (KEY ? '?k=' + KEY : ''), 'earpiece_pages');
 // Privacy mode and who is here from outside the studio. The studio's own desk and owners can switch privacy.
 function paintAccess(a) {

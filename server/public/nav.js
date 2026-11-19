@@ -27,7 +27,7 @@
   const inControl = here === '/control';
   // Six sections. The section you are in lists its pages underneath.
   const sections = [
-    ['Perform', [['/control', 'Live desk'], ['/session', 'Brief & notes'], ['/protocols', 'Protocols'], ['/debrief', 'Debrief']]],
+    ['Perform', [['/control', 'Live desk'], ['/talk', 'Talk (phone)'], ['/session', 'Brief & notes'], ['/protocols', 'Protocols'], ['/debrief', 'Debrief']]],
     ['Programs', [['/programs', 'Programs']]],
     ['Room', [['/room', 'Room']]],
     ['Setup', [['/phones', 'Phones'], ['/screens', 'Screens'], ['/people', 'Registrations'], ['/signups', 'Sign-ups']]],

@@ -6,6 +6,7 @@
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:16px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif; }
   body { display:flex; flex-direction:column; min-height:100dvh; padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 12px); max-width:560px; margin:0 auto; }
+  body > * { flex-shrink:0; }
   header { display:flex; align-items:center; gap:10px; padding:14px 0 10px; }
   header h1 { font-size:18px; font-weight:600; margin:0; flex:1; }
   header a { color:var(--dim); font-size:13px; text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
@@ -19,24 +20,44 @@
   .seg { display:flex; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
   .seg button { flex:1; font:inherit; font-size:15px; color:var(--fg); background:transparent; border:0; padding:12px 8px; min-height:48px; }
   .seg button.sel { background:var(--fg); color:var(--bg); font-weight:600; }
-  .padwrap { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:18px 0 8px; min-height:280px; }
-  #hold { position:relative; width:min(68vw, 280px); aspect-ratio:1; border-radius:50%; border:0; font:inherit; font-size:21px; font-weight:600; color:var(--bg); background:var(--fg);
+  .padwrap { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:14px 0 4px; min-height:0; }
+  #hold { position:relative; width:min(46vw, 200px); aspect-ratio:1; border-radius:50%; border:0; font:inherit; font-size:21px; font-weight:600; color:var(--bg); background:var(--fg);
     touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; box-shadow:0 0 0 0 var(--hot); transition:transform .08s, background .12s; }
   #hold small { display:block; font-size:13px; font-weight:400; opacity:.7; margin-top:4px; }
   #hold.on { background:var(--hot); color:#000; transform:scale(.97); }
   #hold.off { opacity:.4; }
   #hold.sending { background:var(--card); color:var(--fg); }
-  #status { min-height:2.8em; text-align:center; color:var(--dim); font-size:14px; margin:14px 0 0; max-width:34em; }
+  #status { min-height:2.8em; text-align:center; color:var(--dim); font-size:14px; margin:10px 0 0; max-width:34em; }
   #status.warn { color:var(--bad); }
   .typed { display:flex; gap:8px; margin-top:6px; }
   .typed input { flex:1; min-width:0; font:inherit; font-size:16px; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:10px; padding:11px 12px; }
   .typed button { font:inherit; font-weight:600; color:var(--bg); background:var(--fg); border:0; border-radius:10px; padding:0 16px; }
   #feed { list-style:none; padding:0; margin:6px 0 0; font-size:14px; color:var(--dim); max-height:24vh; overflow-y:auto; }
   #feed li { padding:6px 0; border-top:1px solid var(--line); } #feed li b { color:var(--fg); font-weight:500; }
+  .screens { margin-top:2px; }
+  .screen { position:relative; background:#000; border-radius:12px; overflow:hidden; aspect-ratio:16/9; }
+  .screen img:not([src]), .screen img[src=''] { visibility:hidden; }
+  .screen img { width:100%; height:100%; object-fit:contain; display:block; }
+  .screen .off { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:13px; text-align:center; padding:10px; }
+  .screen .tag { position:absolute; left:8px; bottom:6px; font-size:12px; color:#fff; text-shadow:0 1px 3px #000; }
+  #screens.grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  #screens.grid .screen { border-radius:8px; }
+  #camtabs { margin-top:8px; } #camtabs button { padding:7px 12px; min-height:38px; font-size:14px; }
+  #full { position:fixed; inset:0; background:#000; z-index:9; display:none; align-items:center; justify-content:center; } #full img { width:100%; height:100%; object-fit:contain; }
+  #full span { position:absolute; top:calc(env(safe-area-inset-top) + 10px); right:14px; color:#fff; font-size:14px; background:rgba(0,0,0,.6); border-radius:8px; padding:6px 10px; }
   #nolink { background:var(--bad); color:#000; border-radius:10px; padding:10px 12px; font-size:14px; margin-top:6px; }
 </style></head><body>
 <header><span class="dot" id="dot" title="Connection to Mother"></span><h1>Talk to participants</h1><a id="desk" href="/control">Full desk</a></header>
 <div id="nolink" hidden>Not connected to Mother yet. Trying again… If this stays, reload, or open the page in Chrome or Safari.</div>
+
+<div class="label">Screens</div>
+<div class="screens"><div id="screens"><div class="screen"><div class="off">Waiting for the cameras…</div></div></div>
+<div class="chips" id="camtabs"></div></div>
+<div class="padwrap">
+  <button id="hold" aria-label="Hold to talk">Hold to talk<small id="holdsub">speak, then let go</small></button>
+  <p id="status" role="status">Tap and hold the button, speak, then let go.</p>
+</div>
+<div id="full"><img alt="Camera, full screen"><span>Tap to close</span></div>
 
 <div class="label">Who hears you</div>
 <div class="chips" id="who"><button data-id="0" class="sel">Everyone<small>all connected phones</small></button></div>
@@ -44,10 +65,6 @@
 <div class="label">They hear</div>
 <div class="seg" id="as"><button data-as="voice" class="sel">AI voice</button><button data-as="own">My own voice</button></div>
 
-<div class="padwrap">
-  <button id="hold" aria-label="Hold to talk">Hold to talk<small id="holdsub">speak, then let go</small></button>
-  <p id="status" role="status">Tap and hold the button, speak, then let go.</p>
-</div>
 
 <div class="label">Or type a line</div>
 <form class="typed" id="typed"><input id="line" enterkeyhint="send" autocomplete="off" placeholder="They hear it in the AI voice"><button>Send</button></form>
@@ -161,6 +178,39 @@ $('typed').onsubmit = (e) => {
   feed(`<b>You typed → ${esc(whoName(target))}:</b> ${esc(text)}`); $('line').value = ''; $('line').blur();
 };
 
+// ---- screens: the studio cameras, one large (less phone data) or all of them ----
+let cams = [], camPick = store.get('talk-cam') || '', camSrc = (id) => `/cam/${encodeURIComponent(id)}.mjpg${Q}${Q ? '&' : '?'}r=${Date.now()}`;
+function screenEl(c) {
+  const el = document.createElement('div'); el.className = 'screen'; el.dataset.id = c.id;
+  el.innerHTML = '<img alt=""><div class="off">connecting…</div><div class="tag"></div>';
+  el.querySelector('img').src = camSrc(c.id);
+  el.onclick = () => { $('full').querySelector('img').src = camSrc(c.id); $('full').style.display = 'flex'; };
+  return el;
+}
+function paintScreens() {
+  const box = $('screens'), all = camPick === 'all', shown = all ? cams : [cams.find((c) => c.id === camPick) || cams[0]].filter(Boolean);
+  if (!cams.length) { box.className = ''; box.innerHTML = '<div class="screen"><div class="off">No cameras are connected to Mother.</div></div>'; $('camtabs').innerHTML = ''; return; }
+  box.className = all && cams.length > 1 ? 'grid' : '';
+  const want = shown.map((c) => c.id).join('|');
+  if (box.dataset.showing !== want || document.visibilityState === 'hidden') {   // only rebuild (restart the streams) when the choice changes
+    box.innerHTML = ''; box.dataset.showing = document.visibilityState === 'hidden' ? '' : want;
+    if (document.visibilityState !== 'hidden') for (const c of shown) box.appendChild(screenEl(c));
+  }
+  for (const c of shown) {
+    const el = box.querySelector(`.screen[data-id="${CSS.escape(c.id)}"]`); if (!el) continue;
+    el.querySelector('.tag').textContent = c.name + (c.recording ? ' · ● REC' : '');
+    const off = el.querySelector('.off'); off.style.display = c.live ? 'none' : 'flex';
+    if (!c.live) { off.textContent = 'no picture — reconnecting…'; if (!el.retry || Date.now() - el.retry > 5000) { el.retry = Date.now(); el.querySelector('img').src = camSrc(c.id); } }
+  }
+  const sel = all ? 'all' : (shown[0]?.id || '');
+  $('camtabs').innerHTML = cams.map((c) => `<button data-cam="${esc(c.id)}" class="${sel === c.id ? 'sel' : ''}">${esc(c.name)}</button>`).join('')
+    + (cams.length > 1 ? `<button data-cam="all" class="${all ? 'sel' : ''}">All</button>` : '');
+}
+$('camtabs').onclick = (e) => { const b = e.target.closest('button[data-cam]'); if (!b) return; camPick = b.dataset.cam; store.set('talk-cam', camPick); paintScreens(); };
+$('full').onclick = () => { $('full').style.display = 'none'; $('full').querySelector('img').src = ''; };
+// A hidden page stops its camera streams (phone data, battery) and starts them again when shown.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { $('screens').innerHTML = ''; $('screens').dataset.showing = ''; } paintScreens(); });
+
 // ---- connection ----
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?role=control&k=${KEY || ''}`);
@@ -169,6 +219,7 @@ function connect() {
   ws.onmessage = (e) => {
     if (typeof e.data !== 'string') return;   // participants' audio: this page does not play it (no echo in your headphones)
     const m = JSON.parse(e.data);
+    if (m.type === 'cameras') { cams = m.list; paintScreens(); }
     if (m.type === 'phonesChanged') { MAX = m.maxPhones; paintWho(); }
     if (m.type === 'participants') { phones = m.list; paintWho(); }
     if (m.type === 'error') { clearTimeout(stop.t); $('hold').classList.remove('sending'); status(m.text, true); }

@@ -39,10 +39,12 @@
 <script>
 // Camera screen. Works on this Mac (another display), a tablet or any computer on the same network.
 //   ?cam=cam1      one camera, full screen      (no cam = every camera in a grid)
+//   ?cams=cam2,cam3   only these cameras, in this order
 //   ?captions=0    no live captions            ?tags=always   keep camera names on screen
 const Q = new URLSearchParams(location.search);
 const KEY = Q.get('k');
 let only = Q.get('cam') || '';
+const PICK = (Q.get('cams') || '').split(',').map((s) => s.trim()).filter(Boolean);
 const CAPS = Q.get('captions') !== '0';
 if (Q.get('tags') === 'always') document.body.classList.add('tagsalways');
 const $ = (id) => document.getElementById(id);
@@ -60,6 +62,7 @@ function layout() {
   document.title = only ? (cams.find((c) => c.id === only)?.name || 'Camera') : 'All cameras';
 }
 function render(list) {
+  if (PICK.length) list = PICK.map((id) => list.find((c) => c.id === id)).filter(Boolean);
   cams = list;
   for (const c of list) {
     let el = $('wall').querySelector(`[data-id="${c.id}"]`);

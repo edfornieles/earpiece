@@ -714,6 +714,17 @@ function lanAddress() {
   const v4 = all.filter((a) => a.family === 'IPv4' && !a.internal && !/^169\.254\./.test(a.address));
   return (v4.find((a) => a.n === 'en0') || v4.find((a) => /^(192\.168|10\.|172\.)/.test(a.address)) || v4[0])?.address || null;
 }
+// Performance films (film.js / film_render.py): versions v1, v2… and comments, in <session>/edits/performance-film/.
+const filmJobs = new Map();
+const readJsonFile = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+const readText = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
+function filmVersions(s) {
+  const base = path.join(REC_ROOT, s, 'edits', 'performance-film');
+  let names = []; try { names = fs.readdirSync(base).filter((f) => /^v\d+$/.test(f)).sort((a, b) => a.slice(1) - b.slice(1)); } catch {}
+  return names.map((v) => { const d = path.join(base, v), pv = readJsonFile(path.join(d, 'preview.json'));
+    return { v, notes: readText(path.join(d, 'notes.md')), changes: readText(path.join(d, 'changes.md')), ready: !!pv && fs.existsSync(path.join(d, 'preview.mp4')), length: pv?.length || null, timeline: pv?.timeline || [] }; });
+}
+const filmComments = (s) => readJsonFile(path.join(REC_ROOT, s, 'edits', 'performance-film', 'comments.json')) || [];
 const sessionDirOf = (name) => { const b = path.basename(String(name || '')); if (!b || (b.startsWith('_') && b !== '_next')) return null; const d = path.join(REC_ROOT, b); return fs.existsSync(d) ? d : null; };
 const readBrief = () => { try { return fs.readFileSync(BRIEF_FILE, 'utf8'); } catch { return ''; } };
 function updateSessionMeta(d) {
@@ -824,6 +835,14 @@ const server = http.createServer(async (req, res) => {
     if (!f || !fs.existsSync(f)) { res.writeHead(404); return res.end(); }
     res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': fs.statSync(f).size, 'cache-control': 'private, max-age=3600' });
     return fs.createReadStream(f).pipe(res);
+  }
+  const filmMedia = /^\/film-media\/([\w-]+)\/(v\d+)\/preview\.mp4$/.exec(p);
+  if (filmMedia) {   // the draft preview, seekable
+    const f = path.join(REC_ROOT, filmMedia[1], 'edits', 'performance-film', filmMedia[2], 'preview.mp4');
+    if (!ctl || !fs.existsSync(f)) { res.writeHead(ctl ? 404 : 403); return res.end(); }
+    const size = fs.statSync(f).size, range = req.headers.range?.match(/bytes=(\d*)-(\d*)/);
+    if (range) { const a = Number(range[1] || 0), b = range[2] ? Number(range[2]) : size - 1; res.writeHead(206, { 'content-type': 'video/mp4', 'content-range': `bytes ${a}-${b}/${size}`, 'accept-ranges': 'bytes', 'content-length': b - a + 1 }); return fs.createReadStream(f, { start: a, end: b }).pipe(res); }
+    res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': size, 'accept-ranges': 'bytes' }); return fs.createReadStream(f).pipe(res);
   }
   if (p.startsWith('/participants/')) {   // registration photos and signed consent: control room only
     const [, , pid, f] = p.split('/');
@@ -1188,6 +1207,50 @@ const server = http.createServer(async (req, res) => {
       return json(res, { maxPhones: MAX_PHONES, standby: STANDBY, instance: T0, title: session.title || '', phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()), roomMics: roomMics ? roomMics.status() : null, screens });
     }
     if (p === '/api/registry') return json(res, { list: [...registry.list].reverse().map(regView), consent: registry.consent() });
+    // ---------- performance films: drafts, preview video, timecoded comments (docs/performance-film.md) ----------
+    if (p === '/api/films' && req.method === 'GET') {   // every session with a film, newest first
+      const list = fs.readdirSync(REC_ROOT).filter((s) => fs.existsSync(path.join(REC_ROOT, s, 'edits', 'performance-film'))).sort().reverse()
+        .map((s) => ({ session: s, title: readJsonFile(path.join(REC_ROOT, s, 'session.json'))?.title || '', versions: filmVersions(s).length, open: filmComments(s).filter((c) => c.status === 'open').length }));
+      const ready = fs.readdirSync(REC_ROOT).filter((s) => /^\d{4}-/.test(s) && fs.existsSync(path.join(REC_ROOT, s, 'catalogue', 'manifest.json')) && !list.some((x) => x.session === s)).sort().reverse();
+      return json(res, { list, ready });
+    }
+    if (p === '/api/film' && req.method === 'GET') {
+      const s = path.basename(u.searchParams.get('session') || ''); if (!sessionDirOf(s)) return json(res, { error: 'No such session.' }, 404);
+      return json(res, { session: s, versions: filmVersions(s), comments: filmComments(s), building: filmJobs.get(s) || null });
+    }
+    if (p === '/api/film-build' && req.method === 'POST') {   // make the next draft (Claude normally does this from the comments)
+      try {
+        const d = await readBody(req, 10e3), s = path.basename(String(d.session || '')), dir = sessionDirOf(s);
+        if (!dir) throw Error('No such session.'); if (filmJobs.has(s)) throw Error('A draft is already being made.');
+        filmJobs.set(s, { started: Date.now() });
+        const out = require('./film').build(dir);
+        const py = fs.existsSync(path.join(__dirname, '.faces-venv', 'bin', 'python')) ? path.join(__dirname, '.faces-venv', 'bin', 'python') : 'python3';
+        const job = spawn(py, [path.join(__dirname, 'film_render.py'), dir, out], { stdio: 'ignore' });
+        job.on('close', () => { filmJobs.delete(s); toControls({ type: 'film', session: s }); });
+        logWho('film_draft', { ...whoLabel(who), session: s, version: path.basename(out) });
+        return json(res, { ok: true, version: path.basename(out) });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/film-comment' && req.method === 'POST') {   // {session, v, at, text} | {session, id, status, reply}
+      try {
+        const d = await readBody(req, 20e3), s = path.basename(String(d.session || '')); if (!sessionDirOf(s)) throw Error('No such session.');
+        const list = filmComments(s);
+        if (d.id) {
+          const c = list.find((x) => x.id === d.id); if (!c) throw Error('No such comment.');
+          if (['open', 'resolved'].includes(d.status)) c.status = d.status;
+          if (typeof d.reply === 'string' && d.reply.trim()) (c.replies ||= []).push({ by: whoLabel(who).who, at: new Date().toISOString(), text: d.reply.trim().slice(0, 4000) });
+        } else {
+          const text = String(d.text || '').trim().slice(0, 4000); if (!text) throw Error('Write a comment first.');
+          const v = String(d.v || ''), at = d.at == null ? null : Number(d.at);
+          const where = at == null ? null : (filmVersions(s).find((x) => x.v === v)?.timeline || []).find((t) => at >= t.from && at < t.to) || null;
+          list.push({ id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), v, at, part: where?.part || null, clip: where?.clip ?? null,
+            session_time: where?.session_in != null ? Math.round((where.session_in + at - where.from) * 100) / 100 : null,
+            by: whoLabel(who).who, created: new Date().toISOString(), status: 'open', text });
+        }
+        fs.writeFileSync(path.join(REC_ROOT, s, 'edits', 'performance-film', 'comments.json'), JSON.stringify(list, null, 2));
+        return json(res, { ok: true, comments: list });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     if (p === '/api/registry-update' && req.method === 'POST') {
       let body = ''; for await (const c of req) body += c;
       const d = JSON.parse(body || '{}'), x = registry.update(d.pid, d);
@@ -1356,6 +1419,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/protocols') p = '/protocols.html';
   if (p === '/signups') p = '/signups.html';
   if (p === '/library') p = '/library.html';
+  if (p === '/film') p = '/film.html';
   if (p === '/monitor') p = '/monitor.html';
   if (p === '/files') p = '/files.html';
   if (p === '/join') p = '/join.html';

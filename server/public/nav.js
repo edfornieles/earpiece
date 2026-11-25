@@ -31,7 +31,7 @@
     ['Programs', [['/programs', 'Programs']]],
     ['Room', [['/room', 'Room']]],
     ['Setup', [['/phones', 'Phones'], ['/screens', 'Screens'], ['/people', 'Registrations'], ['/signups', 'Sign-ups']]],
-    ['Archive', [['/library', 'Library'], ['/files', 'Files'], ['/trash', 'Trash']]],
+    ['Archive', [['/library', 'Library'], ['/film', 'Films'], ['/files', 'Files'], ['/trash', 'Trash']]],
     ['Team', [['/team', 'Team']]],
   ];
   const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/studio.css';

@@ -49,16 +49,21 @@ for line in sys.stdin:
     try:
         m = json.loads(line)
         if m['op'] == 'enroll':
-            img = cv2.imread(os.path.join(HERE, m['path']))
-            if img is None: reply({'op': 'enroll', 'pid': m['pid'], 'ok': False, 'error': 'photo missing'}); continue
-            # Registration photos can be large and portrait: scale so the face is a sensible size.
-            s = min(1.0, 1280 / max(img.shape[:2]))
-            if s < 1: img = cv2.resize(img, None, fx=s, fy=s)
-            fs = faces(img)
-            if not fs: reply({'op': 'enroll', 'pid': m['pid'], 'ok': False, 'error': 'no face in the registration photo'}); continue
-            f, feat = max(fs, key=lambda x: x[0][2] * x[0][3])   # the largest face is the person registering
-            known[m['pid']] = [feat] + [np.array(t, dtype=np.float32) for t in m.get('templates', [])]
-            reply({'op': 'enroll', 'pid': m['pid'], 'ok': True})
+            features = []
+            for image_path in m.get('paths', [m['path']])[:4]:   # front, left, right, and the studio's portrait
+                img = cv2.imread(os.path.join(HERE, image_path))
+                if img is None: continue
+                s = min(1.0, 1280 / max(img.shape[:2]))
+                if s < 1: img = cv2.resize(img, None, fx=s, fy=s)
+                detected = faces(img)
+                # Ambiguous group photos never add an enrollment template.
+                if len(detected) != 1: continue
+                features.append(detected[0][1])
+            if not features:
+                reply({'op': 'enroll', 'pid': m['pid'], 'ok': False, 'error': 'no usable single-face registration photo'})
+                continue
+            known[m['pid']] = features + [np.array(t, dtype=np.float32) for t in m.get('templates', [])]
+            reply({'op': 'enroll', 'pid': m['pid'], 'ok': True, 'views': len(features)})
         elif m['op'] == 'learn':
             if m['pid'] in known: known[m['pid']].append(np.array(m['emb'], dtype=np.float32)); known[m['pid']] = known[m['pid']][:60]
             reply({'op': 'learn', 'pid': m['pid']})

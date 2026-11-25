@@ -37,3 +37,12 @@ test('people without face consent are never enrolled, and status lists who is en
  assert.ok(!id.sent.some(o=>o.pid==='p999999'));
  const s=id.status();assert.deepEqual(s.registered.map(p=>[p.name,p.face,p.enrolled]),[['Ed Fornieles',true,true],['No Consent',false,false]]);
 });
+
+test('registration views are sent together only for people who opted into matching',t=>{
+ const {id}=setup(t);id.ready=true;id.proc={};id.enrolled.clear();
+ id.registry.list[0].photos={front:'front.jpg',left:'left.jpg',right:'right.jpg'};
+ id.registry.list[1].photos={front:'unconsented-front.jpg',left:'unconsented-left.jpg'};
+ id.sync();
+ const enroll=id.sent.find(m=>m.op==='enroll');assert.deepEqual(enroll.paths,['front.jpg','left.jpg','right.jpg']);
+ assert.ok(!id.sent.some(m=>m.pid==='p999999'));
+});

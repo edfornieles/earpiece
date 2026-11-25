@@ -44,9 +44,11 @@ class Identity {
   // Enrol everyone registered with face matching; forget anyone who no longer is.
   sync() {
     const want = new Map(this.people().map((x) => [x.pid, x]));
-    for (const [pid, x] of want) if (!this.enrolled.has(pid) && !this.failed.has(pid) && !this.pending.has(pid)) { this.pending.set(pid, true); this.send({ op: 'enroll', pid, path: x.photo, templates: this.templates(pid).map((t) => t.emb) }); }
+    for (const [pid, x] of want) if (!this.enrolled.has(pid) && !this.failed.has(pid) && !this.pending.has(pid)) { this.pending.set(pid, true); this.send({ op: 'enroll', pid, path: x.photo, paths: [...['front','left','right'].map(a=>x.photos?.[a] || (a==='front'?x.photo:null)), x.portrait].filter(Boolean), templates: this.templates(pid).map((t) => t.emb) }); }
     for (const pid of this.enrolled.keys()) if (!want.has(pid)) { this.enrolled.delete(pid); this.send({ op: 'forget', pid }); }
   }
+  // A new portrait: learn this person's face again from all their photos.
+  reenroll(pid) { this.enrolled.delete(pid); this.failed.delete(pid); this.pending.delete(pid); this.send({ op: 'forget', pid }); this.sync(); }
   person(pid) { const x = this.registry.get(pid); return x && { pid, name: x.name, number: x.number }; }
 
   // ---- full-resolution frames from the camera's main stream ----
@@ -85,7 +87,7 @@ class Identity {
   onReply(m) {
     if (m.op === 'enroll') {
       this.pending.delete(m.pid);
-      if (m.ok) { this.enrolled.set(m.pid, true); this.log(`face enrolled: ${this.person(m.pid)?.name}`); }
+      if (m.ok) { this.enrolled.set(m.pid, m.views || 1); this.log(`face enrolled: ${this.person(m.pid)?.name}`); }
       else { this.failed.set(m.pid, m.error); this.log(`face not enrolled for ${this.person(m.pid)?.name}: ${m.error}`); }
       return;
     }
@@ -132,7 +134,7 @@ class Identity {
     this.tracking.identify(trackId, { ...p, by: 'desk', at: Date.now() });
   }
   status(now = Date.now()) {
-    const registered = this.registry.list.map((x) => ({ pid: x.pid, name: x.name, number: x.number, face: !!x.face, enrolled: this.enrolled.has(x.pid), views: x.face ? this.templates(x.pid).length + (this.enrolled.has(x.pid) ? 1 : 0) : 0, problem: this.failed.get(x.pid) || null }));
+    const registered = this.registry.list.map((x) => ({ pid: x.pid, name: x.name, number: x.number, face: !!x.face, enrolled: this.enrolled.has(x.pid), views: x.face ? this.templates(x.pid).length + Number(this.enrolled.get(x.pid) || 0) : 0, problem: this.failed.get(x.pid) || null }));
     return { ready: this.ready, running: !!this.proc, source: this.source || null, registered,
       recent: this.recent.filter((r) => now - r.at < 60000).map((r) => ({ name: r.name, number: r.number, score: r.score, track: r.track, secondsAgo: Math.round((now - r.at) / 1000) })) };
   }

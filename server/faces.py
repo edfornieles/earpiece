@@ -81,19 +81,24 @@ def main():
     out, step = job['out'], float(job.get('step', 2))
     os.makedirs(out, exist_ok=True)
 
-    # reference: the largest face in each registration photo
+    # references: the largest face in the registration photo, plus any portrait the studio added
     refs = {}
     for p in job['people']:
-        img = cv2.imread(p['photo'])
-        if img is None:
-            log(f"can't open the photo for {p['name']}")
+        feats = []
+        for photo in [p['photo']] + list(p.get('extra', [])):
+            img = cv2.imread(photo)
+            if img is None:
+                log(f"can't open a photo for {p['name']}")
+                continue
+            fs = faces_in(img)
+            if not fs:
+                continue
+            best = max(fs, key=lambda f: f[2] * f[3])
+            feats.append(feature(img, best))
+        if not feats:
+            log(f"no face found in the photos for {p['name']} — they'll need linking by hand")
             continue
-        fs = faces_in(img)
-        if not fs:
-            log(f"no face found in the registration photo for {p['name']} — they'll need linking by hand")
-            continue
-        best = max(fs, key=lambda f: f[2] * f[3])
-        refs[p['pid']] = {'name': p['name'], 'feat': feature(img, best)}
+        refs[p['pid']] = {'name': p['name'], 'feats': feats}
     if not refs:
         log('nobody to look for')
         json.dump([], open(os.path.join(out, 'appearances.json'), 'w'))
@@ -129,7 +134,7 @@ def main():
                     det, size = detector(w_, h), (w_, h)
                 for f in faces_in(img, det):
                     feat = feature(img, f)
-                    scores = [(rec.match(refs[pid]['feat'], feat, cv2.FaceRecognizerSF_FR_COSINE), pid) for pid in who]
+                    scores = [(max(rec.match(r, feat, cv2.FaceRecognizerSF_FR_COSINE) for r in refs[pid]['feats']), pid) for pid in who]
                     score, pid = max(scores)
                     if score < THRESHOLD:
                         continue   # not one of the people we're looking for: nothing kept

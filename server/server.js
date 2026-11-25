@@ -24,7 +24,7 @@ const ai = require('./ai');
 const { loadConfig, Camera } = require('./cameras');
 const { exportSession } = require('./exports');
 const { loadRoomMics, RoomMics } = require('./roommics');
-const { Registry } = require('./registry');
+const { Registry, decodePhotos } = require('./registry');
 const { ProgramStore, ProgramRunner } = require('./programs');
 const { generateProgram } = require('./program-drafts');
 const { RoomObserver } = require('./room');
@@ -145,7 +145,7 @@ if (adopted) {   // registrations added to "the next session" now belong to this
   for (const x of registry.list) for (const s of x.sessions) if (s.session === '_next') s.session = stamp;
   registry.save();
 }
-const regView = (x) => ({ pid: x.pid, number: x.number, name: x.name, email: x.email, face: x.face, registered: x.registered, notes: x.notes || '', sessions: x.sessions, photo: `/participants/${x.pid}/photo.jpg` });
+const regView = (x) => ({ pid: x.pid, number: x.number, name: x.name, email: x.email, face: x.face, registered: x.registered, notes: x.notes || '', sessions: x.sessions, photo: `/participants/${x.pid}/photo.jpg`, portrait: x.portrait ? `/participants/${x.pid}/portrait.jpg?v=${encodeURIComponent(x.portraitInfo?.at || '')}` : null, portraitInfo: x.portraitInfo || null, photos:Object.fromEntries(['front','left','right'].filter(a=>a==='front'||x.photos?.[a]).map(a=>[a,`/participants/${x.pid}/${a==='front'?'photo.jpg':'photo-'+a+'.jpg'}`])) });
 const recentRegs = () => registry.list.filter((x) => Date.now() - Date.parse(x.registered) < 36 * 3600e3).map(regView);
 // Connect a registration to a session — live or finished — optionally to one phone visit in it.
 // The visit's earlier, unregistered record (e.g. the name typed on the phone) is folded into the registration.
@@ -157,7 +157,7 @@ function linkPerson(dir, rid, visitIdx = -1, how = 'linked by hand') {
   const copied = registry.copyInto(dir, rid, safeName);
   let x = plist.find((y) => y.pid === rid);
   if (!x) { x = { pid: rid, name: '', contact: '', notes: '', release: false, files: [], visits: [], added: new Date().toISOString() }; plist.push(x); }
-  Object.assign(x, { name: reg.name, contact: reg.email, release: true, registered: true, number: reg.number, face: reg.face, photo: copied.photo, consent: copied.files.find((f) => /consent/.test(f.name))?.file || null });
+  Object.assign(x, { name: reg.name, contact: reg.email, release: true, registered: true, number: reg.number, face: reg.face, photo: copied.photo, ...(copied.portrait ? { portrait: copied.portrait } : {}), consent: copied.files.find((f) => /consent/.test(f.name))?.file || null });
   if (reg.notes && !x.notes.includes(reg.notes)) x.notes = [reg.notes, x.notes].filter(Boolean).join('\n');
   for (const f of copied.files) if (!x.files.find((y) => y.file === f.file)) x.files.push(f);
   if (visitIdx >= 0) {
@@ -794,7 +794,7 @@ const server = http.createServer(async (req, res) => {
       const hits = (joinHits.get(ip) || []).filter((t) => Date.now() - t < 3600e3);
       if (hits.length >= 15) return json(res, { error: 'Too many registrations from this connection — please ask at the desk.' }, 429);
       let body = '', n = 0;
-      for await (const c of req) { n += c.length; if (n > 12e6) return json(res, { error: 'The photo is too large.' }, 413); body += c; }
+      for await (const c of req) { n += c.length; if (n > 13e6) return json(res, { error: 'The photos are too large. Please use smaller images.' }, 413); body += c; }
       let d; try { d = JSON.parse(body); } catch { return json(res, { error: 'Something went wrong — please try again.' }, 400); }
       const name = String(d.name || '').replace(/\s+/g, ' ').trim().slice(0, 80), email = String(d.email || '').trim().slice(0, 120);
       const signature = String(d.signature || '').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -803,10 +803,9 @@ const server = http.createServer(async (req, res) => {
       if (d.adult !== true) return json(res, { error: 'You need to be 18 or over to take part.' }, 400);
       if (d.agree !== true || signature.length < 2) return json(res, { error: 'Please read the consent form, tick to agree and type your name to sign.' }, 400);
       if (d.version !== registry.consent().version) return json(res, { error: 'The consent form has just been updated — please reload the page and read it again.' }, 409);
-      const photo = Buffer.from(String(d.photo || '').replace(/^data:image\/jpeg;base64,/, ''), 'base64');
-      if (photo.length < 2000 || photo[0] !== 0xff || photo[1] !== 0xd8) return json(res, { error: 'Please take a photo.' }, 400);
+      let photos; try { photos=decodePhotos(d); } catch(error) { return json(res,{error:error.message},400); }
       hits.push(Date.now()); joinHits.set(ip, hits);
-      const x = registry.add({ name, email, face: d.face === true, signature, photo, ip });
+      const x = registry.add({ name, email, face: d.face === true, signature, photos, ip });
       logEvent('registered', { pid: x.pid, number: x.number });
       toControls({ type: 'arrival', person: regView(x) }); toControls({ type: 'registry', list: recentRegs() });
       console.log(`  + registered: #${x.number} ${x.name}${x.face ? ' (face matching ok)' : ''}`);
@@ -846,7 +845,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (p.startsWith('/participants/')) {   // registration photos and signed consent: control room only
     const [, , pid, f] = p.split('/');
-    const file = registry.get(pid) && ['photo.jpg', 'consent.md'].includes(f) && path.join(registry.dir, pid, f);
+    const file = registry.get(pid) && ['photo.jpg', 'photo-left.jpg', 'photo-right.jpg', 'portrait.jpg', 'portrait-original.jpg', 'consent.md'].includes(f) && path.join(registry.dir, pid, f);
     if (!ctl || !file || !fs.existsSync(file)) { res.writeHead(ctl ? 404 : 403); return res.end(); }
     res.writeHead(200, { 'content-type': TYPES[path.extname(file)], 'cache-control': 'no-store' }); return fs.createReadStream(file).pipe(res);
   }
@@ -1207,6 +1206,27 @@ const server = http.createServer(async (req, res) => {
       return json(res, { maxPhones: MAX_PHONES, standby: STANDBY, instance: T0, title: session.title || '', phoneUrl: phoneUrl(), devices, session: SESSION_DIR, name: stamp, mock: ai.MOCK, cameras: cameras.map((c) => c.status()), roomMics: roomMics ? roomMics.status() : null, screens });
     }
     if (p === '/api/registry') return json(res, { list: [...registry.list].reverse().map(regView), consent: registry.consent() });
+    // Portraits: the studio adds a better photo after registration (raw image body, ?pid=); the film uses it.
+    if (p === '/api/portrait' && req.method === 'POST') {
+      const pid = u.searchParams.get('pid'), chunks = []; let size = 0;
+      for await (const c of req) { size += c.length; if (size > 40e6) return json(res, { error: 'Portraits can be up to 40 MB.' }, 413); chunks.push(c); }
+      try {
+        const x = registry.setPortrait(pid, Buffer.concat(chunks), whoLabel(who).who);
+        try { identity.reenroll(pid); } catch {}
+        logWho('portrait_added', { ...whoLabel(who), pid, name: x.name });
+        return json(res, { ok: true, person: regView(x) });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/portrait-edit' && req.method === 'POST') {   // {pid, crop:{x,y,size}} to nudge the crop, or {pid, remove:true}
+      try {
+        const d = await readBody(req, 10e3);
+        const x = d.remove ? registry.removePortrait(d.pid) : registry.setPortrait(d.pid, null, whoLabel(who).who, d.crop);
+        if (!x) throw Error('No such person.');
+        try { identity.reenroll(d.pid); } catch {}
+        logWho(d.remove ? 'portrait_removed' : 'portrait_cropped', { ...whoLabel(who), pid: d.pid, name: x.name });
+        return json(res, { ok: true, person: regView(x) });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     // ---------- performance films: drafts, preview video, timecoded comments (docs/performance-film.md) ----------
     if (p === '/api/films' && req.method === 'GET') {   // every session with a film, newest first
       const list = fs.readdirSync(REC_ROOT).filter((s) => fs.existsSync(path.join(REC_ROOT, s, 'edits', 'performance-film'))).sort().reverse()

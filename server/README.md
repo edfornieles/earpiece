@@ -107,7 +107,9 @@ Levels show under the cameras in the control room. Recording is 48 kHz 24-bit. m
 
 ## Welcome station and registration
 
-A separate computer in its own space plays the intro film next to a QR code. People scan it with their own phone and register: name, email, confirm they're 18+, take a photo, read and sign the consent form (typed name), and optionally agree to face matching. They get a number to show at the desk.
+A separate computer in its own space plays the intro film next to a QR code. People scan it with their own phone and register: name, email, confirm they're 18+, take a front photo and optional left/right profile photos, read and sign the consent form (typed name), and optionally agree to face matching. They get a number to show at the desk.
+
+Signup photo views: front is required; left and right profiles have independent previews and retake buttons and are optional. Captures are resized and re-encoded on the device. All supplied views remain in the private participant folder and are copied with registration documents into sessions. The desk can review the profiles on Registrations. Live face matching enrolls usable single-face views only for participants who explicitly opted in; profiles the detector cannot use are skipped. Existing front-only registrations continue to work.
 
 1. Save the film as `intro.mp4` (or `.mov`) in this folder.
 2. Write the consent form: copy `consent.example.md` to `consent.md` and edit it — fill in the [brackets] and have it checked. Each registration stores the exact text that person agreed to.

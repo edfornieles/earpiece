@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <title>Registrations — Mother</title>
 <style>
+  .portrait { display:flex; gap:12px; align-items:center; margin:10px 0; padding:8px; border:1px dashed var(--line, #333); border-radius:8px; font-size:12px; }
+  .portrait img { width:84px; height:84px; object-fit:cover; border-radius:6px; }
+  .portrait .pc { display:flex; flex-wrap:wrap; gap:4px; } .portrait .pc button { padding:3px 8px; font-size:12px; }
+  .portrait .meta { flex-basis:100%; }
   :root { --bg:#0e0e0e; --card:#171717; --line:#2a2a2a; --fg:#e8e6e1; --dim:#8a8780; --hot:#d9482b; --ok:#5fa36a; --ai:#7a8fd6; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system, system-ui, sans-serif; }
@@ -80,6 +84,16 @@ function render() {
         <div class="meta">Consent signed · <a href="/participants/${x.pid}/consent.md?k=${KEY}" target="_blank" style="color:var(--dim)">read what they agreed to</a><br>
           Face matching: ${x.face ? '<span class="yes">agreed</span>' : '<span class="no">not agreed — link footage by hand</span>'}</div>
       </div></div>
+    ${['left','right'].filter(a=>x.photos?.[a]).length ? '<div style="display:flex;gap:12px;margin:12px 0">'+['left','right'].filter(a=>x.photos?.[a]).map(a=>`<a href="${x.photos[a]}?k=${KEY}" target="_blank" style="color:var(--dim);font-size:12px"><img src="${x.photos[a]}?k=${KEY}" alt="${a} profile" style="display:block;width:72px;height:80px;object-fit:contain">${a==='left'?'Left':'Right'} profile</a>`).join('')+'</div>' : ''}
+    <div class="portrait" title="A better photo for the film, added by the studio. The registration photo above stays as it is.">
+      ${x.portrait ? `<img src="${x.portrait}&k=${KEY}" alt="">` : ''}
+      <div class="pc">
+        <button class="padd">${x.portrait ? 'Replace portrait' : '+ Add portrait'}</button>
+        ${x.portrait ? `<button data-nudge="left" title="Move the crop">◀</button><button data-nudge="right">▶</button><button data-nudge="up">▲</button><button data-nudge="down">▼</button><button data-nudge="in" title="Closer">＋</button><button data-nudge="out" title="Wider">－</button><button class="pdel" style="color:#e88">Remove</button>` : ''}
+        <div class="meta">${x.portrait ? `Portrait for the film · added by ${esc(x.portraitInfo?.by || '?')}, ${esc(when(x.portraitInfo?.at))}` : 'Film uses the registration photo until a portrait is added.'}</div>
+      </div>
+      <input type="file" class="pfile" accept="image/*,.heic" hidden>
+    </div>
     <textarea class="o" placeholder="Notes">${esc(x.notes)}</textarea>
     <div class="sess">${x.sessions.length ? x.sessions.map((s) => `<div>In <a href="/files?k=${KEY}&s=${encodeURIComponent(s.session)}" target="_blank">${esc(title(s.session))}</a> <span class="meta">(${esc(s.how)})</span><span class="x" data-unlink="${esc(s.session)}" title="Remove from this session (only if they weren't on a phone in it)">remove</span></div>`).join('') : '<span class="meta">Not in a session yet</span>'}</div>
     <div style="display:flex;gap:8px"><button class="open" style="flex:1">Connect to a session…</button><button class="delreg" style="color:#e88" title="Delete this registration (e.g. if they ask to be removed)">Delete…</button></div>
@@ -113,6 +127,26 @@ async function showVisits(card, s) {
     `<div class="visit"><span>They were there, but not on a phone (e.g. watching, or seen on camera)</span><button data-visit="-1">Add them</button></div>`;
   box.dataset.session = s;
 }
+// Portraits: upload, nudge the automatic crop, remove.
+async function portraitDone(pid, r) { if (r.error) return toast(r.error); Object.assign(regs.find((x) => x.pid === pid), r.person); render(); toast('Portrait saved'); }
+$('grid').addEventListener('change', async (e) => {
+  if (!e.target.matches('.pfile')) return;
+  const pid = e.target.closest('.p').dataset.pid, f = e.target.files[0]; if (!f) return;
+  toast('Uploading and cropping…');
+  const r = await fetch(`/api/portrait?pid=${encodeURIComponent(pid)}&k=${encodeURIComponent(KEY)}`, { method: 'POST', body: f }).then((x) => x.json()).catch(() => ({ error: 'Upload failed' }));
+  portraitDone(pid, r);
+});
+$('grid').addEventListener('click', async (e) => {
+  const card = e.target.closest('.p'); if (!card) return;
+  const pid = card.dataset.pid, x = regs.find((y) => y.pid === pid);
+  if (e.target.matches('.padd')) card.querySelector('.pfile').click();
+  if (e.target.matches('.pdel') && confirm(`Remove ${x.name}'s portrait? The film goes back to their registration photo.`)) portraitDone(pid, await post('portrait-edit', { pid, remove: true }));
+  const n = e.target.dataset?.nudge; if (!n || !x.portraitInfo?.crop) return;
+  const c = { ...x.portraitInfo.crop }, step = Math.round(c.size * 0.06);
+  if (n === 'left') c.x -= step; if (n === 'right') c.x += step; if (n === 'up') c.y -= step; if (n === 'down') c.y += step;
+  if (n === 'in') { c.x += step; c.y += step; c.size -= 2 * step; } if (n === 'out') { c.x -= step; c.y -= step; c.size += 2 * step; }
+  portraitDone(pid, await post('portrait-edit', { pid, crop: c }));
+});
 $('grid').addEventListener('click', async (e) => {
   const img = e.target.closest('.top img');
   if (img) { $('zoom').querySelector('img').src = img.src; $('zoom').style.display = 'flex'; return; }

@@ -370,6 +370,28 @@ function logDeskCommand(ws, m) {
 // Sound library (uploaded tracks + the beep), played into participants' ears from the desk. See sounds.js.
 const { Sounds, Playing, MAX_BYTES: SOUND_MAX } = require('./sounds');
 const soundLib = new Sounds(path.join(__dirname, 'sounds')), soundsPlaying = new Playing();
+const { RoomSpeaker, loadSpeakerConfig } = require('./roomspeaker');
+// The room speaker shows in the sound panel as 'room', next to the phone numbers.
+// roomSay: a line in the room speaker's AI voice (chosen on the desk), from a typed line or the director's talk.
+// Room lines go in transcript.txt as ROOM SPEAKER, beside the phones' lines.
+function roomTranscript(label, text) { try { transcriptFile.write(`[${clock()}] #room ROOM SPEAKER (${label}): ${text}\n`); } catch {} }
+function roomSay(text, how, who = {}) {
+  const voice = ai.VOICES.find((v) => v.name === roomSpeaker.voice)?.name || ai.VOICES[0].name;
+  roomSpeaker.say(text, ai.voiceUrl(voice));
+  logWho('speaker_say', { ...who, text: String(text).slice(0, 2000), voice, how, at: at(Date.now()) });
+  roomTranscript(how === 'voiced' ? 'director, AI voice ' + voice : 'typed, AI voice ' + voice, String(text));
+}
+const roomSpeaker = new RoomSpeaker(loadSpeakerConfig(__dirname), {
+  speak: (...a) => ai.speak(...a),
+  log: (type, data) => { try { logEvent(type, data); } catch {} },
+  onAudio: (pcm) => { try { track('room-speaker').write(pcm); } catch {} },   // room-speaker.wav: everything the amp played
+  onChange: () => {
+    soundsPlaying.stop('room');
+    const x = roomSpeaker.now;
+    if (x && x.kind !== 'say') soundsPlaying.start('room', x.id, x.loop, '');
+    try { toControls(soundsView()); toControls({ type: 'speaker', speaker: { device: roomSpeaker.device, playing: roomSpeaker.now } }); } catch {}
+  },
+});
 // Debriefs: a neutral interviewer asks a participant how the performance felt, briefed on their visit. See debrief.js.
 const debrief = require('./debrief');
 // Protocols (protocols.js): the session's caregiver voice and the actions it deploys, one running at a time.
@@ -852,6 +874,20 @@ const server = http.createServer(async (req, res) => {
         stopSound({ sound: x.id }, whoLabel(who));
         logWho('sound_deleted', { ...whoLabel(who), sound: x.id, name: x.name });
         return json(res, { ok: true });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
+    if (p === '/api/speaker' && req.method === 'GET') return json(res, { ...roomSpeaker.status(), voice: roomSpeaker.voice || ai.VOICES[0].name, voices: ai.VOICES.map((v) => v.name) });
+    if (p === '/api/speaker' && req.method === 'POST') {   // {op:'say', text, voice?} | {op:'stop'}
+      try {
+        const d = await readBody(req, 20e3);
+        if (d.op === 'stop') { const was = roomSpeaker.stop(); if (was) { logWho('speaker_stop', { ...whoLabel(who), what: was.label }); roomTranscript('stopped', '■ ' + was.label); } return json(res, { ok: true }); }
+        if (d.op === 'say') {
+          if (ai.VOICES.some((v) => v.name === d.voice)) roomSpeaker.voice = d.voice;
+          roomSay(d.text, 'typed', whoLabel(who));
+          return json(res, { ok: true });
+        }
+        if (d.op === 'voice') { if (ai.VOICES.some((v) => v.name === d.voice)) roomSpeaker.voice = d.voice; return json(res, { ok: true, voice: roomSpeaker.voice }); }
+        throw Error('Choose say or stop.');
       } catch (e) { return json(res, { error: e.message }, 400); }
     }
     if (p === '/api/sound' && req.method === 'POST') {   // {op:'play'|'stop', sound, targets:'all'|[phone…], loop}
@@ -1351,14 +1387,21 @@ function soundTargets(targets) {
 const soundMsg = (x, loop) => JSON.stringify({ type: 'sound', op: 'play', id: x.id, loop: !!loop, beep: !!x.builtIn, url: x.builtIn ? '' : `/sounds/${encodeURIComponent(x.id)}.mp3?k=${PHONE_KEY}` });
 function playSound({ sound, targets = 'all', loop = false }, who) {
   const x = soundLib.get(String(sound || '')); if (!x) throw Error('No such sound.');
-  const to = soundTargets(targets); if (!to.length) throw Error('No phone is connected to hear it.');
+  const room = Array.isArray(targets) && targets.includes('room');
+  const phones = room ? targets.filter((t) => t !== 'room') : targets;
+  const to = room && !phones.length ? [] : soundTargets(phones);
+  if (!to.length && !room) throw Error('No phone is connected to hear it.');
+  if (room) { roomSpeaker.play({ id: x.id, label: x.name, beep: !!x.builtIn, file: x.builtIn ? null : soundLib.file(x.id), loop }); roomTranscript('sound', `▶ ${x.name}${loop ? ' (looping)' : ''}`); }
   for (const s of to) { s.ws.send(soundMsg(x, loop)); soundsPlaying.start(s.id, x.id, loop, who.who); }
-  logWho('sound_play', { ...who, sound: x.id, name: x.name, loop: !!loop, phones: to.map((s) => s.id) });
+  if (to.length) try { transcriptFile.write(`[${clock()}] #${to.map((s) => s.id).join(',')} SOUND: ▶ ${x.name}${loop ? ' (looping)' : ''}\n`); } catch {}
+  logWho('sound_play', { ...who, sound: x.id, name: x.name, loop: !!loop, phones: to.map((s) => s.id), room });
   toControls(soundsView());
-  return to.map((s) => s.id);
+  return [...to.map((s) => s.id), ...(room ? ['room'] : [])];
 }
 function stopSound({ sound = '', targets = 'all' }, who) {
-  const id = String(sound || ''), to = soundTargets(targets);
+  const id = String(sound || ''), room = !Array.isArray(targets) || targets.includes('room');
+  const to = soundTargets(Array.isArray(targets) ? targets.filter((t) => t !== 'room') : targets);
+  if (room && roomSpeaker.now && (!id || roomSpeaker.now.id === id)) roomSpeaker.stop();
   for (const s of to) { s.ws.send(JSON.stringify({ type: 'sound', op: 'stop', id })); soundsPlaying.stop(s.id, id || undefined); }
   if (!Array.isArray(targets)) for (const x of soundsPlaying.view()) if (!id || x.id === id) soundsPlaying.stop(x.phone, x.id);   // phones that dropped out
   logWho('sound_stop', { ...who, sound: id || 'all', phones: to.map((s) => s.id) });
@@ -1961,23 +2004,30 @@ function addTargets(t, wanted) {
   }
 }
 function talkStart(target, as, owner) {
-  const wanted = [...new Set((Array.isArray(target) ? target : [target]).filter((n) => Number.isInteger(n) && n >= 0 && n <= MAX_PHONES))];
-  if (!wanted.length) return;
+  const list = Array.isArray(target) ? target : [target], room = list.includes('room');   // 'room': the room speaker
+  const wanted = [...new Set(list.filter((n) => Number.isInteger(n) && n >= 0 && n <= MAX_PHONES))];
+  if (!wanted.length && !room) return;
   as = as === 'voice' ? 'voice' : 'own';
   const cur = talks.get(owner);
-  if (cur && cur.as === as) { cur.wanted = [...new Set([...cur.wanted, ...wanted])]; addTargets(cur, cur.wanted); return; }   // another key joined the hold
+  if (cur && cur.as === as) { cur.wanted = [...new Set([...cur.wanted, ...wanted])]; addTargets(cur, cur.wanted); if (room && !cur.room) roomJoin(cur); return; }   // another key joined the hold
   if (cur) talkStop(owner);
-  const t = { owner, wanted, targets: new Set(), visits: new Map(), programTokens:new Map(), pcm: [], as, t0: Date.now() };
-  talks.set(owner, t); addTargets(t, wanted);
+  const t = { owner, wanted, targets: new Set(), visits: new Map(), programTokens:new Map(), pcm: [], as, t0: Date.now(), room: false };
+  talks.set(owner, t); addTargets(t, wanted); if (room) roomJoin(t);
+}
+// The room speaker joins a hold: live, it plays the director's voice as it comes; in AI voice, it speaks the words after.
+function roomJoin(t) {
+  t.room = true;
+  if (t.as === 'own') { try { t.roomLive = roomSpeaker.live(RATE); } catch (e) { send(t.owner, { type: 'error', text: e.message }); } }
 }
 async function talkStop(owner) {
   const t = talks.get(owner); if (!t) return;
   talks.delete(owner); t.t1 = Date.now();
+  if (t.roomLive) { t.roomLive.end(); t.roomLive = null; }
   for (const id of t.targets) { const s = sessions.get(id); if (s) { s.edHold = heldByDesk(id); s.lastActivity = Date.now(); state(s); } }
   // The director always hears back what happened: a silent desk reads as a broken button.
   const tell = (text) => send(t.owner, { type: 'error', text });
   const note = (id, text) => toControls({ type: 'transcript', id, who: 'note', text });
-  if (!t.targets.size) return tell(t.wanted.includes(0) ? 'No phone is connected, so nobody heard that.' : `Phone ${t.wanted.join(' and ')} ${t.wanted.length > 1 ? 'are' : 'is'} not connected, so nobody heard that.`);
+  if (!t.targets.size && !t.room) return tell(t.wanted.includes(0) ? 'No phone is connected, so nobody heard that.' : `Phone ${t.wanted.join(' and ')} ${t.wanted.length > 1 ? 'are' : 'is'} not connected, so nobody heard that.`);
   if (t.as !== 'voice') { if (!t.pcm.length) tell('No sound reached the server from the desk microphone.'); }
   else if (!t.pcm.length) return tell('No sound reached the server: check the desk microphone is on (Enable audio).');
   else if (t.t1 - t.t0 < 400) return tell('Hold the button while you speak, and let go when you have finished.');
@@ -1986,7 +2036,10 @@ async function talkStop(owner) {
     try { text = (await ai.transcribe(Buffer.concat(t.pcm))).trim(); }
     catch (e) { console.error('  director transcription: ' + e.message); return tell(`Could not turn your speech into text (${e.message.slice(0, 80)}). Try again, or type the line.`); }
   }
+  if (!text && t.room && t.as !== 'voice' && t.pcm.length) { roomTranscript('director, own voice live', '(no words recognised; the sound is in room-speaker.wav)'); logWho('speaker_live', { ...deskWho(t.owner), text: '', start: at(t.t0), end: at(t.t1) }); }
   if (!text) return t.as === 'voice' ? tell('Heard no words. Hold the button, speak, then let go.') : undefined;
+  if (t.room && t.as !== 'voice') { roomTranscript('director, own voice live', text); logWho('speaker_live', { ...deskWho(t.owner), text, start: at(t.t0), end: at(t.t1) }); }
+  if (t.room && t.as === 'voice') { try { roomSay(text, 'voiced', deskWho(t.owner)); } catch (e) { tell(e.message); } }
   for (const id of t.targets) {
     const s = sessions.get(id);
     // Talking in the AI voice to a waiting phone during a recorded session starts its visit, so the words go through.
@@ -2106,6 +2159,7 @@ wss.on('connection', (ws, req) => {
         if (!talk) return;
         talk.pcm.push(pcm);
         track('director-mic').write(pcm);
+        if (talk.roomLive) talk.roomLive.write(pcm);
         if (talk.as === 'voice') return;   // AI-voice mode: they hear it after transcription, in the AI voice
         for (const id of talk.targets) {
           const s = sessions.get(id);
@@ -2143,7 +2197,8 @@ wss.on('connection', (ws, req) => {
       }
       if (m.type === 'speak' && m.text) {   // typed by the director, spoken word for word in the AI's voice
         const text = String(m.text).trim().slice(0, 600);
-        for (const t of (m.id ? [sessions.get(m.id)] : [...sessions.values()])) speakAs(t, text, 'typed');
+        if (m.room) { try { roomSay(text, 'typed', deskWho(ws)); } catch (e) { send(ws, { type: 'error', text: e.message }); } }   // to: 'room' or 'both'
+        if (m.phones !== false) for (const t of (m.id ? [sessions.get(m.id)] : [...sessions.values()])) speakAs(t, text, 'typed');
       }
       // Privacy mode is switched from inside the studio or by an owner (who stays connected through it).
       if (m.type === 'privacy') { if (ws.remote && !ws.owner) send(ws, { type: 'error', text: 'Only the studio or an owner can switch privacy mode.' }); else access.setPrivacy(!!m.on); }

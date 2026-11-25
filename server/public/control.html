@@ -85,6 +85,9 @@
   @media (hover:none) and (pointer:coarse) { .cs-keys, #cs-keysbtn, .talkpad kbd, button kbd { display:none !important; } .talkpad .padbtn { padding:20px 8px; } }
   .talkpad .padbtn b { font-size:18px; font-weight:500; } .talkpad .padbtn small { font-size:11px; color:var(--dim); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .talkpad .padbtn kbd { margin:2px 0 0; } .talkpad #all { flex:1.3; }
+  .talkpad #roompad { flex:1.1; border-style:dashed; } .talkpad #roompad.on { border-style:solid; }
+  .speakrow { display:flex; gap:8px; align-items:center; } .speakrow #speakall { flex:1; margin:0; }
+  .speakrow .seg button { padding:5px 10px; font-size:12px; white-space:nowrap; }
   .talkpad .padbtn.off { opacity:.45; } .talkpad .padbtn.on small, .talkpad .padbtn.on kbd { color:#000; }
   .console .cs-mic { display:flex; align-items:center; gap:8px; flex:1; min-width:140px; }
   .console .cs-mic .meter { flex:1; }
@@ -260,10 +263,14 @@
         <div class="seg voice-switch" id="micmode" title="How they hear you when you hold to talk. V flips it."><button data-as="own" class="sel">Your voice</button><button data-as="voice">AI voice</button></div>
         <div class="talkpad" id="talkpad" aria-label="Hold to talk">
           <button id="all" class="padbtn"><b>All</b><small>everyone</small><kbd>space</kbd></button>
+          <button id="roompad" class="padbtn" data-target="room" title="The room speakers: the amp on this computer's headphone socket"><b>Room</b><small>speakers</small><kbd>R</kbd></button>
         </div>
-        <input id="speakall" placeholder="Type a line for everyone → they hear it in the AI voice (Enter)">
+        <div class="speakrow">
+          <input id="speakall" placeholder="Type a line for everyone → they hear it in the AI voice (Enter)">
+          <div class="seg" id="speakto" title="Where All (space) and the typed line go"><button data-to="phones" class="sel">Headphones</button><button data-to="room">Room</button><button data-to="both">Both</button></div>
+        </div>
         <div id="soundpad" class="soundpad" aria-label="Sounds"></div>
-        <div class="hint cs-keys" id="cs-keys" hidden>Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone (several together) · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>⇧</kbd>+arrows move the camera · <kbd>⇧</kbd>+<kbd>1</kbd>… camera positions · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
+        <div class="hint cs-keys" id="cs-keys" hidden>Hold <kbd>space</kbd> everyone · hold <kbd>1</kbd>–<kbd>9</kbd> that phone (several together) · hold <kbd>R</kbd> the room speakers · <kbd>↑</kbd><kbd>↓</kbd> choose phone · <kbd>V</kbd> your/AI voice · <kbd>⇧</kbd>+arrows move the camera · <kbd>⇧</kbd>+<kbd>1</kbd>… camera positions · <kbd>A</kbd> auto directing · <kbd>N</kbd> next direction · <kbd>M</kbd> mark · <kbd>L</kbd> latch talk-to-all</div>
         <div class="cam-strip" id="camstrip" hidden>
           <img id="cs-cam" alt="Turning camera, live" title="Click to enlarge">
           <div class="cs-camctl">
@@ -409,7 +416,7 @@ function renderGrid(list) {
     row.classList.toggle('connected', !!p?.connected); row.onclick = () => selectPhone(id); $('roster').appendChild(row);
     const pad = document.createElement('button'); pad.className = 'padbtn'; pad.dataset.phone = id;
     pad.innerHTML = `<b>${id}</b><small>${p?.connected ? 'connected' : 'not connected'}</small>${id <= 9 ? `<kbd>${id}</kbd>` : ''}`;
-    pad.classList.toggle('off', !p?.connected); bindHold(pad, id); $('talkpad').appendChild(pad);
+    pad.classList.toggle('off', !p?.connected); bindHold(pad, id); $('talkpad').appendChild(pad); $('talkpad').appendChild($('roompad'));
     if (!p || !p.connected) { el.className = 'card empty'; el.textContent = `Phone ${id} — not connected`; grid.appendChild(el); p && (p.el = null); continue; }
     el.className = 'card';
     el.innerHTML = `
@@ -504,16 +511,17 @@ function appendLine(p, l, replay) {
 // The server gets the whole set; a new key joining a hold adds its phone without restarting what you are saying.
 const holding = new Set();
 function syncTalk() {
-  const want = [...holding];
+  // All (space) follows the Headphones / Room / Both switch; numbered tiles are always that phone, Room always the speakers.
+  const want = [...new Set([...holding].flatMap((x) => x !== 0 ? [x] : speakTo === 'room' ? ['room'] : speakTo === 'both' ? [0, 'room'] : [0]))];
   if (want.length && (!ws || ws.readyState !== 1)) return;
   if (want.length && (!mic || ctx?.state !== 'running')) { holding.clear(); latched = false; toast('Enable the desk microphone first'); }
   const was = talkTarget;
-  talkTarget = holding.size ? (holding.has(0) ? 0 : want[0]) : null;
+  talkTarget = holding.size ? (want.includes(0) ? 0 : want[0]) : null;
   if (ws?.readyState === 1) {
-    if (holding.size) ws.send(JSON.stringify({ type: 'talk', target: [...holding], on: true, as: micAs }));
+    if (holding.size) ws.send(JSON.stringify({ type: 'talk', target: want, on: true, as: micAs }));
     else if (was !== null) ws.send(JSON.stringify({ type: 'talk', target: was, on: false, as: micAs }));
   }
-  for (const b of document.querySelectorAll('.padbtn')) b.classList.toggle('on', holding.has(b.id === 'all' ? 0 : Number(b.dataset.phone)));
+  for (const b of document.querySelectorAll('.padbtn')) b.classList.toggle('on', holding.has(b.id === 'all' ? 0 : b.id === 'roompad' ? 'room' : Number(b.dataset.phone)));
   for (const p of people.values()) paintRoster(p);
 }
 const holdOn = (id) => { holding.add(id); syncTalk(); };
@@ -882,7 +890,17 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('.vpreview')) { const v = voiceOf(box), a = $('previewAudio'); a.src = '/api/preview?' + new URLSearchParams({ k: KEY, ...v, r: Date.now() }); a.play(); }
   if (e.target.closest('.vall')) { ws.send(JSON.stringify({ type: 'voice', id: 0, ...voiceOf(box) })); toast('Every phone now uses ' + voiceOf(box).voice); }
 });
-$('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim() })); e.target.value = ''; } e.stopPropagation(); };
+// The typed line goes to the headphones (every phone), the room speakers, or both; remembered on this computer.
+let speakTo = 'phones'; try { speakTo = localStorage.getItem('mother-speak-to') || 'phones'; } catch {}
+function paintSpeakTo() {
+  for (const b of document.querySelectorAll('#speakto button')) b.classList.toggle('sel', b.dataset.to === speakTo);
+  $('all').querySelector('small').textContent = { phones: 'everyone', room: 'room speakers', both: 'everyone + room' }[speakTo];
+  $('speakall').placeholder = { phones: 'Type a line for everyone → they hear it in the AI voice (Enter)', room: 'Type a line for the room speakers → spoken in the AI voice (Enter)', both: 'Type a line → every headphone and the room speakers, in the AI voice (Enter)' }[speakTo];
+}
+$('speakto').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; speakTo = b.dataset.to; try { localStorage.setItem('mother-speak-to', speakTo); } catch {} paintSpeakTo(); $('speakall').focus(); };
+paintSpeakTo();
+bindHold($('roompad'), 'room');
+$('speakall').onkeydown = (e) => { if (e.key === 'Enter' && e.target.value.trim()) { ws.send(JSON.stringify({ type: 'speak', id: 0, text: e.target.value.trim(), room: speakTo !== 'phones', phones: speakTo !== 'room' })); e.target.value = ''; } e.stopPropagation(); };
 $('speakall').onkeyup = (e) => e.stopPropagation();
 
 let soundSetup, micSetup;
@@ -950,6 +968,7 @@ document.addEventListener('keydown', (e) => {
   const held = () => keysDown.has(e.code);
   if (e.code === 'Space') { e.preventDefault(); keysDown.add(e.code); beginTalk(0, held, $('all')); }
   if (/^Digit[1-9]$/.test(e.code) && Number(e.code.slice(5)) <= MAX) { keysDown.add(e.code); beginTalk(Number(e.code.slice(5)), held); }
+  if (e.code === 'KeyR') { keysDown.add(e.code); beginTalk('room', held, $('roompad')); }
   if (e.code === 'KeyL') { latched = !latched; latched ? holdOn(0) : (holding.delete(0), syncTalk()); }
   if (e.code === 'KeyM') { e.preventDefault(); quickMark(); }
   if (e.code === 'KeyV') setMicAs(micAs === 'voice' ? 'own' : 'voice');
@@ -964,6 +983,7 @@ document.addEventListener('keyup', (e) => {
   if (!ws || typing()) return;
   if (e.code === 'Space') holdOff(0);
   if (/^Digit[1-9]$/.test(e.code)) holdOff(Number(e.code.slice(5)));
+  if (e.code === 'KeyR') holdOff('room');
 });
 </script>
 <script src="follow-core.js"></script><script src="desk-room.js"></script><script src="desk-camera.js"></script><script src="desk-sounds.js"></script><script src="run-sheet.js"></script><script src="program-session.js"></script>

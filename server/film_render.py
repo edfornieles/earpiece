@@ -119,6 +119,14 @@ mixes = {int(''.join(c for c in os.path.basename(m['file']) if c.isdigit()) or 0
 room = next((f for f in manifest['files'] if f['kind'] == 'room_mic'), None)
 
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import camera_sync
+    DELAY = camera_sync.session(SESSION)   # seconds each camera file's picture runs behind the session clock
+except Exception as e:
+    print('  camera sync not measured:', e, file=sys.stderr); DELAY = {}
+
+
 def pieces(camera, t_in, t_out):
     """(file, seek, seconds) covering [t_in, t_out) on the session clock for one camera; black where it has none."""
     out, t = [], t_in
@@ -130,7 +138,8 @@ def pieces(camera, t_in, t_out):
             out.append((None, 0, nxt - t)); t = nxt; continue
         end = min(t_out, f['offset'] + f['duration'])
         src = proxy_of.get(f['file'], f['file'])
-        out.append((os.path.join(SESSION, src), t - f['offset'], end - t)); t = end
+        # the moment t is shown DELAY seconds later in the file: the camera's picture arrives late
+        out.append((os.path.join(SESSION, src), t - f['offset'] + DELAY.get(f['file'], 0.0), end - t)); t = end
     return out
 
 

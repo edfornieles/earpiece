@@ -8,3 +8,4 @@ models
 public/scans/*.glb
 .plan-before-*.json
 .camera-views
+.cache/

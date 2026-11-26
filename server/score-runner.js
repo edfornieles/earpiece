@@ -14,7 +14,7 @@ const SCORES = require('./scores');
 
 class ScoreRunner {
   constructor(h) { this.h = h; this.reset(); }
-  reset() { clearInterval(this.timer); Object.assign(this, { score: null, params: {}, running: false, held: false, startedAt: 0, heldAt: 0, heldFor: 0, skipTo: 0, people: new Map(), timer: null }); }
+  reset() { clearInterval(this.timer); Object.assign(this, { score: null, params: {}, running: false, ending: false, held: false, startedAt: 0, heldAt: 0, heldFor: 0, skipTo: 0, people: new Map(), timer: null }); }
   list() { return SCORES.map(({ id, title, about, params }) => ({ id, title, about, params })); }
 
   defaults(score) { return Object.fromEntries(score.params.map((p) => [p.key, p.default])); }
@@ -49,7 +49,7 @@ class ScoreRunner {
   async tick() {
     if (!this.running || this.held) return;
     const now = Date.now(), p = this.progress(now);
-    if (p >= 1) return this.stop('finished');
+    if (p >= 1) return this.finish();
     for (const id of this.h.phones()) {
       const me = this.people.get(id) || { lines: [], next: now + 1500 + this.people.size * 3000, working: false };   // stagger the phones
       this.people.set(id, me);
@@ -59,6 +59,20 @@ class ScoreRunner {
     }
   }
 
+  // Time is up: each participant hears the score's closing line (sent out of the room) once their phone is free,
+  // then the score ends. Nobody waits more than 20 s.
+  async finish() {
+    if (this.ending) return; this.ending = true; clearInterval(this.timer);
+    const text = this.score.ending?.(this.params);
+    if (text) {
+      const left = new Set(this.h.phones()), until = Date.now() + 20000;
+      while (left.size && Date.now() < until) {
+        for (const id of [...left]) if (!this.h.busy(id) && !this.people.get(id)?.working) { this.h.speak(id, text, this.score.title); this.h.log('score_ending', { score: this.score.id, id, text }); left.delete(id); }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    this.stop('finished');
+  }
   async line(id, me, p) {   // never lets an error escape: a fault in one line must not stop Mother
     try { await this.lineInner(id, me, p); } catch (e) { this.h.log('score_error', { score: this.score?.id, id, message: e.message }); console.error('  score line failed: ' + e.message); }
   }

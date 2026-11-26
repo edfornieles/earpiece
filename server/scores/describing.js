@@ -32,6 +32,15 @@ Say it as fact. Never use "maybe", "perhaps", "might", "could", "possibly", "it 
 Only the projection: no description of what they are doing right now.
 One or two short sentences, at most 26 words.`;
 
+// The last thing they hear: Mother sends them out of the room (in the voice of the chosen tone).
+const ENDINGS = {
+  1: "That's all I have to tell you. Thank you for letting me watch. You can take out your earpiece now, and leave the room.",
+  2: "That's all. Take out your earpiece now, and leave the room.",
+  3: "That's everything. Take out your earpiece and leave the room.",
+  4: "I've seen enough. Take out your earpiece and leave the room.",
+  5: "I've seen enough of you. Take out your earpiece. Leave the room.",
+};
+
 const HEDGES = /\b(maybe|perhaps|possibly|might|it seems|as if|as though)\b/i;
 
 module.exports = {
@@ -61,6 +70,7 @@ What you have already said to them (do not repeat):
 ${ctx.said || '(nothing yet)'}`;
     return { system, user, fast: physical, maxTokens: physical ? 40 : 80 };
   },
+  ending: (params) => ENDINGS[Number(params.tone)] || ENDINGS[3],
   // Clean a line before it is spoken; null = say nothing this time.
   finish(text, ctx) {
     let t = String(text || '').replace(/^["“]|["”]$/g, '').trim();

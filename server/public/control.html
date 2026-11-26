@@ -245,9 +245,9 @@
   <section>
     <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
     <div id="audio-status" role="status"><span id="audio-label">Desk sound is off. Enable it to listen to participants.</span><button id="enable-sound">Enable sound</button><button id="enable-mic">Enable microphone</button></div>
-    <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
-    <div id="scorepanel" class="describing" title="Automatic scores: programs Mother runs by itself in the space.">
-      <span class="cs-label">Automatic score</span>
+    <div id="program-live" hidden></div><p id="program-run-error" class="hint" role="status" hidden></p>
+    <div id="scorepanel" class="describing" title="Scores Mother runs by itself in the space. Pick one, set it up, start it.">
+      <span class="cs-label">Score</span>
       <select id="sc-pick"></select><span id="sc-params" class="sc-params"></span>
       <button id="sc-start">Start</button><button id="sc-hold" hidden>Hold</button><button id="sc-next" hidden title="Jump to the next movement">Next movement ›</button><button id="sc-stop" hidden>Stop</button>
       <span id="sc-status" class="hint"></span>

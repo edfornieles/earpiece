@@ -28,7 +28,7 @@
   // Six sections. The section you are in lists its pages underneath.
   const sections = [
     ['Perform', [['/control', 'Live desk'], ['/talk', 'Talk (phone)'], ['/session', 'Brief & notes'], ['/protocols', 'Protocols'], ['/debrief', 'Debrief']]],
-    ['Programs', [['/programs', 'Programs']]],
+    ['Scores', [['/programs', 'Scores']]],
     ['Room', [['/room', 'Room']]],
     ['Setup', [['/phones', 'Phones'], ['/screens', 'Screens'], ['/people', 'Registrations'], ['/signups', 'Sign-ups']]],
     ['Archive', [['/library', 'Library'], ['/film', 'Films'], ['/files', 'Files'], ['/trash', 'Trash']]],
@@ -72,7 +72,7 @@
       if (prog && ['running', 'paused'].includes(prog.status)) lines.push(`▶ ${prog.title} · ${prog.status}`);
       if (launch?.waitingFor) lines.push(`Starting ${launch.title}: ` + (launch.waitingFor.map((w) => `phone ${w.phone} — ${w.reason}`).join('; ') || 'starting…'));
       else if (launch?.error) lines.push(launch.error);
-      else if (!prog || !['running', 'paused'].includes(prog.status)) lines.push(!phones.length ? 'Next: connect a phone (Setup → Phones)' : 'Next: press ▶ Run on a program');
+      else if (!prog || !['running', 'paused'].includes(prog.status)) lines.push(!phones.length ? 'Next: connect a phone (Setup → Phones)' : 'Next: start a score (Live desk → Score)');
       if (s.observer?.enabled) lines.push('Vision on');
       st.innerHTML = lines.map((l, i) => `<span${i === lines.length - 1 && /^Next:/.test(l) ? ' class="next"' : ''}>${l.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</span>`).join('');
       st.title = s.standby ? 'Nothing is being recorded' : 'Recording since ' + new Date(s.since).toLocaleTimeString();

@@ -183,6 +183,19 @@ async function look(jpeg, question, hints = '') {
   if (!r.ok) throw new Error(`vision ${r.status}`);
   return ((await r.json()).choices[0].message.content || '').trim();
 }
+// One line for an automatic program (e.g. Describing): a picture (or none) plus instructions, a little creative.
+async function write(jpeg, system, user) {
+  if (MOCK) return 'You are standing very still, your weight on one foot.';
+  const content = [{ type: 'text', text: user }];
+  if (jpeg) content.push({ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + Buffer.from(jpeg).toString('base64'), detail: 'low' } });
+  const r = await fetch(`${OPENAI}/chat/completions`, {
+    method: 'POST', signal: AbortSignal.timeout(15000),
+    headers: { authorization: `Bearer ${KEY()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || 'gpt-4.1', max_tokens: 80, temperature: 0.8, messages: [{ role: 'system', content: system }, { role: 'user', content }] }),
+  });
+  if (!r.ok) throw new Error(`vision ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  return ((await r.json()).choices[0].message.content || '').replace(/[*_#`]/g, '').replace(/\s+/g, ' ').trim();
+}
 async function speak(text, onPcmRaw, signal, voice, style = {}) {
   const sh = shaper(style.pitch, style.speed, onPcmRaw);
   const onPcm = sh ? (b) => sh.write(b) : onPcmRaw;
@@ -279,4 +292,4 @@ function shaper(pitch, speed, onPcm) {
   return { write: (b) => ff.stdin.write(b), end: () => { ff.stdin.end(); return done; }, kill: () => ff.kill('SIGKILL') };
 }
 
-module.exports = { VOICES, voiceUrl, emotionsOf, shaper, TTS_URL, Vad, Gain, transcribe, think, look, speak, WavStreamDecoder, wavBytes, floatToInt16Buf, RATE, MOCK };
+module.exports = { VOICES, voiceUrl, emotionsOf, shaper, TTS_URL, Vad, Gain, transcribe, think, look, write, speak, WavStreamDecoder, wavBytes, floatToInt16Buf, RATE, MOCK };

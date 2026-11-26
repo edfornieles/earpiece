@@ -894,6 +894,20 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true });
       } catch (e) { return json(res, { error: e.message }, 400); }
     }
+    if (p === '/api/describing' && req.method === 'GET') return json(res, describing.status());
+    if (p === '/api/describing' && req.method === 'POST') {   // {op:'start'|'hold'|'resume'|'skip'|'stop', minutes?, every?}
+      try {
+        const d = await readBody(req, 10e3);
+        if (d.op === 'start') {
+          if (!describingPhones().length) throw Error('No phone is taking part: connect a phone and start its visit.');
+          for (const id of describingPhones()) { const s = sessions.get(id); s.mode = 'off'; stopAi(s, 'Describing started'); state(s); }   // Mother only describes; she doesn't converse
+          describing.start(d);
+        } else if (['hold', 'resume', 'skip', 'stop'].includes(d.op)) describing[d.op]();
+        else throw Error('Choose start, hold, resume, skip or stop.');
+        logWho('describing_' + d.op, { ...whoLabel(who), minutes: d.minutes });
+        return json(res, { ok: true, ...describing.status() });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     if (p === '/api/speaker' && req.method === 'GET') return json(res, { ...roomSpeaker.status(), voice: roomSpeaker.voice || ai.VOICES[0].name, voices: ai.VOICES.map((v) => v.name) });
     if (p === '/api/speaker' && req.method === 'POST') {   // {op:'say', text, voice?} | {op:'stop'}
       try {
@@ -1878,6 +1892,37 @@ async function lookAt(id, question) {
   try { const answer = await ai.look(crop, question, hints); logEvent('look', { id, question, answer, hints, file, ms: Date.now() - t0 }); lastLook.set(id, { at: Date.now(), question, answer, file }); return answer; }
   catch (e) { logEvent('look', { id, question, error: e.message }); return 'I tried to look but the camera analysis failed.'; }
 }
+// ---------- Describing: an automatic program (describing.js). Mother tells each participant, in their own earpiece, what it
+// sees them doing; physical at first, then behaviour, then projections about their life. Only phones taking part. ----------
+const { Describing } = require('./describing');
+const describingPhones = () => [...sessions.values()].filter((s) => s.ws && s.ws.readyState === 1 && (!s.waiting || STANDBY)).map((s) => s.id);
+const describing = new Describing({
+  phones: describingPhones,
+  busy: (id) => { const s = sessions.get(id); return !s || s.speaking || s.thinking || s.edHold || !!s.live || !!programRunner?.manages(id); },
+  see: async (id) => {
+    const v = roomObserver.tracking.view(), now = Date.now();
+    const notes = perceptionFor(id) + roomNow(id);
+    if (!v.running) return { jpeg: null, notes };
+    const cam = cameras.find((c) => c.id === v.cameraId), f = identity.full;
+    const frame = f?.camId === v.cameraId && f.frame && now - f.at < 3000 ? f.frame : cam?.frame && now - cam.frameAt < 3000 ? cam.frame : null;
+    if (!frame) return { jpeg: null, notes };
+    const { me } = participantTrack(id, v, now);
+    const jpeg = me?.visible && me.box ? await cropJpeg(frame, me.box) : frame;
+    let file = ''; try { const dir = path.join(SESSION_DIR, 'looks'); fs.mkdirSync(dir, { recursive: true }); file = `looks/describing-${id}-${clock().replace('.', '_')}.jpg`; fs.writeFileSync(path.join(SESSION_DIR, file), jpeg); } catch {}
+    return { jpeg, notes: notes + (me?.visible ? '' : ' (This picture is the whole room; they may not be in it.)'), file };
+  },
+  write: (jpeg, system, user) => ai.write(jpeg, system, user),
+  speak: (id, text) => {
+    const s = sessions.get(id); if (!s?.ws) return;
+    const turn = ++s.turn, u = ++U;
+    s.history.push({ role: 'assistant', content: text });
+    transcript(s, 'ai', text, { u, ...voiceInfo(s.id), program: 'Describing' });
+    s.lastActivity = Date.now();
+    say(s, text, turn, u);
+  },
+  log: (type, data) => logEvent(type, data),
+  changed: () => toControls({ type: 'describing', ...describing.status() }),
+});
 // The model is asked for {"action","text","reason"}; if it answers in prose anyway, speak the prose
 // rather than freezing the program.
 function parseDecision(raw) {

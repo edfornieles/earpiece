@@ -85,6 +85,11 @@
   @media (hover:none) and (pointer:coarse) { .cs-keys, #cs-keysbtn, .talkpad kbd, button kbd { display:none !important; } .talkpad .padbtn { padding:20px 8px; } }
   .talkpad .padbtn b { font-size:18px; font-weight:500; } .talkpad .padbtn small { font-size:11px; color:var(--dim); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .talkpad .padbtn kbd { margin:2px 0 0; } .talkpad #all { flex:1.3; }
+  .describing { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0; padding:10px 12px; border:1px solid var(--line); border-radius:10px; }
+  .describing button { padding:5px 12px; font-size:13px; } .describing .hint { font-size:12px; }
+  .describing .ds-bar { flex-basis:100%; height:6px; background:rgba(127,127,127,.18); border-radius:3px; position:relative; overflow:hidden; }
+  .describing .ds-bar i { position:absolute; left:0; top:0; bottom:0; width:0; background:var(--ok); }
+  .describing .ds-bar span { position:absolute; top:0; bottom:0; width:1px; background:var(--line); } .describing .ds-bar span:nth-child(2) { left:33.3%; } .describing .ds-bar span:nth-child(3) { left:66.6%; }
   .micsrc { display:flex; align-items:center; gap:8px; margin:6px 0; font-size:12px; } .micsrc .seg button { padding:3px 9px; font-size:12px; } .micsrc small { color:var(--dim); }
   .talkpad #roompad { flex:1.1; border-style:dashed; } .talkpad #roompad.on { border-style:solid; }
   .speakrow { display:flex; gap:8px; align-items:center; } .speakrow #speakall { flex:1; margin:0; }
@@ -240,6 +245,12 @@
     <div id="standbybar"><b>Standby — nothing is being recorded.</b> Prepare the next session: give it a name, notes and documents, add people and arrivals. Cameras show live; phones can connect and you can talk to them to test, but nobody starts until you press <b>Start session</b>.</div>
     <div id="audio-status" role="status"><span id="audio-label">Desk sound is off. Enable it to listen to participants.</span><button id="enable-sound">Enable sound</button><button id="enable-mic">Enable microphone</button></div>
     <div id="program-live"></div><p id="program-run-error" class="hint" role="status"></p>
+    <div id="describing" class="describing" title="Describing (after Dan Graham): Mother watches each participant and tells them, in their own earpiece, what it sees: physical, then behaviour, then projections about their life.">
+      <span class="cs-label">Describing</span>
+      <button id="ds-start">Start · 15 min</button><button id="ds-hold" hidden>Hold</button><button id="ds-skip" hidden title="Jump to the next movement">Next movement ›</button><button id="ds-stop" hidden>Stop</button>
+      <span id="ds-status" class="hint">Mother describes each participant to them: physical → behaviour → projection.</span>
+      <div class="ds-bar"><i id="ds-fill"></i><span></span><span></span></div>
+    </div>
     <div id="desk-room" class="desk-room">
       <div class="dr-head"><h2>Room</h2><span class="hint">plan · close-up · cameras · mics</span><span id="dr-state" class="hint"></span><a id="dr-open" target="earpiece_pages">Open Room ↗</a></div>
       <div class="dr-body">
@@ -616,6 +627,7 @@ function connect() {
       return;
     }
     const m = JSON.parse(e.data);
+    if (m.type === 'describing') paintDescribing(m);
     if(m.type==='program'){programView=m.run;for(const p of people.values())paintState(p);}
     if (m.type === 'phonesChanged') { MAX = m.maxPhones; renderGrid(lastList); renderFolk(); renderArrivals(); }
     if (m.type === 'participants') { renderGrid(m.list); renderFolk(); renderArrivals(); }
@@ -904,6 +916,29 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('.vpreview')) { const v = voiceOf(box), a = $('previewAudio'); a.src = '/api/preview?' + new URLSearchParams({ k: KEY, ...v, r: Date.now() }); a.play(); }
   if (e.target.closest('.vall')) { ws.send(JSON.stringify({ type: 'voice', id: 0, ...voiceOf(box) })); toast('Every phone now uses ' + voiceOf(box).voice); }
 });
+// Describing: start / hold / next movement / stop, and where it is (the bar marks the three movements).
+function paintDescribing(d) {
+  const on = !!d.running;
+  $('ds-start').hidden = on; for (const id of ['ds-hold', 'ds-skip', 'ds-stop']) $(id).hidden = !on;
+  $('ds-hold').textContent = d.held ? 'Resume' : 'Hold';
+  $('ds-fill').style.width = (on ? d.progress : 0) + '%';
+  const mmss = (s) => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  $('ds-status').textContent = on ? `${d.held ? 'Held · ' : ''}${d.movement} · ${mmss(d.elapsed)} of ${d.minutes}:00 · ` + (d.phones || []).map((p) => `phone ${p.id}: ${p.lines} line${p.lines === 1 ? '' : 's'}${p.last ? ` (“${p.last.slice(0, 60)}${p.last.length > 60 ? '…' : ''}”)` : ''}`).join(' · ')
+    : 'Mother describes each participant to them: physical → behaviour → projection.';
+}
+async function describingOp(op, extra = {}) {
+  try {
+    const r = await fetch(`/api/describing${KEY ? '?k=' + encodeURIComponent(KEY) : ''}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op, ...extra }) });
+    const j = await r.json(); if (!r.ok || j.error) throw Error(j.error || 'Failed'); paintDescribing(j);
+  } catch (e) { toast(e.message); }
+}
+$('ds-start').onclick = () => describingOp('start', { minutes: 15 });
+$('ds-hold').onclick = () => describingOp($('ds-hold').textContent === 'Hold' ? 'hold' : 'resume');
+$('ds-skip').onclick = () => describingOp('skip');
+$('ds-stop').onclick = () => { if (confirm('Stop Describing?')) describingOp('stop'); };
+setInterval(() => { if (!$('ds-stop').hidden) fetch(`/api/describing${KEY ? '?k=' + encodeURIComponent(KEY) : ''}`).then((r) => r.json()).then(paintDescribing).catch(() => {}); }, 1000);
+fetch(`/api/describing${KEY ? '?k=' + encodeURIComponent(KEY) : ''}`).then((r) => r.json()).then(paintDescribing).catch(() => {});
+
 // The typed line goes to the headphones (every phone), the room speakers, or both; remembered on this computer.
 let speakTo = 'phones'; try { speakTo = localStorage.getItem('mother-speak-to') || 'phones'; } catch {}
 function paintSpeakTo() {

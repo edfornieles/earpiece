@@ -2103,6 +2103,31 @@ function roomJoin(t) {
   t.room = true;
   if (t.as === 'own') { try { t.roomLive = roomSpeaker.live(RATE); } catch (e) { send(t.owner, { type: 'error', text: e.message }); } }
 }
+// AI voice, transcribed while the director is still talking: the audio is cut at natural pauses and each finished
+// phrase goes off to be transcribed at once, so on release only the last phrase is left to wait for.
+const PHRASE_PAUSE = 0.35, PHRASE_MIN = 0.8;   // seconds of quiet that end a phrase; shortest phrase worth sending alone
+function phraseCut(t, pcm) {
+  const n = pcm.length >> 1; if (!n) return;
+  let sum = 0; for (let i = 0; i < n; i++) { const v = pcm.readInt16LE(i * 2); sum += v * v; }
+  const rms = Math.sqrt(sum / n), secs = n / RATE;
+  t.floor = t.floor == null || rms < t.floor ? rms : t.floor + (rms - t.floor) * 0.01;   // background level: drops at once, rises slowly
+  const loud = rms > Math.max(400, t.floor * 3);
+  t.segStart ??= 0; t.parts ??= []; t.segSpeech ??= 0; t.quiet ??= 0;
+  if (loud) { t.segSpeech += secs; t.quiet = 0; } else t.quiet += secs;
+  const end = t.pcm.length;
+  if (t.quiet >= PHRASE_PAUSE && t.segSpeech >= PHRASE_MIN) {
+    const audio = Buffer.concat(t.pcm.slice(t.segStart, end));
+    t.parts.push(ai.transcribe(audio).then((x) => x.trim()));
+    t.segStart = end; t.segSpeech = 0;
+  }
+}
+async function talkText(t) {
+  const rest = Buffer.concat(t.pcm.slice(t.segStart || 0));
+  const parts = [...(t.parts || [])];
+  if (rest.length / 2 / RATE > 0.25 && (t.segSpeech || 0) > 0.1 || !parts.length) parts.push(ai.transcribe(rest).then((x) => x.trim()));
+  try { return (await Promise.all(parts)).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim(); }
+  catch (e) { return (await ai.transcribe(Buffer.concat(t.pcm))).trim(); }   // a phrase failed: fall back to the whole clip
+}
 async function talkStop(owner) {
   const t = talks.get(owner); if (!t) return;
   talks.delete(owner); t.t1 = Date.now();
@@ -2117,7 +2142,7 @@ async function talkStop(owner) {
   else if (t.t1 - t.t0 < 400) return tell('Hold the button while you speak, and let go when you have finished.');
   let text = '';
   if (t.pcm.length) {
-    try { text = (await ai.transcribe(Buffer.concat(t.pcm))).trim(); }
+    try { text = await talkText(t); }
     catch (e) { console.error('  director transcription: ' + e.message); return tell(`Could not turn your speech into text (${e.message.slice(0, 80)}). Try again, or type the line.`); }
   }
   if (!text && t.room && t.as !== 'voice' && t.pcm.length) { roomTranscript('director, own voice live', '(no words recognised; the sound is in room-speaker.wav)'); logWho('speaker_live', { ...deskWho(t.owner), text: '', start: at(t.t0), end: at(t.t1) }); }
@@ -2242,6 +2267,7 @@ wss.on('connection', (ws, req) => {
         const pcm = buf.subarray(2), talk = talks.get(ws);   // the first two bytes name a target; this desk's talk decides
         if (!talk) return;
         talk.pcm.push(pcm);
+        if (talk.as === 'voice') phraseCut(talk, pcm);   // AI voice: transcribe each finished phrase while they're still talking
         track('director-mic').write(pcm);
         if (talk.roomLive) talk.roomLive.write(pcm);
         if (talk.as === 'voice') return;   // AI-voice mode: they hear it after transcription, in the AI voice

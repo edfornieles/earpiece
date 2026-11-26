@@ -2199,7 +2199,7 @@ setInterval(() => {
     let lead = s.playSent / RATE - (now - s.playT0) / 1000;
     if (lead < 0 && s.pending.length) { s.playT0 = now - (s.playSent / RATE) * 1000; lead = 0; }
     // How far ahead to send: phones that buffer get 0.8 s, which rides out network jitter; older apps drop anything past 0.4 s.
-    while (lead < (s.jitterBuffer ? 0.8 : 0.25) && s.pending.length >= (s.ttsDone ? 1 : FRAME)) {
+    while (lead < (s.jitterBuffer ? 0.3 : 0.25) && s.pending.length >= (s.ttsDone ? 1 : FRAME)) {   // ahead of playback: little, so nothing queues up on the phone
       const chunk = s.pending.subarray(0, FRAME); s.pending = s.pending.subarray(chunk.length);
       if (s.ws && s.ws.readyState === 1) s.ws.send(chunk);
       track(`phone${s.id}-heard`).write(chunk);

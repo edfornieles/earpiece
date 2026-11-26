@@ -246,9 +246,10 @@ class AudioService : Service() {
                         .put("audioSamplesReceived", receivedSamples)
                         .put("playLevel", playLevel.toDouble()).put("jitterMs", jitterMs).toString())
                 }
-                // the server sends up to 0.8 s ahead; never fall more than 1.5 s behind
+                // Never fall behind: whatever waits in the queue is delay. The server sends speech only ~0.3 s ahead,
+                // so anything past the jitter buffer + 0.35 s is a backlog (live talk piles one up): skip ahead to now.
                 var queued = playQueue.sumOf { it.size }
-                while (queued > WIRE_RATE * 1.5 && playQueue.size > 1) {
+                while (queued > WIRE_RATE * (jitterMs + 350) / 1000 && playQueue.size > 1) {
                     val dropped = playQueue.pollFirst() ?: break
                     queued -= dropped.size
                 }

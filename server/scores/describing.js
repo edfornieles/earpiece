@@ -21,8 +21,8 @@ You get a grid of every camera view in the room, and usually a close-up of this 
 Reply with the line only.`;
 
 const PHYSICAL = `${BASE}
-Movement: PHYSICAL. Say exactly what they are physically doing right now: their face, posture, hands, where they are, what they hold, how they move. One short sentence, at most 14 words, so it lands while it is still true.
-Their face matters most. If the face close-up shows a clear expression (pain, a scream, crying, laughing, shouting, a grimace, shock), say that first and plainly: what the face is doing and the feeling it shows ("Your face twists in pain, mouth wide open."). Otherwise no interpretation.
+Movement: PHYSICAL. Say exactly what they are physically doing right now: their body, posture, hands, where they are in the room, what they hold, how they move. One short sentence, at most 14 words, so it lands while it is still true. No interpretation.
+Mention the face only when it shows a strong, unmistakable expression (pain, a scream, crying, laughing out loud, shouting, shock); then say it plainly ("Your face twists in pain, mouth wide open."). Otherwise do not describe the face, eyes or mouth at all: describe what the body is doing.
 Now and then (about one line in four, never twice in a row) note a pattern you have seen over time instead, still short and concrete: where they keep going back to, what they keep doing.
 If nothing about them has changed since your last line, notice a different detail, or reply with exactly [silence] to stay quiet this time.`;
 
@@ -40,12 +40,12 @@ module.exports = {
   about: 'After Dan Graham. Mother tells each participant, in their own earpiece, what it sees them doing, then who it thinks they are.',
   params: [
     { key: 'minutes', label: 'Length', type: 'select', options: [5, 10, 15, 20, 30].map((m) => ({ value: m, label: `${m} min` })), default: 15 },
-    { key: 'split', label: 'Physical for', type: 'select', options: [0.33, 0.5, 0.66].map((v) => ({ value: v, label: `${Math.round(v * 100)}%` })), default: 0.5 },
+    { key: 'split', label: 'Physical for', type: 'select', options: [0.2, 0.33, 0.5, 0.66].map((v) => ({ value: v, label: `first ${Math.round(v * 100)}%` })), default: 0.33 },
     { key: 'every', label: 'Comments', type: 'select', options: [{ value: 0, label: 'Back to back' }, ...[5, 8, 10, 15, 22, 30, 45].map((s) => ({ value: s, label: `every ${s} s` }))], default: 10, live: true },
     { key: 'tone', label: 'Projection tone', type: 'select', options: TONES.map(({ value, label }) => ({ value, label })), default: 3, live: true },
   ],
   movements: (p) => [
-    { name: 'physical', label: 'Physical', until: Number(p.split) || 0.5 },
+    { name: 'physical', label: 'Physical', until: Number(p.split) || 0.33 },
     { name: 'projection', label: 'Projection', until: 1 },
   ],
 

@@ -69,14 +69,25 @@ class CameraLending {
     const l = this.loans.get(cam); if (!l) return;
     this.loans.delete(cam); this.rested.set(l.phone, Date.now() + REST_MS);
     this.h.log('camera_returned', { cam, phone: l.phone, why, secs: Math.round((Date.now() - l.since) / 1000) });
-    const home = this.homes.get(cam);
-    if (goHome && home) this.h.views.exclusive(cam, 'lent', () => this.h.views.ctl(cam).goto(home, this.h.views.nap)).catch(() => {});
+    if (goHome) this.goHome(cam);
     this.h.changed();
+  }
+  // Back to where it belongs. A following turn may still be finishing ("busy"): wait and try again, for up to 20 s.
+  async goHome(cam) {
+    const home = this.homes.get(cam); if (!home) return;
+    for (let i = 0; i < 40; i++) {
+      if (this.loans.has(cam)) return;   // lent again meanwhile
+      try { await this.h.views.exclusive(cam, 'lent', () => this.h.views.ctl(cam).goto(home, this.h.views.nap)); this.h.log('camera_home', { cam }); return; }
+      catch (e) { if (!/busy/i.test(e.message)) { this.h.log('camera_loan_error', { cam, message: 'could not go home: ' + e.message }); console.error(`  ${cam}: could not go home: ${e.message}`); return; } }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    console.error(`  ${cam}: still busy after 20 s, did not go home`);
   }
 
   // Keep their face in the middle of this camera's picture; sweep slowly if it isn't there.
   async follow(cam, l, now) {
     const faces = await this.h.faces(cam, !!l.ref);
+    if (this.loans.get(cam) !== l) return;   // the loan ended while we were looking
     let target = null;
     if (l.ref) { let best = MATCH; for (const f of faces) if (f.feat) { const s = cos(f.feat, l.ref); if (s > best) { best = s; target = f; } } }
     else target = faces[0] || null;   // nobody to compare with yet: the clearest face

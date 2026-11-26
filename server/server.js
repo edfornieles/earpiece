@@ -2028,7 +2028,7 @@ const scoreRunner = new ScoreRunner({
     const lent = cameraLending.holding(id);
     if (lent) about.push(`${cameras.find((c) => c.id === lent)?.name} is turning to follow this person right now.`);
     const face = await bestFace().catch(() => null);
-    if (face) { images.push({ jpeg: face.jpeg, detail: 'high' }); about.push(`Picture ${images.length} is an enlarged close-up of the clearest face in the room right now (from ${face.camera}); check hair and clothes against the other pictures to be sure it is this person before you read their expression.`); }
+    if (face) { images.push({ jpeg: face.jpeg, detail: 'high' }); about.push(`Picture ${images.length} is an enlarged close-up of the clearest face in the room right now (from ${face.camera}). Use it only to notice a strong expression, after checking hair and clothes against the other pictures that it is this person; otherwise ignore it.`); }
     const ref = close ? null : describingFaces.get(id);
     if (close) { images.push({ jpeg: close, detail: 'low' }); about.push(`Picture ${images.length} is a close-up of this person right now.`); }
     else if (ref) { images.push({ jpeg: ref.jpeg, detail: 'low' }); about.push(`Picture ${images.length} is a close-up of this person from ${Math.round((now - ref.at) / 1000)} s ago, to recognise them; they have moved since, so find them in the grid.`); }

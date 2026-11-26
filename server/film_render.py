@@ -11,6 +11,14 @@ import json, math, os, subprocess, sys, tempfile
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+# A render never competes with a live performance: lowest priority and macOS background mode, which the ffmpeg
+# processes it starts inherit. (At normal priority it tripled how long Mother's voice took to speak.)
+try:
+    os.nice(20)
+    subprocess.run(['taskpolicy', '-b', '-p', str(os.getpid())], capture_output=True)
+except Exception:
+    pass
+
 W, H, FPS, RATE = 1280, 720, 25, 48000
 SESSION, OUT = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 load = lambda n: json.load(open(os.path.join(OUT, n)))

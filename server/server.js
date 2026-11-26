@@ -1526,7 +1526,7 @@ function transcript(s, who, text, extra = {}) {
   toControls({ type: 'transcript', id: s.id, who, text, t: clock() });
 }
 function state(s) {
-  toControls({ type: 'state', id: s.id, audioReady: !!s.audioReady, mode: s.mode, speaking: s.speaking, thinking: s.thinking, listening: s.vad.speaking, held: s.edHold, hidden: !!s.hidden, voice: voiceOf(s.id), style: styleOf(s.id), headset: s.headset, headsetDropped: !!s.headsetDropped, headsetName: s.headsetName, waiting: s.waiting, name: s.name });
+  toControls({ type: 'state', id: s.id, audioReady: !!s.audioReady, mode: s.mode, speaking: s.speaking, thinking: s.thinking, listening: s.vad.speaking, held: s.edHold, hidden: !!s.hidden, voice: voiceOf(s.id), style: styleOf(s.id), headset: s.headset, headsetDropped: !!s.headsetDropped, headsetName: s.headsetName, mic: s.mic || 'phone', earbudMic: !!settings.earbudMic?.[s.id], waiting: s.waiting, name: s.name });
 }
 function report(s, err) {
   console.error(`  #${s.id} ${err.message}`);
@@ -2279,6 +2279,11 @@ wss.on('connection', (ws, req) => {
         saveSettings(); logEvent('voice', { id: m.id || 'all', voice: m.voice, emotion: m.emotion, pitch: m.pitch, speed: m.speed });
         for (const t of sessions.values()) state(t);
       }
+      if (m.type === 'micSource' && s) {   // which mic the participant is heard through: their earbuds (call mode) or the phone
+        settings.earbudMic = { ...(settings.earbudMic || {}), [s.id]: !!m.earbuds }; saveSettings();
+        send(s.ws, { type: 'micSource', earbuds: !!m.earbuds });
+        logWho('mic_source', { ...deskWho(ws), phone: s.id, mic: m.earbuds ? 'earbuds' : 'phone' }); state(s);
+      }
       if (m.type === 'speak' && m.text) {   // typed by the director, spoken word for word in the AI's voice
         const text = String(m.text).trim().slice(0, 600);
         if (m.room) { try { roomSay(text, 'typed', deskWho(ws)); } catch (e) { send(ws, { type: 'error', text: e.message }); } }   // to: 'room' or 'both'
@@ -2370,7 +2375,7 @@ wss.on('connection', (ws, req) => {
     let s = sessions.get(id);
     if (!s) { s = new Session(id); sessions.set(id, s); }
     s.ws = ws; s.hidden = false; s.audioReady = false; s.jitterBuffer = false;
-    send(ws, { type: 'welcome', id, waiting: s.waiting, name: s.name });
+    send(ws, { type: 'welcome', id, waiting: s.waiting, name: s.name, ...(settings.earbudMic && id in settings.earbudMic ? { earbudMic: !!settings.earbudMic[id] } : {}) });
     logEvent('phone_connected', { id });
     const since = Date.now(), via = req.headers['cf-connecting-ip'] ? 'internet link' : 'local network';
     console.log(`  phone ${id} connected (${via})`);
@@ -2413,7 +2418,7 @@ wss.on('connection', (ws, req) => {
         setTimeout(() => aiTurn(s), 1200);
       }
       if (m.type === 'headset') {   // native app: the participant's earpiece came or went (e.g. walked out of Bluetooth range)
-        const was = s.headset; s.headset = !!m.connected; s.headsetName = String(m.name || '');
+        const was = s.headset; s.headset = !!m.connected; s.headsetName = String(m.name || ''); if (m.mic) { const before = s.mic; s.mic = m.mic === 'earbuds' ? 'earbuds' : 'phone'; if (before !== s.mic) state(s); }
         s.headsetDropped = was === true && !s.headset ? true : (s.headset ? false : s.headsetDropped);
         if (was !== s.headset || was === undefined) {
           logEvent(s.headset ? 'headset_connected' : 'headset_lost', { id, name: s.headsetName });

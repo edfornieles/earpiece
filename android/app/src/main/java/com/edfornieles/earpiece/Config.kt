@@ -49,6 +49,13 @@ data class Config(val base: String, val key: String, val device: Int) {
             ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("headset", name).apply()
         }
 
+        /** Earbud mic: listen AND speak through the Bluetooth earbuds (call mode). Off: earbuds play as media and the
+         *  phone's own microphone listens. Set from the control room per phone. */
+        fun earbudMic(ctx: Context): Boolean = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("earbudMic", false)
+        fun setEarbudMic(ctx: Context, on: Boolean) {
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("earbudMic", on).apply()
+        }
+
         /** Tells this phone apart from the others when it reconnects. */
         @SuppressLint("HardwareIds")
         fun deviceId(ctx: Context): String = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"

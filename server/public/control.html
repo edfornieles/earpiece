@@ -85,6 +85,7 @@
   @media (hover:none) and (pointer:coarse) { .cs-keys, #cs-keysbtn, .talkpad kbd, button kbd { display:none !important; } .talkpad .padbtn { padding:20px 8px; } }
   .talkpad .padbtn b { font-size:18px; font-weight:500; } .talkpad .padbtn small { font-size:11px; color:var(--dim); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .talkpad .padbtn kbd { margin:2px 0 0; } .talkpad #all { flex:1.3; }
+  .micsrc { display:flex; align-items:center; gap:8px; margin:6px 0; font-size:12px; } .micsrc .seg button { padding:3px 9px; font-size:12px; } .micsrc small { color:var(--dim); }
   .talkpad #roompad { flex:1.1; border-style:dashed; } .talkpad #roompad.on { border-style:solid; }
   .speakrow { display:flex; gap:8px; align-items:center; } .speakrow #speakall { flex:1; margin:0; }
   .speakrow .seg button { padding:5px 10px; font-size:12px; white-space:nowrap; }
@@ -424,6 +425,7 @@ function renderGrid(list) {
       <div class="status"></div>
       <div class="nextup"></div>
       <div class="meter" title="Their microphone"><i></i></div>
+      <div class="micsrc" title="Which microphone hears the participant. Earbuds: both directions go through the earbuds in call mode (call-quality sound). Phone: earbuds play as media, the phone's own mic listens."><span class="cs-label">Mic</span><span class="seg"><button data-mic="phone">Phone</button><button data-mic="earbuds">Earbuds</button></span><small class="miclive"></small></div>
       <button class="startvisit primary" hidden>Start visit</button>
       <div class="row">
         <button class="grow aimode switch" role="switch"></button>
@@ -491,6 +493,12 @@ function paintState(p) {
   else txt = p.mode === 'auto' ? 'AI listening' : 'AI off — you are directing';
   p.status.textContent = txt; p.status.className = cls; paintRoster(p);
   // A waiting phone with nobody queued can still start a visit (practice, a walk-in); in standby, recording comes first.
+  const ms = p.el.querySelector('.micsrc');
+  if (ms) {
+    const want = s.earbudMic ? 'earbuds' : 'phone';
+    for (const b of ms.querySelectorAll('button')) b.classList.toggle('sel', b.dataset.mic === want);
+    ms.querySelector('.miclive').textContent = s.mic && s.mic !== want ? 'switching…' : (s.mic === 'earbuds' ? 'live: earbud mic' : 'live: phone mic');
+  }
   const sv = p.el.querySelector('.startvisit');
   if (sv) { sv.hidden = !p.waiting || !!nextFor(p.id); sv.disabled = !!info?.standby; sv.textContent = info?.standby ? 'Start visit (press Start session first)' : 'Start visit'; }
 }
@@ -885,6 +893,12 @@ fetch('/api/voices?k=' + KEY).then((r) => r.json()).then((v) => {
 });
 // A phone's voice box: hear it here, or give every phone the same voice.
 const voiceOf = (root) => ({ voice: root.querySelector('.voice').value, emotion: root.querySelector('.emotion').value || '', pitch: Number(root.querySelector('.pitch').value), speed: Number(root.querySelector('.speed').value) });
+document.addEventListener('click', (e) => {
+  const mb = e.target.closest('.micsrc button'); if (!mb) return;
+  const id = Number(mb.closest('[data-phone]')?.dataset.phone); if (!id || !ws) return;
+  ws.send(JSON.stringify({ type: 'micSource', id, earbuds: mb.dataset.mic === 'earbuds' }));
+  toast(mb.dataset.mic === 'earbuds' ? `Phone ${id}: switching to the earbud mic (call-quality sound both ways)` : `Phone ${id}: switching to the phone's own mic`);
+});
 document.addEventListener('click', (e) => {
   const box = e.target.closest('.voicebox'); if (!box) return;
   if (e.target.closest('.vpreview')) { const v = voiceOf(box), a = $('previewAudio'); a.src = '/api/preview?' + new URLSearchParams({ k: KEY, ...v, r: Date.now() }); a.play(); }

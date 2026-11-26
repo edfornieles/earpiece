@@ -68,6 +68,7 @@ class AudioService : Service() {
         @Volatile var resetCount = 0          // bumps when the control room ends a participant
         @Volatile var headset = false         // a Bluetooth / wired headset is connected
         @Volatile var headsetName = ""
+        @Volatile var earbudMic = false       // listening and speaking both go through the earbuds (call mode)
         @Volatile var person = ""             // who is on this phone now ("" = nobody)
         @Volatile var next = ""               // who's assigned to it next
         @Volatile var standby = false         // the control room isn't recording a session
@@ -112,6 +113,7 @@ class AudioService : Service() {
         @Suppress("DEPRECATION")
         val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
         wifi = wm.createWifiLock(mode, "earpiece:wifi").apply { acquire() }
+        earbudMic = Config.earbudMic(this)
         startAudio()
         watchHeadset()
         running = true
@@ -194,7 +196,7 @@ class AudioService : Service() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 retry = 0; connected = true; status = "connected"
                 sendJson(JSONObject().put("type", "caps").put("jitterBuffer", true))   // lets the server send speech further ahead
-                sendJson(JSONObject().put("type", "headset").put("connected", headset).put("name", headsetName))
+                sendJson(JSONObject().put("type", "headset").put("connected", headset).put("name", headsetName).put("mic", if (earbudMic) "earbuds" else "phone"))
                 sendDevice()
                 if (record?.recordingState == AudioRecord.RECORDSTATE_RECORDING) sendJson(JSONObject().put("type", "hello"))
             }
@@ -206,6 +208,7 @@ class AudioService : Service() {
                         // the server may give a different number (e.g. this one was taken): remember it
                         if (slot > 0 && Config.load(this@AudioService)?.device != slot) Config.setDevice(this@AudioService, slot)
                         readWho(m)
+                        if (m.has("earbudMic") && m.optBoolean("earbudMic") != earbudMic) { val on = m.optBoolean("earbudMic"); main.post { setEarbudMic(on) } }
                         // the server remembers whether a participant was mid-session when we dropped
                         val serverWaiting = m.optBoolean("waiting", true)
                         if (!serverWaiting && waiting) { waiting = false; micOn = true }
@@ -218,6 +221,7 @@ class AudioService : Service() {
                         if (person.isEmpty() && !waiting) { waiting = true; micOn = false; flush(); resetCount++ }
                     }
                     "identify" -> main.post { identify() }
+                    "micSource" -> { val on = m.optBoolean("earbuds"); if (on != earbudMic) main.post { setEarbudMic(on) } }
                     "setSlot" -> { val n = m.optInt("slot"); if (n > 0) { Config.setDevice(this@AudioService, n); slot = n; renumbered = System.currentTimeMillis() } }
                     "reset" -> { flush(); waiting = true; micOn = false; resetCount++ }
                     "full" -> status = "all phone slots are in use"
@@ -285,14 +289,14 @@ class AudioService : Service() {
         // Wi-Fi until the connection to Mother dropped. Earbuds play as media (A2DP); the phone's own
         // microphone listens. Clear any call route an earlier version left behind.
         clearRoute(am)
-        am.mode = AudioManager.MODE_NORMAL
+        if (earbudMic) { am.mode = AudioManager.MODE_IN_COMMUNICATION; routeToEarbuds(am) } else am.mode = AudioManager.MODE_NORMAL
 
         // Playback: what the director / AI says, into the earphones.
         val outRate = WIRE_RATE
         val minOut = AudioTrack.getMinBufferSize(outRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         track = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setUsage(if (earbudMic) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setAudioFormat(AudioFormat.Builder().setSampleRate(outRate)
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
@@ -336,12 +340,13 @@ class AudioService : Service() {
         } ?: 16000
         val minIn = AudioRecord.getMinBufferSize(inRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = try {
-            AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, inRate,
+            AudioRecord(if (earbudMic) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.VOICE_RECOGNITION, inRate,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(minIn, inRate / 5 * 2))
         } catch (e: SecurityException) { status = "microphone permission missing"; return }
         record = rec
-        am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
-            ?.let { rec.preferredDevice = it }
+        am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
+            if (earbudMic) it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET else it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC
+        }?.let { rec.preferredDevice = it }
         val sid = rec.audioSessionId
         if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(sid)?.enabled = true
         if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(sid)?.enabled = true
@@ -384,13 +389,14 @@ class AudioService : Service() {
             if (stopping) return@Runnable
             // Android plays media to the connected earbuds (or wired earphones) by itself; nothing to route.
             // Keep the phone out of call mode if something else switched it.
-            if (am.mode != AudioManager.MODE_NORMAL) { clearRoute(am); am.mode = AudioManager.MODE_NORMAL }
+            if (earbudMic) { if (am.mode != AudioManager.MODE_IN_COMMUNICATION) am.mode = AudioManager.MODE_IN_COMMUNICATION; routeToEarbuds(am) }
+            else if (am.mode != AudioManager.MODE_NORMAL) { clearRoute(am); am.mode = AudioManager.MODE_NORMAL }
             val routed = track?.routedDevice?.takeIf { it.type in headsetTypes }
             val now = routed != null
             val name = routed?.productName?.toString() ?: ""
             if (now != headset || name != headsetName) {
                 headset = now; headsetName = name
-                sendJson(JSONObject().put("type", "headset").put("connected", now).put("name", name))
+                sendJson(JSONObject().put("type", "headset").put("connected", now).put("name", name).put("mic", if (earbudMic) "earbuds" else "phone"))
                 if (!now) flush()
             }
         }
@@ -402,6 +408,30 @@ class AudioService : Service() {
         main.post(check)
         // Notice route changes that come without a device connection event.
         main.postDelayed(object : Runnable { override fun run() { if (!stopping) { check.run(); main.postDelayed(this, 5000) } } }, 5000)
+    }
+
+    /** Send the call-mode audio (both ways) through the Bluetooth earbuds. */
+    private fun routeToEarbuds(am: AudioManager) {
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                val bt = am.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                if (bt != null && am.communicationDevice?.id != bt.id) am.setCommunicationDevice(bt)
+            } else @Suppress("DEPRECATION") run { if (!am.isBluetoothScoOn) { am.startBluetoothSco(); am.isBluetoothScoOn = true } }
+        } catch (_: Exception) {}
+    }
+
+    /** Switch between earbud mic (call mode) and phone mic (media mode): rebuild the audio paths. */
+    private fun setEarbudMic(on: Boolean) {
+        Config.setEarbudMic(this, on)
+        earbudMic = on
+        micThread?.interrupt(); playThread?.interrupt()
+        try { micThread?.join(500); playThread?.join(500) } catch (_: Exception) {}
+        try { record?.stop(); record?.release() } catch (_: Exception) {}
+        try { track?.stop(); track?.release() } catch (_: Exception) {}
+        record = null; track = null
+        startAudio()
+        headsetName = ""   // the next check reports the new route to the desk
+        sendJson(JSONObject().put("type", "headset").put("connected", headset).put("name", headsetName).put("mic", if (on) "earbuds" else "phone"))
     }
 
     private fun clearRoute(am: AudioManager) {

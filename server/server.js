@@ -894,7 +894,17 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true });
       } catch (e) { return json(res, { error: e.message }, 400); }
     }
-    if (p === '/api/scores' && req.method === 'GET') return json(res, scoreRunner.status());
+    if (p === '/api/scores' && req.method === 'GET') return json(res, { ...scoreRunner.status(), lending: cameraLending.status() });
+    if (p === '/api/camera-lending' && req.method === 'POST') {   // {movable: [camera ids]}: which cameras agents may turn; {test: phone}: borrow one now
+      try {
+        const d = await readBody(req, 10e3);
+        if (d.test) { cameraLending.want(Number(d.test), 'close', describingFeats.get(Number(d.test)) || null); return json(res, { ok: true, lending: cameraLending.status() }); }
+        const ids = (d.movable || []).filter((id) => cameras.some((c) => c.id === id && cameraViews.controllable(c)));
+        settings.movableCams = ids; saveSettings(); cameraLending.setMovable(ids);
+        logWho('camera_lending', { ...whoLabel(who), movable: ids });
+        return json(res, { ok: true, lending: cameraLending.status() });
+      } catch (e) { return json(res, { error: e.message }, 400); }
+    }
     if (p === '/api/scores' && req.method === 'POST') {   // {op:'start', id, params} | {op:'set', params} | hold | resume | next | stop
       try {
         const d = await readBody(req, 10e3);
@@ -1941,6 +1951,32 @@ async function scanFaces(now = Date.now()) {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 setInterval(() => { scanFaces().catch(() => {}); }, 5000).unref();   // keeps learning which "faces" are pictures
+// Faces in one camera's latest picture, optionally with recognition vectors (for following one particular person).
+async function facesIn(camId, embed = false) {
+  const cam = cameras.find((c) => c.id === camId), now = Date.now();
+  if (!cam?.frame || now - cam.frameAt > 4000) return [];
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mother-face1-'));
+  try {
+    const f = path.join(dir, '0.jpg'); fs.writeFileSync(f, cam.frame);
+    const r = await new Promise((ok) => { faceScan.queue.push(ok); faceWorker().stdin.write(JSON.stringify({ images: [f], embed }) + '\n'); setTimeout(() => ok({ faces: [] }), 3000); });
+    return r.faces || [];
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+// A face vector from a close-up jpeg (the participant Describing last saw clearly), to recognise them in other cameras.
+async function faceVector(jpeg) {
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mother-ref-'));
+  try {
+    const f = path.join(dir, '0.jpg'); fs.writeFileSync(f, jpeg);
+    const r = await new Promise((ok) => { faceScan.queue.push(ok); faceWorker().stdin.write(JSON.stringify({ images: [f], embed: true }) + '\n'); setTimeout(() => ok({ faces: [] }), 3000); });
+    return r.faces?.find((x) => x.feat)?.feat || null;
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+// Cameras that can turn are lent to agents in turn (camera-lending.js); the others stay fixed and wide.
+const { CameraLending } = require('./camera-lending');
+const cameraLending = new CameraLending({ views: cameraViews, cameras, faces: facesIn, log: (t, d) => logEvent(t, d),
+  changed: () => { try { toControls({ type: 'score', ...scoreRunner.status(), lending: cameraLending.status() }); } catch {} } },
+  { movable: settings.movableCams || ['cam3', 'cam5'] });
+const describingFeats = new Map();   // phone -> face vector from its last clear close-up
 // The clearest real face right now, cropped with some room around it and enlarged, as a jpeg.
 async function bestFace() {
   const faces = (await scanFaces()).filter((f) => !f.picture && f.size >= 28);
@@ -1986,8 +2022,11 @@ const scoreRunner = new ScoreRunner({
       const cam = cameras.find((c) => c.id === v.cameraId), f = identity.full;
       const frame = f?.camId === v.cameraId && f.frame && now - f.at < 3000 ? f.frame : cam?.frame && now - cam.frameAt < 3000 ? cam.frame : null;
       const { me } = participantTrack(id, v, now);
-      if (frame && me?.visible && me.box) { close = await cropJpeg(frame, me.box); describingFaces.set(id, { jpeg: close, at: now }); }
+      if (frame && me?.visible && me.box) { close = await cropJpeg(frame, me.box); describingFaces.set(id, { jpeg: close, at: now }); faceVector(close).then((v) => { if (v) describingFeats.set(id, v); }).catch(() => {}); }
     }
+    if (!close) cameraLending.want(id, 'lost', describingFeats.get(id) || null);   // tracking hasn't got them: borrow a camera that can turn
+    const lent = cameraLending.holding(id);
+    if (lent) about.push(`${cameras.find((c) => c.id === lent)?.name} is turning to follow this person right now.`);
     const face = await bestFace().catch(() => null);
     if (face) { images.push({ jpeg: face.jpeg, detail: 'high' }); about.push(`Picture ${images.length} is an enlarged close-up of the clearest face in the room right now (from ${face.camera}); check hair and clothes against the other pictures to be sure it is this person before you read their expression.`); }
     const ref = close ? null : describingFaces.get(id);
@@ -2007,7 +2046,7 @@ const scoreRunner = new ScoreRunner({
     say(s, text, turn, u);
   },
   log: (type, data) => logEvent(type, data),
-  changed: () => toControls({ type: 'score', ...scoreRunner.status() }),
+  changed: () => toControls({ type: 'score', ...scoreRunner.status(), lending: cameraLending.status() }),
 });
 // The model is asked for {"action","text","reason"}; if it answers in prose anyway, speak the prose
 // rather than freezing the program.

@@ -940,6 +940,7 @@ function paintScore(d) {
   const mmss = (s) => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   $('sc-status').textContent = on ? `${d.held ? 'Held · ' : ''}${d.movement} · ${mmss(d.elapsed)} of ${d.minutes}:00 · ` + (d.phones || []).map((p) => `phone ${p.id}: “${(p.last || '…').slice(0, 70)}${p.last.length > 70 ? '…' : ''}”`).join(' · ')
     : (sc?.about || '');
+  const L = d.lending; if (L) $('sc-status').textContent += `  ·  Cameras that turn: ${L.movable.join(', ') || 'none'}` + (L.loans.length ? ' — ' + L.loans.map((l) => `${l.camera} following phone ${l.phone} (${l.reason === 'lost' ? 'looking for them' : 'close-up'}, ${l.secs} s${l.sees ? ', sees them' : ''})`).join('; ') : '');
 }
 const scoreValues = () => Object.fromEntries([...$('sc-params').querySelectorAll('select')].map((x) => [x.dataset.k, x.value]));
 $('sc-pick').onchange = () => paintScore({ running: false, scores });

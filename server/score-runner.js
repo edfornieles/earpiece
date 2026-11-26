@@ -50,13 +50,12 @@ class ScoreRunner {
     if (!this.running || this.held) return;
     const now = Date.now(), p = this.progress(now);
     if (p >= 1) return this.stop('finished');
-    const every = Number(this.params.every) || 22;
     for (const id of this.h.phones()) {
       const me = this.people.get(id) || { lines: [], next: now + 1500 + this.people.size * 3000, working: false };   // stagger the phones
       this.people.set(id, me);
       if (me.working || now < me.next || this.h.busy(id)) continue;
       me.working = true;
-      this.line(id, me, p).finally(() => { me.working = false; me.next = Date.now() + (Number(this.params.every) || 22) * 1000 * (0.85 + Math.random() * 0.3); });   // read again: it can change while running
+      this.line(id, me, p).finally(() => { me.working = false; const every = Number(this.params.every ?? 22); me.next = Date.now() + (every > 0 ? every * 1000 * (0.85 + Math.random() * 0.3) : 300); });   // 0 = back to back: as soon as the last line has been said   // read again: it can change while running
     }
   }
 

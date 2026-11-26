@@ -41,7 +41,7 @@ module.exports = {
   params: [
     { key: 'minutes', label: 'Length', type: 'select', options: [5, 10, 15, 20, 30].map((m) => ({ value: m, label: `${m} min` })), default: 15 },
     { key: 'split', label: 'Physical for', type: 'select', options: [0.33, 0.5, 0.66].map((v) => ({ value: v, label: `${Math.round(v * 100)}%` })), default: 0.5 },
-    { key: 'every', label: 'A line every', type: 'select', options: [8, 10, 12, 16, 22, 30].map((s) => ({ value: s, label: `${s} s` })), default: 10, live: true },
+    { key: 'every', label: 'Comments', type: 'select', options: [{ value: 0, label: 'Back to back' }, ...[5, 8, 10, 15, 22, 30, 45].map((s) => ({ value: s, label: `every ${s} s` }))], default: 10, live: true },
     { key: 'tone', label: 'Projection tone', type: 'select', options: TONES.map(({ value, label }) => ({ value, label })), default: 3, live: true },
   ],
   movements: (p) => [

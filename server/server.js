@@ -1895,23 +1895,50 @@ async function lookAt(id, question) {
 // ---------- Describing: an automatic program (describing.js). Mother tells each participant, in their own earpiece, what it
 // sees them doing; physical at first, then behaviour, then projections about their life. Only phones taking part. ----------
 const { Describing } = require('./describing');
+const describingFaces = new Map();   // phone -> { jpeg, at }: the last good close-up of that participant
+// Every camera's latest picture in one grid (3 across when there are more than 4), in the cameras' order.
+async function cameraGrid(now = Date.now()) {
+  const live = cameras.filter((c) => c.frame && now - c.frameAt < 4000); if (!live.length) return null;
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mother-grid-'));
+  try {
+    live.forEach((c, i) => fs.writeFileSync(path.join(dir, `${i}.jpg`), c.frame));
+    const n = live.length, cols = n <= 1 ? 1 : n <= 4 ? 2 : 3, rows = Math.ceil(n / cols), W = 640, H = 360;
+    const inputs = live.flatMap((_, i) => ['-i', path.join(dir, `${i}.jpg`)]);
+    const scaled = live.map((_, i) => `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2[v${i}]`).join(';');
+    const layout = live.map((_, i) => `${(i % cols) * W}_${Math.floor(i / cols) * H}`).join('|');
+    const graph = n === 1 ? `${scaled};[v0]copy[out]` : `${scaled};${live.map((_, i) => `[v${i}]`).join('')}xstack=inputs=${n}:layout=${layout}:fill=black[out]`;
+    const r = require('child_process').spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', ...inputs, '-filter_complex', graph, '-map', '[out]', '-frames:v', '1', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'], { maxBuffer: 20e6 });
+    if (r.status !== 0 || !r.stdout?.length) return null;
+    const where = (i) => `${['top', 'middle', 'bottom'][Math.floor(i / cols)] || 'row ' + (Math.floor(i / cols) + 1)}-${cols === 3 ? ['left', 'centre', 'right'][i % cols] : ['left', 'right'][i % cols]}`;
+    return { jpeg: r.stdout, order: live.map((c, i) => `${where(i)}: ${c.name}`).join(', ') };
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
 const describingPhones = () => [...sessions.values()].filter((s) => s.ws && s.ws.readyState === 1 && (!s.waiting || STANDBY)).map((s) => s.id);
 const describing = new Describing({
   phones: describingPhones,
   busy: (id) => { const s = sessions.get(id); return !s || s.speaking || s.thinking || s.edHold || !!s.live || !!programRunner?.manages(id); },
   see: async (id) => {
     const v = roomObserver.tracking.view(), now = Date.now();
-    const notes = perceptionFor(id) + roomNow(id);
-    if (!v.running) return { jpeg: null, notes };
-    const cam = cameras.find((c) => c.id === v.cameraId), f = identity.full;
-    const frame = f?.camId === v.cameraId && f.frame && now - f.at < 3000 ? f.frame : cam?.frame && now - cam.frameAt < 3000 ? cam.frame : null;
-    if (!frame) return { jpeg: null, notes };
-    const { me } = participantTrack(id, v, now);
-    const jpeg = me?.visible && me.box ? await cropJpeg(frame, me.box) : frame;
-    let file = ''; try { const dir = path.join(SESSION_DIR, 'looks'); fs.mkdirSync(dir, { recursive: true }); file = `looks/describing-${id}-${clock().replace('.', '_')}.jpg`; fs.writeFileSync(path.join(SESSION_DIR, file), jpeg); } catch {}
-    return { jpeg, notes: notes + (me?.visible ? '' : ' (This picture is the whole room; they may not be in it.)'), file };
+    const notes = perceptionFor(id) + roomNow(id), images = [], about = [];
+    // every camera at once, so they can be found wherever they are in the room
+    const grid = await cameraGrid(now);
+    if (grid) { images.push({ jpeg: grid.jpeg, detail: 'high' }); about.push(`Picture 1 is a grid of every camera view, ${grid.order}.`); }
+    // a close-up: now if the tracking camera has them, otherwise the last good one (to know who they are)
+    let close = null;
+    if (v.running) {
+      const cam = cameras.find((c) => c.id === v.cameraId), f = identity.full;
+      const frame = f?.camId === v.cameraId && f.frame && now - f.at < 3000 ? f.frame : cam?.frame && now - cam.frameAt < 3000 ? cam.frame : null;
+      const { me } = participantTrack(id, v, now);
+      if (frame && me?.visible && me.box) { close = await cropJpeg(frame, me.box); describingFaces.set(id, { jpeg: close, at: now }); }
+    }
+    const ref = close ? null : describingFaces.get(id);
+    if (close) { images.push({ jpeg: close, detail: 'low' }); about.push(`Picture ${images.length} is a close-up of this person right now.`); }
+    else if (ref) { images.push({ jpeg: ref.jpeg, detail: 'low' }); about.push(`Picture ${images.length} is a close-up of this person from ${Math.round((now - ref.at) / 1000)} s ago, to recognise them; they have moved since, so find them in the grid.`); }
+    else about.push('There is no close-up of this person yet; if several people are in view, describe the one tracking places nearest to what it says.');
+    let file = ''; try { const dir = path.join(SESSION_DIR, 'looks'); fs.mkdirSync(dir, { recursive: true }); file = `looks/describing-${id}-${clock().replace('.', '_')}.jpg`; fs.writeFileSync(path.join(SESSION_DIR, file), grid?.jpeg || close || ref?.jpeg || Buffer.alloc(0)); } catch {}
+    return { images, about: about.join(' '), notes, file };
   },
-  write: (jpeg, system, user) => ai.write(jpeg, system, user),
+  write: (images, system, user) => ai.write(images, system, user),
   speak: (id, text) => {
     const s = sessions.get(id); if (!s?.ws) return;
     const turn = ++s.turn, u = ++U;

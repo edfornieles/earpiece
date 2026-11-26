@@ -183,11 +183,13 @@ async function look(jpeg, question, hints = '') {
   if (!r.ok) throw new Error(`vision ${r.status}`);
   return ((await r.json()).choices[0].message.content || '').trim();
 }
-// One line for an automatic program (e.g. Describing): a picture (or none) plus instructions, a little creative.
-async function write(jpeg, system, user) {
+// One line for an automatic program (e.g. Describing): pictures (or none) plus instructions, a little creative.
+// images: a jpeg Buffer, or a list of { jpeg, detail } ('low' is cheap and fast; 'high' for a grid of camera views).
+async function write(images, system, user) {
   if (MOCK) return 'You are standing very still, your weight on one foot.';
   const content = [{ type: 'text', text: user }];
-  if (jpeg) content.push({ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + Buffer.from(jpeg).toString('base64'), detail: 'low' } });
+  const list = !images ? [] : Buffer.isBuffer(images) ? [{ jpeg: images, detail: 'low' }] : images.filter((x) => x && x.jpeg);
+  for (const x of list) content.push({ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + Buffer.from(x.jpeg).toString('base64'), detail: x.detail || 'low' } });
   const r = await fetch(`${OPENAI}/chat/completions`, {
     method: 'POST', signal: AbortSignal.timeout(15000),
     headers: { authorization: `Bearer ${KEY()}`, 'content-type': 'application/json' },

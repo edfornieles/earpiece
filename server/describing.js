@@ -9,8 +9,9 @@
 //
 // The server passes in what this needs (h):
 //   phones()          ids of the phones taking part
-//   see(id)           { jpeg|null, notes, file } : a close-up of that participant now and what tracking knows
-//   write(jpeg, sys, user)  one line from the vision model
+//   see(id)           { images: [{ jpeg, detail }], about, notes, file } : every camera view as one grid, plus a
+//                     close-up of that participant (now, or the last time tracking saw them), and what tracking knows
+//   write(images, sys, user)  one line from the vision model
 //   speak(id, text)   say it in that phone's Mother voice (transcript + recording)
 //   busy(id)          true while that phone is speaking, thinking or held
 //   log(type, data), changed()
@@ -24,7 +25,7 @@ const SYSTEM = `You are Mother, a voice in one person's earpiece in a gallery, p
 Speak to them as "you", in the present tense. One or two short sentences, at most 28 words. Calm, attentive, precise; never cruel, never flattering.
 Never use names. Never give instructions or ask questions. Never repeat or closely paraphrase anything you have already said to them.
 Never mention or guess race, ethnicity, nationality, religion, health, disability, sexuality, body size or weight, attractiveness, or age. Work from what they do, how they hold themselves, and what they wear or carry.
-If the picture does not clearly show them, say something true about not seeing them right now, without guessing where they are.
+You get a grid of every camera view in the room, and usually a close-up of this person (now, or from earlier) so you know who they are. Find them across all the views before you speak; they may be walking between cameras. Only if they are in none of the views, say something true about not seeing them, without guessing where they are.
 Reply with the line only.`;
 
 class Describing {
@@ -66,11 +67,12 @@ class Describing {
     const seen = await this.h.see(id);
     const said = me.lines.slice(-8).map((l) => `- (${l.movement}) ${l.text}`).join('\n') || '(nothing yet)';
     const user = `The piece is ${pct}% through (${Math.round(this.minutes * p)} of ${this.minutes} minutes). Current movement: ${mv.label}. ${mv.guide}
-${pct % 33 > 25 && mv.name !== 'projection' ? 'You are near the end of this movement: begin to lean toward the next.\n' : ''}What tracking knows about them now: ${seen.notes || 'nothing'}
+${pct % 33 > 25 && mv.name !== 'projection' ? 'You are near the end of this movement: begin to lean toward the next.\n' : ''}The pictures: ${seen.about || 'none'}
+What floor tracking knows about them now: ${seen.notes || 'nothing'}
 What you have already said to them (do not repeat):
 ${said}`;
     let text = '';
-    try { text = (await this.h.write(seen.jpeg, SYSTEM, user)).replace(/^["“]|["”]$/g, '').trim(); }
+    try { text = (await this.h.write(seen.images, SYSTEM, user)).replace(/^["“]|["”]$/g, '').trim(); }
     catch (e) { this.h.log('describing_error', { id, message: e.message }); return; }
     if (!text || !this.running || this.held) return;
     me.lines.push({ movement: mv.name, text, at: this.elapsed() });

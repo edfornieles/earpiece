@@ -93,6 +93,8 @@ class AudioService : Service() {
     @Volatile private var buffering = true
     @Volatile private var lastArrival = 0L
     @Volatile private var flushNow = false
+    @Volatile private var jitterMs = 80           // how much speech to hold before playing (grows only if the link stutters)
+    @Volatile private var steadySince = 0L
 
     private var wake: PowerManager.WakeLock? = null
     private var wifi: WifiManager.WifiLock? = null
@@ -242,7 +244,7 @@ class AudioService : Service() {
                     lastReceipt = now
                     webSocket.send(JSONObject().put("type", "telemetry")
                         .put("audioSamplesReceived", receivedSamples)
-                        .put("playLevel", playLevel.toDouble()).toString())
+                        .put("playLevel", playLevel.toDouble()).put("jitterMs", jitterMs).toString())
                 }
                 // the server sends up to 0.8 s ahead; never fall more than 1.5 s behind
                 var queued = playQueue.sumOf { it.size }
@@ -301,8 +303,10 @@ class AudioService : Service() {
             .setAudioFormat(AudioFormat.Builder().setSampleRate(outRate)
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            .setBufferSizeInBytes(max(minOut, outRate / 5 * 2))
+            // Small output buffer: whatever sits in it is delay. (It used to hold 0.2 s, kept full of silence.)
+            .setBufferSizeInBytes(max(minOut, outRate / 50 * 2 * 2))
             .setTransferMode(AudioTrack.MODE_STREAM)
+            .apply { if (Build.VERSION.SDK_INT >= 26) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
             .build().also { it.play() }
 
         playThread = Thread {
@@ -313,17 +317,22 @@ class AudioService : Service() {
                     buffering = true
                     try { track?.pause(); track?.flush(); track?.play() } catch (_: Exception) {}
                 }
-                // Jitter buffer: hold ~0.25 s before starting a line (or less if the line is short and
-                // nothing more is coming), and refill after a gap instead of stuttering through it.
+                // Jitter buffer: hold a little before starting a line (or less if the line is short and nothing
+                // more is coming), and refill after a gap instead of stuttering through it. It starts small (80 ms)
+                // and only grows when the network actually stutters; it shrinks back when the link is steady.
                 val t = track ?: break
                 if (buffering) {
                     val queued = playQueue.sumOf { it.size }
-                    val quiet = System.currentTimeMillis() - lastArrival > 150
-                    if (queued >= WIRE_RATE / 4 || (queued > 0 && quiet)) buffering = false
+                    val quiet = System.currentTimeMillis() - lastArrival > 120
+                    if (queued >= WIRE_RATE * jitterMs / 1000 || (queued > 0 && quiet)) buffering = false
                     else { t.write(silence, 0, silence.size); continue }
                 }
                 val chunk = try { playQueue.pollFirst(20, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { break }
-                if (chunk == null) buffering = true
+                val now = System.currentTimeMillis()
+                if (chunk == null) {
+                    buffering = true
+                    if (now - lastArrival < 300) { jitterMs = minOf(260, jitterMs + 40); steadySince = now }   // ran dry mid-line
+                } else if (now - steadySince > 10000 && jitterMs > 60) { jitterMs -= 10; steadySince = now }
                 if (chunk != null && t.routedDevice?.let { it.type in headsetTypes } == true) {
                     t.write(chunk, 0, chunk.size)
                 } else {

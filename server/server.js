@@ -1737,7 +1737,7 @@ const preRollFor = (s) => {
   if (s.live) return 0.2;   // the realtime voice streams faster than it plays
   const est = s.estSeconds || 3, r = Math.max(0.2, Math.min(1.5, ttsRate * 0.85));   // a little pessimistic
   // enough in hand to cover the speed shortfall over the line, and the longest recent pause in the voice
-  return Math.min(8, Math.max(0.3, est * (1 - r), Math.min(2.5, ttsStall * 1.2)));
+  return Math.min(8, Math.max(0.15, est * (1 - r), Math.min(2.5, ttsStall * 1.2)));
 };
 function say(s, text, turn, u) {
   s.speaking = true; s.ttsDone = false; s.vad.strict = true; s.playU = u; s.playStarted = false;
@@ -2097,12 +2097,16 @@ function talkStart(target, as, owner) {
   if (cur) talkStop(owner);
   const t = { owner, wanted, targets: new Set(), visits: new Map(), programTokens:new Map(), pcm: [], as, t0: Date.now(), room: false };
   talks.set(owner, t); addTargets(t, wanted); if (room) roomJoin(t);
+  if (as === 'voice') warmVoice();   // the voice service is slow on its first line after a quiet spell: wake it while they talk
 }
 // The room speaker joins a hold: live, it plays the director's voice as it comes; in AI voice, it speaks the words after.
 function roomJoin(t) {
   t.room = true;
   if (t.as === 'own') { try { t.roomLive = roomSpeaker.live(RATE); } catch (e) { send(t.owner, { type: 'error', text: e.message }); } }
 }
+// Speak a throwaway word, unheard, so the next real line starts in ~0.1 s instead of ~1 s. At most every 20 s.
+let warmedAt = 0;
+function warmVoice() { if (Date.now() - warmedAt < 20000) return; warmedAt = Date.now(); ai.speak('Hm.', () => {}, null, ai.voiceUrl(ai.VOICES[0].name)).catch(() => {}); }
 // AI voice, transcribed while the director is still talking: the audio is cut at natural pauses and each finished
 // phrase goes off to be transcribed at once, so on release only the last phrase is left to wait for.
 const PHRASE_PAUSE = 0.35, PHRASE_MIN = 0.8;   // seconds of quiet that end a phrase; shortest phrase worth sending alone

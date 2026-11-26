@@ -894,18 +894,19 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true });
       } catch (e) { return json(res, { error: e.message }, 400); }
     }
-    if (p === '/api/describing' && req.method === 'GET') return json(res, describing.status());
-    if (p === '/api/describing' && req.method === 'POST') {   // {op:'start'|'hold'|'resume'|'skip'|'stop', minutes?, every?}
+    if (p === '/api/scores' && req.method === 'GET') return json(res, scoreRunner.status());
+    if (p === '/api/scores' && req.method === 'POST') {   // {op:'start', id, params} | {op:'set', params} | hold | resume | next | stop
       try {
         const d = await readBody(req, 10e3);
         if (d.op === 'start') {
           if (!describingPhones().length) throw Error('No phone is taking part: connect a phone and start its visit.');
-          for (const id of describingPhones()) { const s = sessions.get(id); s.mode = 'off'; stopAi(s, 'Describing started'); state(s); }   // Mother only describes; she doesn't converse
-          describing.start(d);
-        } else if (['hold', 'resume', 'skip', 'stop'].includes(d.op)) describing[d.op]();
-        else throw Error('Choose start, hold, resume, skip or stop.');
-        logWho('describing_' + d.op, { ...whoLabel(who), minutes: d.minutes });
-        return json(res, { ok: true, ...describing.status() });
+          for (const id of describingPhones()) { const s = sessions.get(id); s.mode = 'off'; stopAi(s, 'automatic score started'); state(s); }   // the score speaks; Mother doesn't converse
+          scoreRunner.start(String(d.id || ''), d.params || {});
+        } else if (d.op === 'set') scoreRunner.set(d.params || {});
+        else if (['hold', 'resume', 'next', 'stop'].includes(d.op)) scoreRunner[d.op]();
+        else throw Error('Choose start, set, hold, resume, next or stop.');
+        logWho('score_' + d.op, { ...whoLabel(who), score: d.id || scoreRunner.score?.id, params: d.params });
+        return json(res, { ok: true, ...scoreRunner.status() });
       } catch (e) { return json(res, { error: e.message }, 400); }
     }
     if (p === '/api/speaker' && req.method === 'GET') return json(res, { ...roomSpeaker.status(), voice: roomSpeaker.voice || ai.VOICES[0].name, voices: ai.VOICES.map((v) => v.name) });
@@ -1892,9 +1893,10 @@ async function lookAt(id, question) {
   try { const answer = await ai.look(crop, question, hints); logEvent('look', { id, question, answer, hints, file, ms: Date.now() - t0 }); lastLook.set(id, { at: Date.now(), question, answer, file }); return answer; }
   catch (e) { logEvent('look', { id, question, error: e.message }); return 'I tried to look but the camera analysis failed.'; }
 }
-// ---------- Describing: an automatic program (describing.js). Mother tells each participant, in their own earpiece, what it
-// sees them doing; physical at first, then behaviour, then projections about their life. Only phones taking part. ----------
-const { Describing } = require('./describing');
+// ---------- Automatic scores (score-runner.js, scores/*.js): programs Mother runs by itself in the space, e.g.
+// Describing. Mother tells each participant, in their own earpiece, what it sees. Only phones taking part. ----------
+const { ScoreRunner } = require('./score-runner');
+const describingPhones = () => [...sessions.values()].filter((s) => s.ws && s.ws.readyState === 1 && (!s.waiting || STANDBY)).map((s) => s.id);
 // What floor tracking adds, as plain information: it only covers ONE camera, so "not seen" there means "look in the
 // other views", never "they are not here" (Mother's usual perception lines say that firmly, which made Describing give up).
 function describingNotes(id, v, now) {
@@ -1924,8 +1926,7 @@ async function cameraGrid(now = Date.now()) {
     return { jpeg: r.stdout, order: live.map((c, i) => `${where(i)}: ${c.name}`).join(', ') };
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
-const describingPhones = () => [...sessions.values()].filter((s) => s.ws && s.ws.readyState === 1 && (!s.waiting || STANDBY)).map((s) => s.id);
-const describing = new Describing({
+const scoreRunner = new ScoreRunner({
   phones: describingPhones,
   busy: (id) => { const s = sessions.get(id); return !s || s.speaking || s.thinking || s.edHold || !!s.live || !!programRunner?.manages(id); },
   see: async (id) => {
@@ -1949,17 +1950,17 @@ const describing = new Describing({
     let file = ''; try { const dir = path.join(SESSION_DIR, 'looks'); fs.mkdirSync(dir, { recursive: true }); file = `looks/describing-${id}-${clock().replace('.', '_')}.jpg`; fs.writeFileSync(path.join(SESSION_DIR, file), grid?.jpeg || close || ref?.jpeg || Buffer.alloc(0)); } catch {}
     return { images, about: about.join(' '), notes, file };
   },
-  write: (images, system, user) => ai.write(images, system, user),
-  speak: (id, text) => {
+  write: (images, system, user, opts) => ai.write(images, system, user, opts),
+  speak: (id, text, title) => {
     const s = sessions.get(id); if (!s?.ws) return;
     const turn = ++s.turn, u = ++U;
     s.history.push({ role: 'assistant', content: text });
-    transcript(s, 'ai', text, { u, ...voiceInfo(s.id), program: 'Describing' });
+    transcript(s, 'ai', text, { u, ...voiceInfo(s.id), program: title });
     s.lastActivity = Date.now();
     say(s, text, turn, u);
   },
   log: (type, data) => logEvent(type, data),
-  changed: () => toControls({ type: 'describing', ...describing.status() }),
+  changed: () => toControls({ type: 'score', ...scoreRunner.status() }),
 });
 // The model is asked for {"action","text","reason"}; if it answers in prose anyway, speak the prose
 // rather than freezing the program.

@@ -185,7 +185,7 @@ async function look(jpeg, question, hints = '') {
 }
 // One line for an automatic program (e.g. Describing): pictures (or none) plus instructions, a little creative.
 // images: a jpeg Buffer, or a list of { jpeg, detail } ('low' is cheap and fast; 'high' for a grid of camera views).
-async function write(images, system, user) {
+async function write(images, system, user, { fast = false, maxTokens = 80 } = {}) {
   if (MOCK) return 'You are standing very still, your weight on one foot.';
   const content = [{ type: 'text', text: user }];
   const list = !images ? [] : Buffer.isBuffer(images) ? [{ jpeg: images, detail: 'low' }] : images.filter((x) => x && x.jpeg);
@@ -193,7 +193,8 @@ async function write(images, system, user) {
   const r = await fetch(`${OPENAI}/chat/completions`, {
     method: 'POST', signal: AbortSignal.timeout(15000),
     headers: { authorization: `Bearer ${KEY()}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || 'gpt-4.1', max_tokens: 80, temperature: 0.8, messages: [{ role: 'system', content: system }, { role: 'user', content }] }),
+    // fast: a smaller model that answers in about half the time (lines that must land while they're still true)
+    body: JSON.stringify({ model: fast ? process.env.OPENAI_FAST_VISION_MODEL || 'gpt-4.1-mini' : process.env.OPENAI_VISION_MODEL || 'gpt-4.1', max_tokens: maxTokens, temperature: 0.8, messages: [{ role: 'system', content: system }, { role: 'user', content }] }),
   });
   if (!r.ok) throw new Error(`vision ${r.status}: ${(await r.text()).slice(0, 160)}`);
   return ((await r.json()).choices[0].message.content || '').replace(/[*_#`]/g, '').replace(/\s+/g, ' ').trim();

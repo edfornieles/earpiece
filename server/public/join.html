@@ -29,6 +29,7 @@
   .photo { width:100%; aspect-ratio:3/4; border-radius:16px; background:#e6e2d9; display:flex; align-items:center; justify-content:center; overflow:hidden; color:var(--dim); font-size:15px; text-align:center; padding:20px; }
   .photo img { width:100%; height:100%; object-fit:cover; display:block; }
   .photo.has { padding:0; }
+  .photo-slot { margin:24px 0; } .photo-slot h2 { font-size:19px; margin:0 0 6px; } .photo-slot .photo { aspect-ratio:4/3; } .photo-slot img { object-fit:contain; } .photo-slot button { margin-top:10px; }
   .consent { background:#fff; border:1px solid var(--line); border-radius:12px; padding:4px 16px; max-height:52vh; overflow-y:auto; font-size:15px; line-height:1.55; -webkit-overflow-scrolling:touch; }
   .consent h1 { font-size:20px; margin:14px 0 8px; } .consent h2 { font-size:16px; margin:16px 0 6px; } .consent ul { padding-left:20px; margin:6px 0 10px; } .consent li { margin:3px 0; }
   .more { color:var(--dim); font-size:13px; text-align:center; margin-top:6px; }
@@ -44,7 +45,7 @@
   <section class="step on" id="s0">
     <h1>Take part</h1>
     <p>In this work a voice in an earpiece gives you directions as you move through the gallery.</p>
-    <p class="dim">Register here first — it takes about two minutes. You'll give your name and email, take a photo, and read and sign the consent form. Then show your number at the desk.</p>
+    <p class="dim">Register here first — it takes about two minutes. You'll give your name and email, take front and profile photos, and read and sign the consent form. Then show your number at the desk.</p>
     <p class="dim">You need to be 18 or over.</p>
     <button data-next>Start</button>
   </section>
@@ -64,13 +65,14 @@
 
   <section class="step" id="s2">
     <div class="count">2 of 3</div>
-    <h1>Your photo</h1>
-    <p class="dim">A clear photo of your face, taken now. It's kept with your registration so we can match you to your recordings.</p>
-    <div class="photo" id="photo">No photo yet</div>
-    <input type="file" id="cam" accept="image/*" capture="user" hidden>
-    <button id="take">Take photo</button>
+    <h1>Your photos</h1>
+    <p class="dim">Take a clear front photo, then add left and right profiles if you can. Use even lighting, with only you in the picture. Photos stay with your registration; automatic face matching is optional on the next page.</p>
+    <section class="photo-slot"><h2>Front</h2><p class="dim">Look straight at the camera, with your whole face clearly visible.</p><div class="photo" id="photo-front">No front photo yet</div><input type="file" id="cam-front" accept="image/*" capture="user" hidden><button id="take-front" type="button">Take front photo</button></section>
+    <section class="photo-slot"><h2>Left profile · optional</h2><p class="dim">Show the left side of your face. Ask someone to help if needed.</p><div class="photo" id="photo-left">No left profile photo yet</div><input type="file" id="cam-left" accept="image/*" capture="user" hidden><button id="take-left" type="button">Take left profile photo</button></section>
+    <section class="photo-slot"><h2>Right profile · optional</h2><p class="dim">Show the right side of your face. Ask someone to help if needed.</p><div class="photo" id="photo-right">No right profile photo yet</div><input type="file" id="cam-right" accept="image/*" capture="user" hidden><button id="take-right" type="button">Take right profile photo</button></section>
     <div class="err" id="e2"></div>
     <button data-next="2" id="n2" disabled>Next</button>
+    <button type="button" class="ghost" id="back-details">Back to details</button>
   </section>
 
   <section class="step" id="s3">
@@ -86,6 +88,7 @@
     </div>
     <div class="err" id="e3"></div>
     <button id="submit">Register</button>
+    <button type="button" class="ghost" id="back-photos">Back to photos</button>
   </section>
 
   <section class="step" id="s4">
@@ -104,6 +107,7 @@ const J = new URLSearchParams(location.search).get('j');
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 let step = 0, photo = null, version = null;
+const photos = {};
 const store = sessionStorage;   // survives the page reloading after the camera (some Android phones do that)
 
 function show(n) { step = n; document.querySelectorAll('.step').forEach((s, i) => s.classList.toggle('on', i === n)); scrollTo(0, 0); store.setItem('step', n); }
@@ -126,27 +130,35 @@ document.querySelectorAll('[data-next]').forEach((b) => b.onclick = () => {
 for (const id of ['name', 'email']) { $(id).value = store.getItem(id) || ''; $(id).oninput = () => store.setItem(id, $(id).value); }
 $('adult').checked = store.getItem('adult') === '1'; $('adult').onchange = () => store.setItem('adult', $('adult').checked ? '1' : '');
 
-// photo: shrink to a sensible size on the phone (this also drops location data from the picture)
-function setPhoto(dataUrl) {
-  photo = dataUrl; $('photo').innerHTML = `<img src="${dataUrl}" alt="">`; $('photo').classList.add('has');
-  $('take').textContent = 'Retake'; $('take').className = 'ghost'; $('n2').disabled = false;
-  try { store.setItem('photo', dataUrl); } catch {}
+// Resize and re-encode each capture, removing image metadata.
+const angles = ['front','left','right'];
+function setPhoto(angle, dataUrl) {
+  if (!/^data:image\/jpeg;base64,/.test(dataUrl)) return;
+  photos[angle] = dataUrl; if (angle === 'front') photo = dataUrl;
+  const preview = $('photo-' + angle); preview.replaceChildren();
+  const image = new Image(); image.src = dataUrl; image.alt = angle + ' registration photo'; preview.appendChild(image); preview.classList.add('has');
+  $('take-' + angle).textContent = 'Retake ' + angle + ' photo'; $('take-' + angle).className = 'ghost'; $('n2').disabled = !photos.front;
+  try { store.setItem('photo-' + angle, dataUrl); } catch {}
 }
-$('take').onclick = () => $('cam').click();
-$('cam').onchange = () => {
-  const f = $('cam').files[0]; if (!f) return;
-  $('e2').textContent = '';
-  const img = new Image();
-  img.onload = () => {
-    const max = 1280, k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
-    const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
-    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    setPhoto(c.toDataURL('image/jpeg', 0.86)); URL.revokeObjectURL(img.src);
+for (const angle of angles) {
+  $('take-' + angle).onclick = () => $('cam-' + angle).click();
+  $('cam-' + angle).onchange = () => {
+    const input = $('cam-' + angle), f = input.files[0]; if (!f) return;
+    $('e2').textContent = '';
+    const img = new Image(), objectUrl = URL.createObjectURL(f);
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth*k); c.height = Math.round(img.naturalHeight*k);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height); setPhoto(angle,c.toDataURL('image/jpeg',.86)); URL.revokeObjectURL(objectUrl); input.value = '';
+    };
+    img.onerror = () => { URL.revokeObjectURL(objectUrl); input.value = ''; $('e2').textContent = 'That photo could not be opened. Please try again.'; };
+    img.src = objectUrl;
   };
-  img.onerror = () => { $('e2').textContent = 'That photo couldn’t be opened — please try again.'; };
-  img.src = URL.createObjectURL(f);
-};
-if (store.getItem('photo')) setPhoto(store.getItem('photo'));
+  const saved = store.getItem('photo-' + angle) || (angle === 'front' ? store.getItem('photo') : null); if(saved) setPhoto(angle,saved);
+}
+
+$('back-details').onclick = () => show(1);
+$('back-photos').onclick = () => show(2);
 
 // consent text
 function markdown(src) {
@@ -175,7 +187,7 @@ $('submit').onclick = async () => {
   const b = $('submit'); b.disabled = true; b.innerHTML = '<span class="spin"></span>Registering…'; e.textContent = '';
   try {
     const r = await fetch(`/join-api/submit?j=${encodeURIComponent(J)}`, { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: $('name').value.trim(), email: $('email').value.trim(), adult: $('adult').checked, agree: true, signature: $('sig').value.trim(), face: $('face').checked, photo, version }) });
+      body: JSON.stringify({ name: $('name').value.trim(), email: $('email').value.trim(), adult: $('adult').checked, agree: true, signature: $('sig').value.trim(), face: $('face').checked, photos, version }) });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || 'Something went wrong.');
     $('num').textContent = '#' + d.number; $('donename').textContent = d.name; $('donephoto').src = photo;

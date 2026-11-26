@@ -60,6 +60,46 @@ if (DEVICE) $('slot').textContent = 'Phone ' + DEVICE;
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 let ctx, mic, player, ws, wakeLock, retry = 0, micLevel = 0, audioOn = false;
+// Sounds from the desk: uploaded tracks (fetched, then played over Mother's voice) and the beep, once or looping.
+const Sfx = (() => {
+  const buffers = new Map(), playing = new Map();   // url -> decoded audio; sound id -> { stop() }
+  const ended = (id) => { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'soundEnded', id })); } catch {} };
+  const load = (url) => {
+    if (!buffers.has(url)) buffers.set(url, fetch(url).then((r) => { if (!r.ok) throw Error('sound ' + r.status); return r.arrayBuffer(); })
+      .then((b) => new Promise((ok, no) => ctx.decodeAudioData(b, ok, no))).catch((e) => { buffers.delete(url); throw e; }));
+    return buffers.get(url);
+  };
+  function beep(loop, id) {   // 1 kHz, a quarter of a second; looping repeats it every second
+    const out = ctx.createGain(); out.gain.value = 0.3; out.connect(ctx.destination);
+    const one = () => {
+      const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime;
+      o.frequency.value = 1000; g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(1, t + 0.01);
+      g.gain.setValueAtTime(1, t + 0.24); g.gain.linearRampToValueAtTime(0, t + 0.25);
+      o.connect(g).connect(out); o.start(t); o.stop(t + 0.26);
+    };
+    one();
+    const timer = loop ? setInterval(one, 1000) : setTimeout(() => { if (playing.get(id) === entry) { playing.delete(id); ended(id); } }, 300);
+    const entry = { stop() { clearInterval(timer); clearTimeout(timer); out.disconnect(); } };
+    return entry;
+  }
+  async function play(m) {
+    if (!ctx) return;
+    stop(m.id);
+    if (m.beep) { playing.set(m.id, beep(m.loop, m.id)); return; }
+    const slot = { cancelled: false, stop() { this.cancelled = true; } };
+    playing.set(m.id, slot);
+    let buf;
+    try { buf = await load(m.url); } catch { if (playing.get(m.id) === slot) playing.delete(m.id); ended(m.id); return; }
+    if (slot.cancelled || playing.get(m.id) !== slot) return;
+    const src = ctx.createBufferSource(), g = ctx.createGain();
+    g.gain.value = 0.9; src.buffer = buf; src.loop = !!m.loop; src.connect(g).connect(ctx.destination); src.start();
+    const entry = { stop() { src.onended = null; try { src.stop(); } catch {} g.disconnect(); } };
+    src.onended = () => { if (playing.get(m.id) === entry) { playing.delete(m.id); ended(m.id); } };
+    playing.set(m.id, entry);
+  }
+  function stop(id) { for (const [k, x] of playing) if (!id || k === id) { x.stop(); playing.delete(k); } }
+  return { handle(m) { if (m.op === 'stop') stop(m.id); else play(m); } };
+})();
 let slotId = DEVICE || Number(sessionStorage.getItem('pid') || 0);
 let visitActive = false;
 function setVisitActive(active) {
@@ -78,11 +118,27 @@ function showReady() {
   $('visitstatus').textContent = visitActive ? 'Microphone returns to the control desk only.' : 'Microphone feed muted between visits. Start the next participant from the desk.';
 }
 
+// Diagnostics for the desk: connection quality, screen state and errors, every 5 s.
+const diag = { reconnects: 0, lastClose: null, pingMs: null, errors: [], openedAt: 0 };
+window.addEventListener?.('error', (e) => { diag.errors.push({ at: Date.now(), msg: String(e.message || e).slice(0, 200) }); diag.errors = diag.errors.slice(-5); });
+window.addEventListener?.('unhandledrejection', (e) => { diag.errors.push({ at: Date.now(), msg: String(e.reason?.message || e.reason).slice(0, 200) }); diag.errors = diag.errors.slice(-5); });
+async function telemetry() {
+  if (!ws || ws.readyState !== 1) return;
+  const c = navigator.connection || {}; let battery = null;
+  try { const b = await navigator.getBattery?.(); if (b) battery = { level: Math.round(b.level * 100), charging: b.charging }; } catch {}
+  ws.send(JSON.stringify({ type: 'telemetry', net: c.effectiveType || null, netType: c.type || null, downlinkMbps: c.downlink ?? null, browserRttMs: c.rtt ?? null,
+    pingMs: diag.pingMs, online: navigator.onLine, screen: document.visibilityState, audio: ctx ? ctx.state : 'off', unsentBytes: ws.bufferedAmount,
+    connectedForS: Math.round((Date.now() - diag.openedAt) / 1000), reconnects: diag.reconnects, lastClose: diag.lastClose, battery, errors: diag.errors, ua: navigator.userAgent.slice(0, 120) }));
+  ws.send(JSON.stringify({ type: 'ping', t: Date.now() }));
+}
+if (typeof setInterval === 'function') setInterval(telemetry, 5000);
+document.addEventListener?.('visibilitychange', telemetry);
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws?role=phone&k=${KEY}&device=${DEVICE || slotId}`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { retry = 0; $('warn').style.display = 'none'; setStatus('connected'); if (audioOn) ws.send(JSON.stringify({ type: 'hello' })); };
+  ws.onopen = () => { retry = 0; diag.openedAt = Date.now(); setTimeout(telemetry, 300); ws.send(JSON.stringify({ type: 'caps', jitterBuffer: true })); $('warn').style.display = 'none'; setStatus('connected'); if (audioOn) ws.send(JSON.stringify({ type: 'hello' })); };
   ws.onmessage = (e) => {
     if (typeof e.data !== 'string') { if (player) player.push(new Int16Array(e.data)); return; }
     const m = JSON.parse(e.data);
@@ -94,10 +150,13 @@ function connect() {
     }
     if (m.type === 'full') { $('headline').textContent = 'Slot unavailable'; $('start').disabled = true; setStatus('Choose an available slot from the Phones page.'); }
     if (m.type === 'error') { $('headline').textContent = 'Connection needs attention'; $('start').disabled = true; $('start').textContent = m.text; }
+    if (m.type === 'pong') { diag.pingMs = Math.round(Date.now() - m.t); return; }
     if (m.type === 'flush' && player) player.flush();
+    if (m.type === 'sound') Sfx.handle(m);
     if (m.type === 'reset') { if (player) player.flush(); setVisitActive(false); showReady(); }
   };
   ws.onclose = (e) => {
+    diag.reconnects++; diag.lastClose = { code: e.code, at: new Date().toISOString(), online: navigator.onLine, screen: document.visibilityState };
     setVisitActive(false);
     setStatus('Reconnecting — microphone feed muted');
     if (e.code === 4000) { $('headline-live').textContent = 'Slot replaced'; return setStatus('This slot was taken by another phone.'); }
@@ -111,7 +170,7 @@ async function startAudio() {
   await ctx.audioWorklet.addModule('worklets.js');
   mic = await openMic(ctx);
   setVisitActive(visitActive);
-  player = makePlayer(ctx, ctx.destination);
+  player = makePlayer(ctx, ctx.destination, { target: 0.25, max: 1.5 });   // rides out network jitter
   await ctx.resume();
   mic.onChunk((f) => { micLevel = Math.max(micLevel * 0.8, rms(f)); if (visitActive && ws && ws.readyState === 1) ws.send(floatToInt16(f).buffer); });
   audioOn = true;

@@ -1,15 +1,109 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Room — Mother</title><link rel="stylesheet" href="setup.css"><link rel="stylesheet" href="room.css"></head><body>
-<header class="pagehead"><div><div class="eyebrow">Workspace · Studio trial</div><h1>Room</h1><p>Give Mother a view of the room. Review objects, name landmarks and inspect what the observer sees.</p></div><div class="row"><span id="observer-state" class="badge">Observer off</span><a href="#floor-test" class="button">Studio marker test ↓</a></div></header>
-<main><div id="notice" class="notice" role="status"></div><div class="room-layout"><section>
-<div class="panel"><div class="row between"><label class="grow">Camera<select id="camera"></select></label><label>Minimum gap between analyses<select id="interval"><option value="5">5 seconds</option><option value="10" selected>10 seconds</option><option value="20">20 seconds</option><option value="60">60 seconds</option></select></label></div><div class="row actions"><button id="observe" class="primary">Analyse once</button><button id="start">Start observing</button><button id="stop" disabled>Stop</button></div><p class="hint actions">Analysis sends a camera frame to the configured OpenAI vision service. Continuous observation runs until stopped or the server restarts; the sidebar shows “Vision on”. Recording is separate. Each request must finish before the next one starts.</p><label for="question">Ask the observer about this view (optional)</label><input id="question" maxlength="2000" placeholder="What objects are visible? What has changed?"><div class="tabs"><button id="view-live" aria-pressed="true">Live view</button><button id="view-analysis" aria-pressed="false" disabled>Analysed frame</button><button id="draw" disabled>+ Draw an object region</button></div>
-<div id="picture"><img id="live-picture" alt="Live camera preview"><img id="analysed-picture" alt="The exact camera frame sent for analysis" hidden><svg id="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" hidden aria-label="Approximate object and person regions"></svg><div id="picture-empty" hidden>No live camera picture. Check camera setup on Screens.</div></div><p class="hint actions">Green regions: reviewed landmarks matched in this frame. Blue: unverified AI estimates. Amber: people.</p><p id="frame-state" class="hint actions">Live picture. AI overlays appear only on the analysed frame.</p></div>
-<section class="panel" id="observation-panel"><div class="row between"><h2>Mother’s observation</h2><span id="observation-age" class="badge">Not analysed yet</span></div><p id="summary" class="hint">Choose the studio camera and analyse a frame to begin.</p><p id="answer"></p><div id="changes"></div><div id="uncertainties" class="hint"></div><p class="hint divider">Positions and activity are visual estimates. Image regions are not measured floor coordinates. A hidden person or object is unknown, not absent. Observations cannot advance program cues.</p></section>
-<section class="panel"><h2>People in this analysed frame</h2><p class="hint">Select a visible person and confirm their phone/role. This labels this frame only; continuous identity tracking is not implemented. A new observation clears the matches.</p><div id="people"></div></section>
-<section class="panel"><h2>Recent observations</h2><div id="history" class="hint"></div></section>
-</section><aside>
-<section class="panel"><h2>Room setup</h2><label for="room-name">Name</label><input id="room-name" maxlength="120"><label class="actions" for="room-notes">Room context</label><textarea id="room-notes" rows="4" maxlength="12000" placeholder="Describe this studio, fixed landmarks and anything Mother should know."></textarea><label class="check actions"><input id="share" type="checkbox"> Let directors use reviewed landmarks and fresh observations</label><p class="hint">Off by default. Live visual descriptions remain unverified; person matches apply to one frame. This adds context to adaptive speech, never automatic cue transitions.</p><button id="save-room">Save room setup</button><p id="room-save-state" class="hint actions"></p></section>
-<section class="panel" id="floor-test"><h2>Measured floor plan</h2><p class="hint">Manual rehearsal marker. It starts at a preset test position and does not use the camera or send cues.</p><div id="floor-plan"></div><div class="floor-dimensions"><label>Width (m)<input id="floor-width" type="number" min="0.01" step="0.01"></label><label>Depth (m)<input id="floor-depth" type="number" min="0.01" step="0.01"></label><label>Ceiling (m)<input id="floor-height" type="number" min="0.01" step="0.01"></label></div><p class="hint">Dimensions follow the supplied plan. Furniture and camera calibration can be added separately. Use <strong>Save room setup</strong> to keep dimension edits.</p></section>
-<section class="panel" id="object-editor" hidden><h2 id="object-heading">Name this object</h2><label for="object-name">Name Mother should use</label><input id="object-name" maxlength="100" placeholder="Blue chair, doorway, work table…"><label class="actions" for="object-description">Description</label><textarea id="object-description" rows="3" maxlength="2000"></textarea><label class="actions" for="object-rules">How it may be used</label><textarea id="object-rules" rows="3" maxlength="2000" placeholder="May approach. Do not touch or move."></textarea><p class="hint">Saving confirms this label and its approximate region. Re-map regions after moving a camera. Editing room metadata stops continuous observation.</p><button id="redraw-object" class="actions">Redraw this region on the image</button><p class="hint">AI regions are unverified estimates. Check and correct the highlighted region before confirming it.</p><div class="row"><button id="save-object" class="primary">Confirm &amp; save</button><button id="cancel-object">Cancel</button></div></section>
-<section class="panel"><h2>Reviewed inventory</h2><p class="hint">Stable names and instructions you have confirmed. AI suggestions are kept separately until you save them.</p><div id="inventory"></div></section>
-<section class="panel"><h2>Objects suggested by Mother</h2><div id="suggestions" class="hint">Analyse a frame to discover objects.</div></section>
-</aside></div></main><div id="toast" role="status"></div><script src="setup.js"></script><script src="room.js"></script><script src="nav.js"></script></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Room — Mother</title><link rel="stylesheet" href="setup.css"><link rel="stylesheet" href="room.css"></head><body class="room-body">
+<main class="rm">
+ <header class="rm-bar">
+  <h1>Room</h1>
+  <select id="camera" aria-label="Camera"></select>
+  <span id="tracking-state" class="rm-status">Tracking off</span>
+  <span class="rm-spacer"></span>
+  <button id="track-start" class="rm-go">Start tracking</button><button id="track-stop" class="rm-stop" disabled>Stop</button>
+  <a class="rm-btn" href="room3d.html" id="open-3d">3D</a>
+  <button class="rm-btn" id="open-setup" aria-expanded="false" aria-controls="setup">Setup</button>
+ </header>
+ <div id="notice" class="notice" role="status"></div>
+ <dialog id="tabletop-dialog" style="width:min(90vw,850px);background:#202226;color:#f3f3f3;border:1px solid #52555d;border-radius:12px">
+  <h2>Fit workbench angle</h2>
+  <label><input type="checkbox" id="tabletop-edges"> Rear corners are hidden</label><p id="tabletop-step" role="status">Click the four visible tabletop corners in order around the edge.</p>
+  <canvas id="tabletop-frame" aria-label="Frozen camera frame for marking tabletop corners" style="width:100%;height:auto;display:block;cursor:crosshair"></canvas>
+  <div class="rm-row"><button id="tabletop-save" class="rm-go" disabled>Update workbench on plan</button><button id="tabletop-undo" class="rm-btn">Undo corner</button><button id="tabletop-cancel" class="rm-btn">Cancel</button></div>
+ </dialog>
+
+ <div id="calibration-editor" class="rm-calib" hidden>
+  <div><strong id="calibration-step"></strong><ol id="calibration-points"></ol><p class="rm-dim">At least four floor points spread across the picture, then one more known point to check accuracy. Floor only, never a table top.</p></div>
+  <div class="rm-calib-actions"><button id="calibration-save" class="rm-go" disabled>Save calibration</button><button id="calibration-undo" class="rm-btn">Undo</button><button id="calibration-cancel" class="rm-btn">Cancel</button></div>
+  <div id="calibration-plan" hidden></div>
+ </div>
+
+ <div class="rm-grid">
+  <section class="rm-stage" id="stage" data-view="both">
+   <div class="rm-stage-bar">
+    <div class="rm-seg" role="group" aria-label="Show"><button data-view="both" aria-pressed="true">Both</button><button data-view="plan" aria-pressed="false">Plan</button><button data-view="camera" aria-pressed="false">Camera</button><button data-view="follow" aria-pressed="false">Follow</button></div>
+    <label class="rm-check"><input type="checkbox" id="coverage-toggle" checked> Camera coverage</label>
+    <span class="rm-spacer"></span>
+    <div class="rm-seg" role="group" aria-label="Picture"><button id="view-live" aria-pressed="true">Live</button><button id="view-analysis" aria-pressed="false" disabled>Analysed</button></div>
+   </div>
+   <div class="rm-stage-bar" id="camera-controls">
+    <label>Follow person <select id="follow-who"><option value="auto">Auto</option></select></label>
+    <label class="rm-check" hidden><input type="checkbox" id="camera-follow"> Turn camera to follow <span id="camera-follow-note" class="rm-dim"></span></label>
+    <div class="rm-row" id="camera-aim" role="group" aria-label="Pan and tilt" hidden>
+     <button class="rm-btn nudge" data-dir="-1,0" aria-label="Pan left" title="Pan left">◀</button><button class="rm-btn nudge" data-dir="1,0" aria-label="Pan right" title="Pan right">▶</button>
+     <button class="rm-btn nudge" data-dir="0,-1" aria-label="Tilt up" title="Tilt up">▲</button><button class="rm-btn nudge" data-dir="0,1" aria-label="Tilt down" title="Tilt down">▼</button>
+     <label>Step <select id="nudge-size"><option value="small">Small</option><option value="large">Large</option></select></label>
+    </div>
+    <label class="rm-row">Digital zoom <input id="camera-zoom" type="range" min="1" max="3" step=".25" value="1"><output id="camera-zoom-value">1×</output></label>
+    <div class="rm-row" id="camera-sweep" hidden><button class="rm-btn" id="sweep-now">Sweep now</button><label class="rm-check"><input type="checkbox" id="auto-sweep"> Auto sweep between visits</label><span id="sweep-status" class="rm-dim" role="status"></span></div>
+   </div>
+   <div class="rm-panes">
+    <figure class="rm-pane rm-plan" id="floor-test"><div id="floor-plan"></div>
+     <figcaption id="coverage-key" class="rm-key"><span><i class="k-sure"></i>sure</span><span><i class="k-rough"></i>rough</span><span><i class="k-unsure"></i>unsure</span><span class="rm-key-gap"><i class="k-body"></i>body only</span><span><i class="k-blind"></i>not seen</span></figcaption>
+    </figure>
+    <figure class="rm-pane rm-follow" id="follow"><canvas id="follow-canvas" aria-label="Follow view: the camera picture cropped around one person"></canvas>
+     <figcaption class="rm-follow-bar"><span id="follow-note" class="rm-dim"></span></figcaption>
+    </figure>
+    <figure class="rm-pane rm-cam"><div id="picture"><img id="live-picture" alt="Live camera preview"><img id="analysed-picture" alt="The exact camera frame sent for analysis" hidden><svg id="track-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="People found by live tracking"></svg><svg id="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" hidden aria-label="Approximate object and person regions"></svg><div id="picture-empty" hidden>No live picture. Check the camera on Screens.</div></div></figure>
+   </div>
+   <footer class="rm-stage-foot"><span id="floor-live-state"></span><span id="coverage-summary"></span><span id="frame-state"></span></footer>
+  </section>
+
+  <aside class="rm-rail">
+   <section id="tracking-panel"><h2>People <span id="people-count"></span></h2><div id="people-now"></div>
+    <details class="rm-more"><summary id="people-summary">Name and assign</summary><p class="rm-dim" id="faces-state"></p><div id="tracks"></div></details></section>
+   <section><h2>Objects</h2><label class="rm-check"><input type="checkbox" id="finder-on"> Check the furniture with the camera <span class="rm-dim">(a short check every few minutes while tracking; it waits for the voice)</span></label><div id="move-review"></div><p class="rm-dim" id="finder-state"></p>
+    <details class="rm-more"><summary id="furniture-summary">Furniture</summary><div id="objects"></div></details></section>
+   <section class="rm-feed"><h2>Activity</h2><div id="movement"></div></section>
+  </aside>
+ </div>
+
+ <div class="rm-scrim" id="setup-scrim" hidden></div>
+ <aside class="rm-drawer" id="setup" aria-label="Room setup" hidden>
+  <header class="rm-drawer-head"><div class="rm-seg" role="tablist"><button role="tab" data-tab="calibration" aria-selected="true">Calibration</button><button role="tab" data-tab="room" aria-selected="false">Room</button><button role="tab" data-tab="vision" aria-selected="false">Vision</button></div><button class="rm-btn" id="close-setup" aria-label="Close setup">Close</button></header>
+
+  <section data-panel="calibration">
+   <section id="camera-positions" class="rm-positions" hidden>
+    <h3>Camera positions</h3><p id="position-state" class="rm-dim"></p>
+    <ul id="position-list" class="rm-pos-list"></ul>
+    <div class="rm-row"><input id="position-name" maxlength="40" placeholder="Name this view, e.g. Armchair"><button id="position-save" class="rm-btn">Save this view</button></div>
+    <p id="position-calibrate-note" class="rm-warn"></p>
+   </section>
+   <h3>Floor calibration</h3><div id="calibration-state" class="rm-dim"></div>
+   <button id="calibrate" class="rm-btn rm-wide">Calibrate camera to floor</button><button id="fit-tabletop" class="rm-btn rm-wide">Fit workbench angle from camera</button>
+   <p class="rm-dim">Click a floor point in the picture, then the same point on the plan. Repeat at least four times.</p>
+  </section>
+
+  <section data-panel="room" hidden>
+   <h3>Dimensions</h3><div class="floor-dimensions"><label>Width (m)<input id="floor-width" type="number" min="0.01" step="0.01"></label><label>Depth (m)<input id="floor-depth" type="number" min="0.01" step="0.01"></label><label>Ceiling (m)<input id="floor-height" type="number" min="0.01" step="0.01"></label></div>
+   <label for="room-name">Name</label><input id="room-name" maxlength="120">
+   <label for="room-notes">What Mother should know about this room</label><textarea id="room-notes" rows="5" maxlength="12000" placeholder="Fixed landmarks, rules, anything useful."></textarea>
+   <label class="rm-check"><input id="share" type="checkbox"> Directors may use tracking and observations</label>
+   <p class="rm-dim">Directions by position only when it is sure; rough positions name an area; unsure ones make Mother ask. Never triggers cues.</p>
+   <button id="save-room" class="rm-go">Save room setup</button><p id="room-save-state" class="rm-dim"></p>
+  </section>
+
+  <section data-panel="vision" hidden id="observation-panel">
+   <div class="rm-row"><span id="observer-state" class="rm-status">Observer off</span><span id="observation-age" class="rm-status">Not analysed yet</span></div>
+   <p id="vision-error" class="rm-error"></p><p id="summary"></p><p id="answer"></p><div id="changes"></div>
+   <details class="rm-more"><summary>Uncertainties</summary><div id="uncertainties" class="rm-dim"></div></details>
+   <div class="rm-row"><button id="observe" class="rm-btn">Analyse once</button><button id="start" class="rm-btn">Watch room</button><button id="stop" class="rm-btn" disabled>Stop watching</button></div>
+   <label>Gap between analyses<select id="interval"><option value="5">5 seconds</option><option value="10" selected>10 seconds</option><option value="20">20 seconds</option><option value="60">60 seconds</option></select></label>
+   <label for="question">Ask about this view</label><input id="question" maxlength="2000" placeholder="What has changed?">
+   <p class="rm-dim">Sends a camera frame to the configured OpenAI vision service.</p>
+   <section id="object-editor" class="rm-editor" hidden><h3 id="object-heading">Name this object</h3><label for="object-name">Name</label><input id="object-name" maxlength="100" placeholder="Blue chair, doorway…"><label for="object-description">Description</label><textarea id="object-description" rows="3" maxlength="2000"></textarea><label for="object-rules">How it may be used</label><textarea id="object-rules" rows="2" maxlength="2000" placeholder="May approach. Do not touch."></textarea><button id="redraw-object" class="rm-btn">Redraw region</button><div class="rm-row"><button id="save-object" class="rm-go">Confirm &amp; save</button><button id="cancel-object" class="rm-btn">Cancel</button></div></section>
+   <button id="draw" class="rm-btn" disabled>Draw an object region</button>
+   <h3>People in the analysed frame</h3><div id="people"></div>
+   <h3>Inventory</h3><div id="inventory"></div>
+   <h3>Suggested objects</h3><div id="suggestions" class="rm-dim">Analyse a frame to discover objects.</div>
+   <h3>Recent observations</h3><div id="history" class="rm-dim"></div>
+  </section>
+ </aside>
+</main>
+<div id="toast" role="status"></div>
+<script src="setup.js"></script><script src="room.js"></script><script src="room-tracking.js"></script><script src="room-layout.js"></script><script src="follow-core.js"></script><script src="room-follow.js"></script><script src="room-camera.js"></script><script src="nav.js"></script></body></html>

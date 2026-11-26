@@ -1,0 +1,149 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Debrief — Mother</title><link rel="stylesheet" href="setup.css">
+<style>
+  .db-grid { display:grid; grid-template-columns:minmax(280px,1fr) minmax(340px,1.4fr); gap:20px; align-items:start; }
+  @media (max-width:1000px) { .db-grid { grid-template-columns:1fr; } }
+  .step { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); margin:0 0 6px; }
+  #visits { list-style:none; margin:12px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; max-height:440px; overflow-y:auto; }
+  #visits li { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+  #visits li:hover { background:rgba(127,127,127,.08); }
+  #visits li.sel { border-color:var(--fg); box-shadow:inset 3px 0 0 var(--fg); }
+  #visits b { font-weight:500; } #visits small { display:block; color:var(--dim); font-size:12px; }
+  #visits .tag { font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:20px; padding:1px 7px; margin-left:6px; }
+  #filter { margin-top:10px; }
+  .other { display:flex; gap:8px; margin-top:12px; align-items:center; } .other input { flex:1; }
+  textarea { min-height:220px; font-size:14px; }
+  #guide { min-height:260px; }
+  .row.tight { gap:8px; } .row select { width:auto; }
+  #phones { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 14px; }
+  #phones button { padding:8px 12px; }
+  #phones button[aria-pressed=true] { background:var(--fg); color:#111; border-color:var(--fg); }
+  #active { list-style:none; padding:0; margin:14px 0 0; display:flex; flex-direction:column; gap:8px; }
+  #active li { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #365340; border-radius:8px; }
+  #active li span { flex:1; }
+  .meta { font-size:12px; color:var(--dim); margin:6px 0 10px; }
+  .actions-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+</style></head><body>
+<header class="pagehead"><div><div class="eyebrow">Perform</div><h1>Debrief</h1><p>After the performance, sit the participant in front of a camera with their earpiece still in. A neutral interviewer (not Mother, and in a different voice) asks how it felt, briefed on what happened in their visit. The debrief is recorded like any visit.</p></div></header>
+<main><div id="notice" class="notice" role="status"></div>
+<div class="db-grid">
+  <div>
+    <section class="panel">
+      <p class="step">1 · Who</p><h2>Whose visit are we talking about?</h2>
+      <input id="filter" type="search" placeholder="Filter by name, score or date" autocomplete="off">
+      <ul id="visits"><li class="hint">Loading…</li></ul>
+      <div class="other"><input id="othername" type="search" placeholder="Or someone not listed: their name" autocomplete="off"><button id="useother">Use</button></div>
+      <p class="hint">Without a past visit the interviewer asks in general terms.</p>
+    </section>
+    <section class="panel">
+      <p class="step">3 · Questions</p><h2>Question guide</h2>
+      <p class="hint">Themes and questions the interviewer covers, adapting the order and wording and tying them to moments from the visit. Shared by every debrief.</p>
+      <textarea id="guide" spellcheck="true"></textarea>
+      <div class="actions-row"><button id="saveguide">Save guide</button><button id="resetguide" class="link">Back to the default guide</button><span id="guidestate" class="save-state"></span></div>
+    </section>
+  </div>
+  <div>
+    <section class="panel">
+      <p class="step">2 · Briefing</p><h2>What the interviewer knows</h2>
+      <p class="meta" id="who">Choose a visit on the left.</p>
+      <div class="actions-row"><button id="prepare" class="primary" disabled>Write briefing from their visit</button><span id="prepstate" class="save-state"></span></div>
+      <textarea id="dossier" placeholder="The briefing appears here. Read it, correct it or add to it: the interviewer uses exactly this text." spellcheck="true"></textarea>
+    </section>
+    <section class="panel">
+      <p class="step">4 · Start</p><h2>Run the debrief</h2>
+      <p class="hint">Which phone is their earpiece on?</p>
+      <div id="phones"></div>
+      <div class="row tight"><label for="voice" style="margin:0">Interviewer voice</label><select id="voice"></select><select id="emotion"></select></div>
+      <div class="actions-row"><button id="start" class="primary" disabled>Start debrief</button><span id="startstate" class="save-state"></span></div>
+      <ul id="active"></ul>
+      <p class="hint">Follow and step in from the Live desk as usual: the transcript, talk and Mark all work. End the debrief here or from the desk.</p>
+    </section>
+  </div>
+</div></main>
+<div id="toast" role="status"></div><script src="setup.js"></script><script>
+const { $, esc, api, toast } = Setup;
+let data = null, chosen = null, phone = null, guideDirty = false;   // chosen: { session, pid, name } or { name } for someone unlisted
+const day = (iso) => iso ? new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+
+function renderVisits() {
+  const q = $('filter').value.toLowerCase();
+  const rows = data.visits.filter((v) => !q || `${v.name} ${v.program} ${v.title} ${day(v.start)}`.toLowerCase().includes(q));
+  $('visits').innerHTML = rows.map((v) => `<li data-s="${esc(v.session)}" data-p="${esc(v.pid)}" class="${chosen?.pid === v.pid && chosen?.session === v.session ? 'sel' : ''}">
+    <span><b>${esc(v.name || 'Unnamed participant')}</b>${v.debriefOf ? '<span class="tag">debrief</span>' : ''}
+    <small>${esc(v.program || v.title || 'No score')} · ${esc(day(v.start))} · ${v.minutes} min · phone ${v.phones.join(', ')}</small></span></li>`).join('') || '<li class="hint">No visits recorded yet.</li>';
+}
+function renderPhones() {
+  const free = data.phones;
+  if (phone && !free.some((p) => p.phone === phone)) phone = null;
+  $('phones').innerHTML = free.map((p) => `<button data-n="${p.phone}" aria-pressed="${p.phone === phone}" ${p.debrief ? 'disabled' : ''}>Phone ${p.phone}<small style="display:block;color:var(--dim);font-size:11px">${p.debrief ? 'in a debrief' : p.waiting ? 'free' : esc(p.name || 'in a visit')}</small></button>`).join('') || '<span class="hint">No phone is connected. Open the phone page on their device first.</span>';
+  $('active').innerHTML = data.phones.filter((p) => p.debrief).map((p) => `<li><span><b>Phone ${p.phone}</b>: debriefing ${esc(p.name || 'participant')}${p.debrief.of ? ` about ${esc(p.debrief.of.session)}` : ''}</span><button class="end" data-n="${p.phone}">End debrief</button></li>`).join('');
+  $('start').disabled = !phone || !chosen || !data.recording;
+  $('startstate').textContent = !data.recording ? 'Start the session on the Live desk first (debriefs are recorded).' : !chosen ? 'Choose whose visit first.' : !phone ? 'Choose their phone.' : '';
+}
+function renderWho() {
+  $('who').textContent = !chosen ? 'Choose a visit on the left.' : chosen.session ? `${chosen.name || 'Unnamed participant'} · visit in ${chosen.session}` : `${chosen.name || 'Someone'} · no past visit: general questions`;
+  $('prepare').disabled = !chosen?.session;
+}
+function renderVoices() {
+  if ($('voice').options.length) return;
+  $('voice').innerHTML = data.voices.map((v) => `<option>${esc(v.name)}</option>`).join('');
+  $('voice').value = data.voice.voice;
+  emotions(data.voice.emotion);
+}
+function emotions(pick) {
+  const v = data.voices.find((x) => x.name === $('voice').value), list = v?.emotions || [];
+  $('emotion').innerHTML = list.length ? list.map((e) => `<option>${esc(e)}</option>`).join('') : '<option value="">(one style)</option>';
+  $('emotion').value = list.includes(pick) ? pick : list.includes('calm') ? 'calm' : list[0] || '';
+}
+async function load() {
+  try {
+    data = await api('debrief');
+    renderVisits(); renderPhones(); renderVoices(); renderWho();
+    if (!guideDirty && document.activeElement !== $('guide')) $('guide').value = data.guide;
+    $('notice').textContent = '';
+  } catch (e) { $('notice').textContent = e.message; }
+}
+$('filter').oninput = renderVisits;
+$('visits').onclick = (e) => {
+  const li = e.target.closest('li[data-s]'); if (!li) return;
+  const v = data.visits.find((x) => x.session === li.dataset.s && x.pid === li.dataset.p);
+  const changed = chosen?.pid !== v.pid || chosen?.session !== v.session;
+  chosen = { session: v.session, pid: v.pid, name: v.name };
+  if (changed) { $('dossier').value = ''; $('prepstate').textContent = ''; }
+  renderVisits(); renderWho(); renderPhones();
+};
+$('useother').onclick = () => {
+  const name = $('othername').value.trim(); if (!name) return toast('Type their name.');
+  chosen = { name }; $('dossier').value = ''; renderVisits(); renderWho(); renderPhones();
+};
+$('prepare').onclick = async () => {
+  $('prepare').disabled = true; $('prepstate').textContent = 'Reading their visit and writing the briefing…';
+  try {
+    const r = await api('debrief/prepare', { session: chosen.session, pid: chosen.pid });
+    $('dossier').value = r.dossier;
+    $('prepstate').textContent = `From ${r.lines} lines and ${r.moments} marked moments, ${r.minutes} min. Edit it if needed.`;
+  } catch (e) { $('prepstate').textContent = e.message; }
+  $('prepare').disabled = false;
+};
+$('phones').onclick = (e) => { const b = e.target.closest('button[data-n]'); if (!b) return; phone = Number(b.dataset.n); renderPhones(); };
+$('voice').onchange = () => emotions();
+$('guide').oninput = () => { guideDirty = true; $('guidestate').textContent = 'Not saved'; };
+$('saveguide').onclick = async () => {
+  try { const r = await api('debrief/guide', { text: $('guide').value }); $('guide').value = r.guide; guideDirty = false; $('guidestate').textContent = 'Saved ✓'; } catch (e) { toast(e.message); }
+};
+$('resetguide').onclick = () => { $('guide').value = data.defaultGuide; guideDirty = true; $('guidestate').textContent = 'Not saved'; };
+$('start').onclick = async () => {
+  if (guideDirty && !confirm('The question guide has unsaved changes. Start with the saved guide?')) return;
+  if (chosen.session && !$('dossier').value.trim() && !confirm('There is no briefing yet, so the interviewer will not know what happened in their visit. Start anyway?')) return;
+  $('start').disabled = true;
+  try {
+    await api('debrief/start', { phone, session: chosen.session || '', pid: chosen.pid || '', name: chosen.name || '', dossier: $('dossier').value, voice: $('voice').value, emotion: $('emotion').value });
+    toast(`Debrief started on Phone ${phone}`); load();
+  } catch (e) { toast(e.message); $('start').disabled = false; }
+};
+$('active').onclick = async (e) => {
+  const b = e.target.closest('button.end'); if (!b) return;
+  if (!confirm(`End the debrief on Phone ${b.dataset.n}?`)) return;
+  try { await api('debrief/end', { phone: Number(b.dataset.n) }); toast('Debrief ended'); load(); } catch (err) { toast(err.message); }
+};
+load(); setInterval(() => { if (!document.hidden) load(); }, 3000);
+</script><script src="nav.js"></script></body></html>

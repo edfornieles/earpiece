@@ -1,0 +1,162 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Protocols — Mother</title><link rel="stylesheet" href="setup.css">
+<style>
+  .vgrid { display:grid; grid-template-columns:auto 1fr 1fr; gap:6px; align-items:stretch; max-width:560px; margin:10px 0 6px; }
+  .vgrid .ax { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); display:flex; align-items:center; justify-content:center; }
+  .vgrid .ax.row { justify-content:flex-end; padding-right:6px; }
+  .vgrid button { padding:12px 10px; text-align:center; }
+  .vgrid button[aria-pressed=true] { background:var(--fg); color:var(--bg, #111); border-color:var(--fg); }
+  #voicetext { white-space:pre-line; font-size:13px; color:var(--dim); margin:6px 0 0; max-width:640px; }
+  #deployed { list-style:none; padding:0; margin:10px 0 0; display:flex; flex-direction:column; gap:6px; }
+  #deployed li { display:flex; align-items:center; gap:8px; padding:9px 12px; border:1px solid var(--line); border-radius:8px; }
+  #deployed li.run { border-color:#417358; box-shadow:inset 3px 0 0 #417358; }
+  #deployed li { flex-wrap:wrap; } #deployed li span { flex:1 1 220px; min-width:0; } #deployed small { color:var(--dim); margin-left:6px; }
+  #deployed button { padding:5px 9px; font-size:12px; }
+  .pgrid { display:grid; grid-template-columns:minmax(340px,1.8fr) minmax(240px,1fr); gap:20px; align-items:start; }
+  @media (max-width:1000px) { .pgrid { grid-template-columns:1fr; } }
+  .libhead { display:flex; gap:8px; } .libhead input { flex:1; min-width:0; margin:0; } .libhead button { margin:0; }
+  #list { list-style:none; margin:12px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; }
+  #list li { padding:10px 12px; border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+  #list li:hover { background:rgba(127,127,127,.08); } #list li.sel { border-color:var(--fg); box-shadow:inset 3px 0 0 var(--fg); }
+  #list b { font-weight:500; } #list small { display:block; color:var(--dim); font-size:12px; margin-top:2px; }
+  .tag { display:inline-block; font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:20px; padding:0 7px; margin:4px 4px 0 0; }
+  #editor label { margin-top:12px; } #editor textarea { min-height:70px; font-size:14px; }
+  .people { display:flex; gap:8px; align-items:center; } .people input { width:70px; margin:0; }
+  .v4 { display:grid; grid-template-columns:1fr 1fr; gap:8px; } @media (max-width:600px) { .v4 { grid-template-columns:1fr; } }
+  .v4 label { margin:0 0 4px; font-size:13px; } .v4 textarea { min-height:90px !important; }
+  .smallrow { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:14px; } .smallrow #f-tags { flex:1 1 200px; margin:0; }
+  details.more { margin-top:14px; } details summary { cursor:pointer; }
+  .actions-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+  .actions-row .right { margin-left:auto; }
+</style></head><body>
+<header class="pagehead"><div><div class="eyebrow">Perform</div><h1>Protocols</h1><p>Write the actions a session can use, with a note on how each caregiver voice changes them. Below, choose this session's voice and which actions it deploys.</p></div></header>
+<main><div id="notice" class="notice" role="status"></div>
+<div class="pgrid">
+  <section class="panel" id="editor">
+    <h2 id="edtitle">Write a protocol</h2>
+    <label for="f-title">Title</label><input id="f-title" maxlength="120" autocomplete="off">
+    <label for="f-desc">What the action is</label><textarea id="f-desc" placeholder="Describe the action: what happens, what the participants do."></textarea>
+    <label>How each voice changes it</label>
+    <p class="hint" style="margin:0 0 8px">A note for each caregiver voice: how the performance changes when the control team adopts it. Leave any blank.</p>
+    <div class="v4" id="f-voices"></div>
+    <div class="smallrow"><span class="people"><span>People</span><input id="f-min" type="number" min="1" max="99" aria-label="From"><span>to</span><input id="f-max" type="number" min="1" max="99" aria-label="To"></span>
+      <input id="f-tags" placeholder="Tags, e.g. touch, pairs" autocomplete="off" aria-label="Tags"></div>
+    <details class="more" id="more"><summary>More (optional): instructions to Mother, setup, care, debrief</summary>
+      <label for="f-mother">Instructions to Mother while it runs</label><textarea id="f-mother" placeholder="Anything Mother should do or avoid during this action."></textarea>
+      <label for="f-setup">Setup and props</label><textarea id="f-setup"></textarea>
+      <label for="f-care">Care and stop conditions</label><textarea id="f-care" placeholder="When to stop, what to avoid. Mother is told to respect these."></textarea>
+      <label for="f-debrief">Debrief questions</label><textarea id="f-debrief" placeholder="Questions for the debrief interviewer about this action."></textarea>
+      <label for="f-minutes">Length</label><div class="people"><input id="f-minutes" type="number" min="1" max="600"><span class="hint">minutes, roughly</span></div>
+    </details>
+    <div class="actions-row"><button id="save" class="primary">Save</button><button id="deploy">Add to this session</button><span id="edstate" class="save-state"></span><button id="del" class="link right">Delete</button></div>
+  </section>
+  <section class="panel">
+    <h2>Saved protocols</h2><div class="libhead"><input id="filter" type="search" placeholder="Search protocols or tags" autocomplete="off"><button id="new">+ New</button></div>
+    <ul id="list"></ul>
+  </section>
+</div>
+<section class="panel" id="now">
+  <div class="row between"><h2>This session</h2><span class="hint" id="sessname"></span></div>
+  <p class="hint" style="margin:4px 0 0">Caregiver voice: one per session. It sets Mother's attitude and tone, and changes the objectives of every action.</p>
+  <div class="vgrid" id="vgrid"></div>
+  <p id="voicetext"></p>
+  <h3 style="margin-top:18px">Actions</h3>
+  <ol id="deployed"></ol>
+</section>
+<details class="panel" id="voicedefs"><summary><b>What the four voices mean</b> <span class="hint">: what Mother is told for each</span></summary>
+  <div class="v4" id="vdefs" style="margin-top:12px"></div>
+  <div class="actions-row"><button id="savevoices">Save</button><span id="vstate" class="save-state"></span></div>
+</details>
+</main>
+<div id="toast" role="status"></div><script src="setup.js"></script><script>
+const { $, esc, api, toast } = Setup;
+let data = null, edit = null, dirty = false, vdirty = false;   // edit: the protocol open in the editor ({} for a new one)
+const people = (p) => p.people?.min || p.people?.max ? (p.people.min && p.people.max && p.people.min !== p.people.max ? `${p.people.min}–${p.people.max} people` : `${p.people.min || p.people.max} ${(p.people.min || p.people.max) === 1 ? 'person' : 'people'}`) : '';
+const mins = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+
+function renderNow() {
+  const s = data.session, cur = s.caregiver?.id;
+  $('sessname').textContent = (data.standby ? 'Preparing the next session' : 'Recording') + (s.title ? ': ' + s.title : '');
+  const b = (id) => { const v = data.voices.find((x) => x.id === id); return `<button data-v="${id}" aria-pressed="${cur === id}">${esc(v.name)}</button>`; };
+  $('vgrid').innerHTML = `<span></span><span class="ax">Selfless</span><span class="ax">Selfish</span><span class="ax row">Warm</span>${b('warm-selfless')}${b('warm-selfish')}<span class="ax row">Cold</span>${b('cold-selfless')}${b('cold-selfish')}`;
+  $('voicetext').textContent = s.caregiver ? s.caregiver.text : 'No voice chosen yet. Mother uses her general brief.';
+  $('deployed').innerHTML = s.actions.map((a, i) => {
+    const run = a.key === s.active, done = a.runs.filter((r) => r.end != null);
+    return `<li data-k="${a.key}" class="${run ? 'run' : ''}"><span><b>${i + 1}. ${esc(a.snapshot.title)}</b><small>${esc(people(a.snapshot))}${run ? ' · running now' : done.length ? ` · ran ${done.map((r) => mins(r.start)).join(', ')}` : ''}</small></span>
+      ${run ? '<button class="stop">■ Stop</button>' : '<button class="start">▶ Start</button>'}<button class="up" title="Earlier"${i ? '' : ' disabled'}>↑</button><button class="down" title="Later"${i < s.actions.length - 1 ? '' : ' disabled'}>↓</button><button class="rm" title="Take out of this session">×</button></li>`;
+  }).join('') || '<li class="hint">No actions yet. Open a protocol below and press <b>Add to this session</b>. A group session can deploy several, one at a time.</li>';
+}
+function renderList() {
+  const q = $('filter').value.toLowerCase();
+  const rows = data.protocols.filter((p) => !q || `${p.title} ${p.description} ${p.tags.join(' ')}`.toLowerCase().includes(q));
+  $('list').innerHTML = rows.map((p) => `<li data-id="${p.id}" class="${edit?.id === p.id ? 'sel' : ''}"><b>${esc(p.title)}</b><small>${esc([people(p), p.more?.minutes ? p.more.minutes + ' min' : ''].filter(Boolean).join(' · ') || ' ')}</small>${p.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</li>`).join('')
+    || `<li class="hint" style="cursor:default">${data.protocols.length ? 'Nothing matches.' : 'No protocols yet. Press + New to write the first.'}</li>`;
+}
+function renderVoiceDefs() {
+  if (vdirty) return;
+  $('vdefs').innerHTML = ['warm-selfless', 'warm-selfish', 'cold-selfless', 'cold-selfish'].map((id) => { const v = data.voices.find((x) => x.id === id); return `<div><label for="vd-${id}">${esc(v.name)}</label><textarea id="vd-${id}" data-v="${id}">${esc(v.text)}</textarea></div>`; }).join('');
+}
+function openEditor(p) {
+  edit = p; dirty = false; $('editor').hidden = false; $('edstate').textContent = '';
+  $('edtitle').textContent = p.id ? 'Edit protocol' : 'Write a protocol';
+  $('f-title').value = p.title || ''; $('f-desc').value = p.description || ''; $('f-min').value = p.people?.min || ''; $('f-max').value = p.people?.max || '';
+  $('f-voices').innerHTML = ['warm-selfless', 'warm-selfish', 'cold-selfless', 'cold-selfish'].map((id) => { const v = data.voices.find((x) => x.id === id); return `<div><label for="fv-${id}">${esc(v.name)}</label><textarea id="fv-${id}" data-v="${id}" placeholder="How does ${esc(v.name)} change this action?">${esc(p.voices?.[id] || '')}</textarea></div>`; }).join('');
+  $('f-tags').value = (p.tags || []).join(', ');
+  for (const k of ['mother', 'setup', 'care', 'debrief']) $('f-' + k).value = p.more?.[k] || '';
+  $('f-minutes').value = p.more?.minutes || '';
+  $('more').open = ['mother', 'setup', 'care', 'debrief', 'minutes'].some((k) => p.more?.[k]);
+  $('deploy').disabled = !p.id; $('del').hidden = !p.id;
+  renderList();
+}
+function formValue() {
+  const voices = {}; document.querySelectorAll('#f-voices textarea').forEach((t) => { voices[t.dataset.v] = t.value; });
+  return { id: edit.id, revision: edit.revision, title: $('f-title').value, description: $('f-desc').value, people: { min: $('f-min').value, max: $('f-max').value }, voices, tags: $('f-tags').value,
+    more: { mother: $('f-mother').value, setup: $('f-setup').value, care: $('f-care').value, debrief: $('f-debrief').value, minutes: $('f-minutes').value } };
+}
+async function send(body, done) {
+  try { const r = await api('protocols', body); data = r; renderNow(); renderList(); renderVoiceDefs(); if (done) toast(done); return r; }
+  catch (e) { toast(e.message); return null; }
+}
+async function load() {
+  try { data = await api('protocols'); renderNow(); if (!edit) openEditor({}); renderList(); renderVoiceDefs(); $('notice').textContent = ''; }
+  catch (e) { $('notice').textContent = e.message; }
+}
+
+$('vgrid').onclick = (e) => {
+  const b = e.target.closest('button[data-v]'); if (!b) return;
+  const same = data.session.caregiver?.id === b.dataset.v;
+  if (!data.standby && data.session.caregiver && !same && !confirm(`Change the caregiver voice to ${b.textContent} in the middle of the session?`)) return;
+  send({ op: 'setVoice', voice: same ? null : b.dataset.v }, same ? 'Voice cleared' : `Voice: ${b.textContent}`);
+};
+$('deployed').onclick = (e) => {
+  const li = e.target.closest('li[data-k]'); if (!li) return; const key = li.dataset.k, a = data.session.actions.find((x) => x.key === key);
+  if (e.target.matches('.start')) send({ op: 'start', key }, `Started: ${a.snapshot.title}`);
+  if (e.target.matches('.stop')) send({ op: 'stop' }, 'Action stopped');
+  if (e.target.matches('.up')) send({ op: 'move', key, dir: -1 });
+  if (e.target.matches('.down')) send({ op: 'move', key, dir: 1 });
+  if (e.target.matches('.rm') && confirm(`Take “${a.snapshot.title}” out of this session?`)) send({ op: 'undeploy', key });
+};
+$('filter').oninput = renderList;
+$('new').onclick = () => { if (dirty && !confirm('Discard the changes to this protocol?')) return; openEditor({}); $('f-title').focus(); };
+$('list').onclick = (e) => {
+  const li = e.target.closest('li[data-id]'); if (!li) return;
+  if (dirty && edit?.id !== li.dataset.id && !confirm('Discard the changes to this protocol?')) return;
+  openEditor(data.protocols.find((p) => p.id === li.dataset.id));
+};
+$('editor').addEventListener('input', () => { dirty = true; $('edstate').textContent = 'Not saved'; });
+$('save').onclick = async () => {
+  const r = await send({ op: 'save', protocol: formValue() }); if (!r) return;
+  openEditor(r.saved); $('edstate').textContent = 'Saved ✓';
+};
+$('deploy').onclick = async () => {
+  if (dirty) { const r = await send({ op: 'save', protocol: formValue() }); if (!r) return; openEditor(r.saved); }
+  send({ op: 'deploy', id: edit.id }, `Added to this session: ${edit.title}`);
+};
+$('del').onclick = () => { if (confirm(`Delete “${edit.title}”? Sessions that already used it keep their copy.`)) send({ op: 'delete', id: edit.id }, 'Protocol deleted').then((r) => { if (r) { dirty = false; openEditor({}); } }); };
+$('vdefs').addEventListener('input', () => { vdirty = true; $('vstate').textContent = 'Not saved'; });
+$('savevoices').onclick = async () => {
+  const changed = [...document.querySelectorAll('#vdefs textarea')].filter((t) => t.value.trim() !== data.voices.find((v) => v.id === t.dataset.v).text.trim());
+  for (const t of changed) if (!(await send({ op: 'voiceText', voice: t.dataset.v, text: t.value }))) return;
+  vdirty = false; renderVoiceDefs(); $('vstate').textContent = changed.length ? 'Saved ✓' : 'No changes';
+};
+load(); setInterval(() => { if (!document.hidden) api('protocols').then((d) => { data = d; renderNow(); if (!dirty) renderList(); renderVoiceDefs(); }).catch(() => {}); }, 4000);
+</script><script src="nav.js"></script></body></html>

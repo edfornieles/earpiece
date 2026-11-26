@@ -216,7 +216,7 @@ async function main() {
       setStatus('face matching');
       const job = {
         out: C, step: Number(process.env.FACE_STEP || 2),
-        people: faceFolk.map((x) => ({ pid: x.pid, name: x.name, photo: path.join(dir, x.photo) })),
+        people: faceFolk.map((x) => ({ pid: x.pid, name: x.name, photo: path.join(dir, x.photo), extra: x.portrait && fs.existsSync(path.join(dir, x.portrait)) ? [path.join(dir, x.portrait)] : [] })),
         windows: faceFolk.flatMap((x) => x.visits.length ? x.visits.map((v) => ({ pid: x.pid, from: Math.max(0, v.start - 30), to: (v.end ?? sessionEnd) + 30 })) : [{ pid: x.pid, from: 0, to: sessionEnd }]),
         videos: cams.map((f) => ({ cam: f.cam, camera: f.camera, file: path.join(dir, f.file), offset: f.offset, duration: f.duration }))
       };

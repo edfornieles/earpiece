@@ -1,0 +1,124 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Films — Mother</title><link rel="stylesheet" href="setup.css">
+<style>
+  .fl-grid { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(320px,1fr); gap:20px; align-items:start; }
+  @media (max-width:1100px) { .fl-grid { grid-template-columns:1fr; } }
+  video { width:100%; background:#000; border-radius:8px; display:block; }
+  .versions { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0; }
+  .versions button[aria-pressed=true] { background:var(--fg); color:#111; border-color:var(--fg); }
+  .parts { display:flex; height:10px; border-radius:5px; overflow:hidden; margin:8px 0 2px; cursor:pointer; }
+  .parts i { display:block; height:100%; } .parts .score { background:#6b6b6b; } .parts .footage { background:#4d7bd6; } .parts .debrief, .parts .closing { background:#b98a4a; }
+  .legend { font-size:12px; color:var(--dim); }
+  #add { display:flex; flex-direction:column; gap:8px; margin:14px 0; }
+  #add .row { display:flex; gap:8px; align-items:center; } #add textarea { min-height:70px; }
+  #at { font-variant-numeric:tabular-nums; font-size:13px; color:var(--dim); }
+  .c { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:8px; font-size:14px; }
+  .c.resolved { opacity:.55; }
+  .c .h { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--dim); margin-bottom:4px; }
+  .c .t { font-variant-numeric:tabular-nums; cursor:pointer; color:var(--fg); text-decoration:underline dotted; }
+  .c .reply { margin:6px 0 0 12px; padding-left:10px; border-left:2px solid var(--line); font-size:13px; }
+  .c .acts { display:flex; gap:6px; margin-top:6px; } .c .acts button { padding:3px 9px; font-size:12px; }
+  details { margin-top:14px; } details pre { white-space:pre-wrap; font:13px/1.45 inherit; }
+  .filter { display:flex; gap:6px; margin:10px 0; } .filter button[aria-pressed=true] { background:var(--fg); color:#111; border-color:var(--fg); }
+  #sessions li { cursor:pointer; }
+</style></head><body>
+<header class="pagehead"><div><div class="eyebrow">Archive</div><h1>Films</h1><p>One film per performance: the score, the edited footage, then the debrief. Watch a draft, pause where something should change and leave a comment there. Each new draft answers every open comment in its list of changes.</p></div></header>
+<main>
+  <section class="panel" id="pick">
+    <h2>Performances</h2>
+    <ul id="sessions" class="list"></ul>
+    <div id="readyBox" hidden><p class="hint">Performances with a catalogue but no film yet:</p><div class="row"><select id="ready"></select><button id="make">Make draft 1</button></div></div>
+  </section>
+  <section id="film" hidden>
+    <h2 id="ftitle"></h2>
+    <div class="versions" id="versions"></div>
+    <div class="fl-grid">
+      <div>
+        <video id="v" controls preload="metadata"></video>
+        <div class="parts" id="parts"></div>
+        <div class="legend">grey: the score · blue: the footage · amber: the debrief or closing card. Click the bar to jump.</div>
+        <details id="notesBox"><summary>Notes for this draft</summary><pre id="notes"></pre></details>
+        <details id="changesBox" hidden><summary>What changed from the last draft</summary><pre id="changes"></pre></details>
+      </div>
+      <div>
+        <div id="add">
+          <div class="row"><b>Comment</b><span id="at"></span><label style="margin-left:auto;font-size:12px"><input type="checkbox" id="general" style="width:auto"> about the whole draft</label></div>
+          <textarea id="text" placeholder="Pause where it should change, then write what you want (Enter to add, Shift+Enter for a new line)"></textarea>
+          <div class="row"><button id="post" class="primary">Add comment</button><span class="hint">Pinned to this draft at the time shown.</span></div>
+        </div>
+        <div class="filter" id="filter"><button data-f="open" aria-pressed="true">Open</button><button data-f="all">All</button><button data-f="this">This draft</button></div>
+        <div id="comments"></div>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+<script src="setup.js"></script><script src="nav.js"></script>
+<script>
+const { $, esc, url, api, toast } = Setup;
+let session = new URLSearchParams(location.search).get('s') || '', data = null, v = '', filter = 'open';
+const tc = (s) => s == null ? '—' : `${String(Math.floor(s / 60)).padStart(2, '0')}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+const nice = (s) => { const m = /^(\d{4})-(\d\d)-(\d\d)-(\d\d)-(\d\d)/.exec(s); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : s; };
+
+async function list() {
+  const r = await api('films');
+  $('sessions').innerHTML = r.list.map((x) => `<li data-s="${esc(x.session)}"><b>${esc(x.title || nice(x.session))}</b> <small>${x.versions} draft${x.versions === 1 ? '' : 's'} · ${x.open} open comment${x.open === 1 ? '' : 's'}</small></li>`).join('') || '<li class="hint">No films yet.</li>';
+  $('readyBox').hidden = !r.ready.length;
+  $('ready').innerHTML = r.ready.map((s) => `<option value="${esc(s)}">${esc(nice(s))}</option>`).join('');
+}
+$('sessions').onclick = (e) => { const li = e.target.closest('[data-s]'); if (li) open(li.dataset.s); };
+$('make').onclick = async () => { try { const r = await api('film-build', { session: $('ready').value }); toast(`Making ${r.version}: it takes a few minutes`); open($('ready').value); } catch (e) { toast(e.message); } };
+
+async function open(s, keepV) {
+  session = s; history.replaceState(null, '', url(`/film?s=${encodeURIComponent(s)}`));
+  data = await api('film?session=' + encodeURIComponent(s));
+  $('film').hidden = false; $('ftitle').textContent = nice(s);
+  const vs = data.versions;
+  if (!keepV || !vs.some((x) => x.v === v)) v = (vs.filter((x) => x.ready).pop() || vs[vs.length - 1] || {}).v || '';
+  $('versions').innerHTML = vs.map((x) => `<button data-v="${x.v}" aria-pressed="${x.v === v}">${x.v.toUpperCase()}${x.ready ? '' : ' (rendering…)'}</button>`).join('');
+  const cur = vs.find((x) => x.v === v);
+  if (cur?.ready) { const src = url(`/film-media/${s}/${v}/preview.mp4`); if (!$('v').src.endsWith(src.split('?')[0]) || !keepV) $('v').src = src; }
+  else $('v').removeAttribute('src');
+  $('notes').textContent = cur?.notes || ''; $('changes').textContent = cur?.changes || ''; $('changesBox').hidden = !cur?.changes;
+  const L = cur?.length || 1;
+  $('parts').innerHTML = (cur?.timeline || []).map((t) => `<i class="${t.part}" style="width:${(t.to - t.from) / L * 100}%" title="${t.part}${t.clip ? ' · clip ' + t.clip : ''} · ${tc(t.from)}"></i>`).join('');
+  renderComments();
+  if (data.building || (cur && !cur.ready)) setTimeout(() => open(session, true), 8000);
+}
+$('versions').onclick = (e) => { const b = e.target.closest('[data-v]'); if (b) { v = b.dataset.v; open(session, false); } };
+$('parts').onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(), cur = data.versions.find((x) => x.v === v); if (cur?.length) $('v').currentTime = (e.clientX - r.left) / r.width * cur.length; };
+
+function renderComments() {
+  const all = data.comments.slice().sort((a, b) => (a.v === b.v ? (a.at ?? -1) - (b.at ?? -1) : a.v.localeCompare(b.v, undefined, { numeric: true })));
+  const shown = all.filter((c) => filter === 'all' || (filter === 'open' ? c.status === 'open' : c.v === v));
+  $('comments').innerHTML = shown.map((c) => `<div class="c ${c.status}" data-id="${c.id}">
+    <div class="h"><b>${esc(c.by)}</b><span>${c.v.toUpperCase()}</span>${c.at == null ? '<span>whole draft</span>' : `<span class="t" data-at="${c.at}" data-v="${c.v}">${tc(c.at)}</span>`}
+      ${c.part ? `<span>${c.part}${c.clip ? ' · clip ' + c.clip : ''}</span>` : ''}<span style="margin-left:auto">${c.status === 'open' ? 'open' : '✓ resolved'}</span></div>
+    <div>${esc(c.text).replace(/\n/g, '<br>')}</div>
+    ${(c.replies || []).map((r) => `<div class="reply"><b>${esc(r.by)}</b>: ${esc(r.text).replace(/\n/g, '<br>')}</div>`).join('')}
+    <div class="acts"><button data-act="reply">Reply</button><button data-act="${c.status === 'open' ? 'resolve' : 'reopen'}">${c.status === 'open' ? 'Resolve' : 'Reopen'}</button></div></div>`).join('')
+    || `<p class="hint">${filter === 'open' ? 'No open comments.' : 'No comments yet.'}</p>`;
+}
+$('filter').onclick = (e) => { const b = e.target.closest('[data-f]'); if (!b) return; filter = b.dataset.f; for (const x of $('filter').children) x.setAttribute('aria-pressed', x === b); renderComments(); };
+$('comments').onclick = async (e) => {
+  const t = e.target.closest('.t'); if (t) { if (t.dataset.v !== v) { v = t.dataset.v; await open(session, false); } $('v').currentTime = +t.dataset.at; $('v').pause(); return; }
+  const b = e.target.closest('[data-act]'); if (!b) return; const id = b.closest('.c').dataset.id;
+  try {
+    if (b.dataset.act === 'reply') { const text = prompt('Reply:'); if (!text) return; data.comments = (await api('film-comment', { session, id, reply: text })).comments; }
+    else data.comments = (await api('film-comment', { session, id, status: b.dataset.act === 'resolve' ? 'resolved' : 'open' })).comments;
+    renderComments();
+  } catch (err) { toast(err.message); }
+};
+const showAt = () => { $('at').textContent = $('general').checked ? 'whole draft' : `at ${tc($('v').currentTime || 0)} in ${v.toUpperCase()}`; };
+$('v').ontimeupdate = showAt; $('general').onchange = showAt;
+$('text').onfocus = () => $('v').pause();
+async function post() {
+  const text = $('text').value.trim(); if (!text) return;
+  try {
+    data.comments = (await api('film-comment', { session, v, at: $('general').checked ? null : Math.round(($('v').currentTime || 0) * 10) / 10, text })).comments;
+    $('text').value = ''; renderComments(); toast('Comment added');
+  } catch (e) { toast(e.message); }
+}
+$('post').onclick = post;
+$('text').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); post(); } };
+list().then(() => session && open(session));
+</script></body></html>

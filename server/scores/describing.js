@@ -51,8 +51,8 @@ module.exports = {
 
   // One line for one person: which model, the instructions, and what to ask. ctx: { movement, progress, params, said, about, notes }
   prompt(ctx) {
-    // In Projection, every fourth line is a plain physical observation instead (the room keeps breaking in).
-    const physical = ctx.movement.name === 'physical' || (ctx.inMovement % 4 === 3), tone = TONES.find((t) => t.value === Number(ctx.params.tone)) || TONES[2];
+    // In Projection the lines alternate: a judgement, then a plain physical observation of what they are doing now.
+    const physical = ctx.movement.name === 'physical' || (ctx.inMovement % 2 === 1), tone = TONES.find((t) => t.value === Number(ctx.params.tone)) || TONES[2];
     const system = physical ? PHYSICAL : `${PROJECTION}\nTone: ${tone.label}. ${tone.guide}`;
     const user = `The piece is ${Math.round(ctx.progress * 100)}% through. ${physical ? '' : 'Let the projections deepen as the end nears. '}
 The pictures: ${ctx.about || 'none'}

@@ -1908,7 +1908,52 @@ function describingNotes(id, v, now) {
   if (!me.visible) return `Floor tracking (on ${camName} only) last placed them ${where}, ${Math.round((now - me.lastSeenAt) / 1000)} s ago; they have probably moved out of that camera's view, so look in the others.`;
   return `Floor tracking (on ${camName}) places them ${where}${me.activity?.label ? ', ' + me.activity.label : ''}.`;
 }
-const describingFaces = new Map();   // phone -> { jpeg, at }: the last good close-up of that participant
+const describingFaces = new Map();
+// Faces in every camera (face_crop_worker.py), so a score can read expressions. Photographs of faces on the walls are
+// learned and ignored: a real face always shifts a little; a face that sits on the same pixels for a minute is a picture.
+const faceScan = { proc: null, queue: [], latest: null, still: [] };
+function faceWorker() {
+  if (faceScan.proc) return faceScan.proc;
+  const py = fs.existsSync(path.join(__dirname, '.faces-venv', 'bin', 'python')) ? path.join(__dirname, '.faces-venv', 'bin', 'python') : 'python3';
+  const p = spawn(py, [path.join(__dirname, 'face_crop_worker.py')], { stdio: ['pipe', 'pipe', 'ignore'] });
+  let buf = '';
+  p.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); const cb = faceScan.queue.shift(); try { cb?.(JSON.parse(line)); } catch { cb?.({ faces: [] }); } } });
+  p.on('exit', () => { faceScan.proc = null; for (const cb of faceScan.queue.splice(0)) cb({ faces: [] }); });
+  faceScan.proc = p; return p;
+}
+async function scanFaces(now = Date.now()) {
+  const live = cameras.filter((c) => c.frame && now - c.frameAt < 4000); if (!live.length) return [];
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mother-faces-'));
+  try {
+    const frames = live.map((c, i) => { const f = path.join(dir, `${i}.jpg`); fs.writeFileSync(f, c.frame); return { cam: c, frame: c.frame, file: f }; });
+    const r = await new Promise((ok) => { faceScan.queue.push(ok); faceWorker().stdin.write(JSON.stringify({ images: frames.map((x) => x.file) }) + '\n'); setTimeout(() => ok({ faces: [] }), 3000); });
+    const faces = (r.faces || []).map((f) => ({ ...f, cam: frames[f.image].cam, frame: frames[f.image].frame }));
+    // learn the still ones
+    for (const f of faces) {
+      const [x, y, w] = f.box, cx = x + w / 2, cy = y + f.box[3] / 2;
+      const e = faceScan.still.find((s) => s.cam === f.cam.id && Math.hypot(s.cx - cx, s.cy - cy) < 3 && Math.abs(s.w - w) < 3);
+      if (e) { e.last = now; e.seen++; } else faceScan.still.push({ cam: f.cam.id, cx, cy, w, first: now, last: now, seen: 1 });
+      f.picture = !!faceScan.still.find((s) => s.cam === f.cam.id && Math.hypot(s.cx - cx, s.cy - cy) < 3 && Math.abs(s.w - w) < 3 && s.seen >= 5 && s.last - s.first >= 60000);
+    }
+    faceScan.still = faceScan.still.filter((s) => now - s.last < 5 * 60000);
+    faceScan.latest = { at: now, faces };
+    return faces;
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+setInterval(() => { scanFaces().catch(() => {}); }, 5000).unref();   // keeps learning which "faces" are pictures
+// The clearest real face right now, cropped with some room around it and enlarged, as a jpeg.
+async function bestFace() {
+  const faces = (await scanFaces()).filter((f) => !f.picture && f.size >= 28);
+  const f = faces[0]; if (!f) return null;
+  const [x, y, w, h] = f.box, m = 0.6;
+  const box = { x: Math.max(0, x - w * m), y: Math.max(0, y - h * m), w: w * (1 + 2 * m), h: h * (1 + 2 * m) };
+  const jpeg = await new Promise((res) => {
+    const p = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vf', `crop=${Math.round(box.w)}:${Math.round(box.h)}:${Math.round(box.x)}:${Math.round(box.y)},scale=384:-2:flags=lanczos`, '-q:v', '3', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-']);
+    const out = []; p.stdout.on('data', (d) => out.push(d)); p.on('error', () => res(null)); p.on('exit', () => res(out.length ? Buffer.concat(out) : null));
+    p.stdin.on('error', () => {}); p.stdin.end(f.frame);
+  });
+  return jpeg && { jpeg, camera: f.cam.name, size: Math.round(f.size) };
+}   // phone -> { jpeg, at }: the last good close-up of that participant
 // Every camera's latest picture in one grid (3 across when there are more than 4), in the cameras' order.
 async function cameraGrid(now = Date.now()) {
   const live = cameras.filter((c) => c.frame && now - c.frameAt < 4000); if (!live.length) return null;
@@ -1943,6 +1988,8 @@ const scoreRunner = new ScoreRunner({
       const { me } = participantTrack(id, v, now);
       if (frame && me?.visible && me.box) { close = await cropJpeg(frame, me.box); describingFaces.set(id, { jpeg: close, at: now }); }
     }
+    const face = await bestFace().catch(() => null);
+    if (face) { images.push({ jpeg: face.jpeg, detail: 'high' }); about.push(`Picture ${images.length} is an enlarged close-up of the clearest face in the room right now (from ${face.camera}); check hair and clothes against the other pictures to be sure it is this person before you read their expression.`); }
     const ref = close ? null : describingFaces.get(id);
     if (close) { images.push({ jpeg: close, detail: 'low' }); about.push(`Picture ${images.length} is a close-up of this person right now.`); }
     else if (ref) { images.push({ jpeg: ref.jpeg, detail: 'low' }); about.push(`Picture ${images.length} is a close-up of this person from ${Math.round((now - ref.at) / 1000)} s ago, to recognise them; they have moved since, so find them in the grid.`); }

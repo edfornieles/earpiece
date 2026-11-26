@@ -56,7 +56,7 @@ class ScoreRunner {
       this.people.set(id, me);
       if (me.working || now < me.next || this.h.busy(id)) continue;
       me.working = true;
-      this.line(id, me, p).finally(() => { me.working = false; me.next = Date.now() + every * 1000 * (0.85 + Math.random() * 0.3); });
+      this.line(id, me, p).finally(() => { me.working = false; me.next = Date.now() + (Number(this.params.every) || 22) * 1000 * (0.85 + Math.random() * 0.3); });   // read again: it can change while running
     }
   }
 

@@ -1895,6 +1895,17 @@ async function lookAt(id, question) {
 // ---------- Describing: an automatic program (describing.js). Mother tells each participant, in their own earpiece, what it
 // sees them doing; physical at first, then behaviour, then projections about their life. Only phones taking part. ----------
 const { Describing } = require('./describing');
+// What floor tracking adds, as plain information: it only covers ONE camera, so "not seen" there means "look in the
+// other views", never "they are not here" (Mother's usual perception lines say that firmly, which made Describing give up).
+function describingNotes(id, v, now) {
+  if (!v.running) return 'Floor tracking is off; use the pictures.';
+  const camName = cameras.find((c) => c.id === v.cameraId)?.name || 'one camera';
+  const { me, count } = participantTrack(id, v, now);
+  if (!me) return `Floor tracking (on ${camName} only) has not placed this person right now${count > 1 ? `; it sees ${count} people there` : ''}. Look for them in all the views.`;
+  const where = me.floor ? `${me.area && me.area !== 'unknown' ? me.area : 'in the room'}` : 'position unknown';
+  if (!me.visible) return `Floor tracking (on ${camName} only) last placed them ${where}, ${Math.round((now - me.lastSeenAt) / 1000)} s ago; they have probably moved out of that camera's view, so look in the others.`;
+  return `Floor tracking (on ${camName}) places them ${where}${me.activity?.label ? ', ' + me.activity.label : ''}.`;
+}
 const describingFaces = new Map();   // phone -> { jpeg, at }: the last good close-up of that participant
 // Every camera's latest picture in one grid (3 across when there are more than 4), in the cameras' order.
 async function cameraGrid(now = Date.now()) {
@@ -1919,7 +1930,7 @@ const describing = new Describing({
   busy: (id) => { const s = sessions.get(id); return !s || s.speaking || s.thinking || s.edHold || !!s.live || !!programRunner?.manages(id); },
   see: async (id) => {
     const v = roomObserver.tracking.view(), now = Date.now();
-    const notes = perceptionFor(id) + roomNow(id), images = [], about = [];
+    const notes = describingNotes(id, v, now), images = [], about = [];
     // every camera at once, so they can be found wherever they are in the room
     const grid = await cameraGrid(now);
     if (grid) { images.push({ jpeg: grid.jpeg, detail: 'high' }); about.push(`Picture 1 is a grid of every camera view, ${grid.order}.`); }
